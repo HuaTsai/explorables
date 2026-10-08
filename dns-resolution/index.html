@@ -1,0 +1,750 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNS 解析逐步圖解</title>
+<meta name="description" content="逐步執行一次 DNS 查詢,看遞迴解析器怎麼從根伺服器一路問到權威伺服器。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the stepper is a single workbench — the delegation tree on top,
+   the current DNS message under it, the conversation log and resolver cache side by side. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --ask: #0a6f6a;         /* 問:查詢 */
+  --ask-soft: #d5ebe8;
+  --reply: #9b2f6b;       /* 答:回應 */
+  --reply-soft: #f3dbe8;
+  --mark: #fdf0b8;        /* 目前這一步 */
+  --bad: #b3261e;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --ask: #56c9c0; --ask-soft: #123532; --reply: #ea86b8; --reply-soft: #3a1a2b;
+    --mark: #3d3610; --bad: #ff8a80; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 60rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 38em; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul { margin: 0; padding-left: 1.2rem; max-width: 38em; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+i.ask, i.reply { font-style: normal; font-weight: 700; }
+i.ask { color: var(--ask); }
+i.reply { color: var(--reply); }
+.empty { color: var(--muted); font-size: 0.9rem; }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+:focus-visible { outline: 2px solid var(--ask); outline-offset: 2px; }
+input[type="text"], input[type="number"], select { font-family: var(--font-mono); font-size: 0.95rem; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--ink); }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row, .row + .panels { border-top: 1px solid var(--line); }
+
+.input-row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0; }
+.input-row label { font-size: 0.85rem; color: var(--muted); }
+#q-name { flex: 1 1 15rem; min-width: 0; font-size: 1.05rem; }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem; flex: 1 1 100%; }
+.presets button { font-size: 0.85rem; }
+
+/* delegation tree */
+.diagram-wrap { overflow-x: auto; }
+svg.diagram { display: block; width: 100%; min-width: 620px; height: auto; }
+.diagram .link { stroke: var(--line); stroke-width: 1.5; }
+.diagram .node rect { fill: var(--bg); stroke: var(--line); stroke-width: 1.5; }
+.diagram .node text { font-family: var(--font-body); text-anchor: middle; }
+.diagram .node .t { font-size: 13px; font-weight: 700; fill: var(--ink); }
+.diagram .node .s { font-size: 11px; fill: var(--muted); }
+.diagram .node.on rect { stroke: var(--ink); stroke-width: 2; }
+.diagram .node.think rect { fill: var(--mark); stroke: var(--ink); stroke-width: 2; }
+.diagram .wire { stroke-width: 2.5; }
+.diagram .wire.ask { stroke: var(--ask); }
+.diagram .wire.reply { stroke: var(--reply); }
+.diagram .head.ask { fill: var(--ask); }
+.diagram .head.reply { fill: var(--reply); }
+
+/* current message */
+.verdict { display: flex; flex-direction: column; gap: 0.75rem; }
+.msg { border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.msg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.45rem 0.75rem; font-size: 0.9rem; font-weight: 700; border-bottom: 1px solid var(--line); min-height: 2.4rem; }
+.tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; }
+.tag.ask { background: var(--ask); color: var(--surface); }
+.tag.reply { background: var(--reply); color: var(--surface); }
+.tag.think { background: var(--mark); color: var(--ink); }
+.msg-body { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; overflow-x: auto; min-height: 5.6em; background: var(--bg); }
+.say { max-width: none; min-height: 3.4em; }
+.say.err { color: var(--bad); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--ask); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+
+/* log + cache */
+.panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+.panel { padding: 1rem 1.25rem; min-width: 0; }
+.panel + .panel { border-left: 1px solid var(--line); }
+@media (max-width: 720px) {
+  .panels { grid-template-columns: minmax(0, 1fr); }
+  .panel + .panel { border-left: 0; border-top: 1px solid var(--line); }
+}
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+
+.log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.1rem; counter-reset: step; }
+.log-row { counter-increment: step; display: grid; grid-template-columns: 1.5rem minmax(0, 1fr); column-gap: 0.5rem; width: 100%; text-align: left; border: 0; border-radius: 3px; padding: 0.25rem 0.4rem; font-size: 0.82rem; line-height: 1.45; }
+.log-row::before { content: counter(step); color: var(--muted); font-family: var(--font-mono); font-size: 0.75rem; text-align: right; line-height: 1.6; }
+.log-row .who { display: block; font-weight: 700; }
+.log-row.ask .who { color: var(--ask); }
+.log-row.reply .who { color: var(--reply); }
+.log-row .what { display: block; font-family: var(--font-mono); font-size: 0.76rem; color: var(--muted); overflow-wrap: anywhere; }
+.log-row.on { background: var(--mark); }
+.log-row.future { opacity: 0.45; }
+
+.cache-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; font-variant-numeric: tabular-nums; }
+.cache-table th { text-align: left; font-size: 0.75rem; color: var(--muted); font-weight: 700; padding: 0.25rem 0.5rem 0.25rem 0.3rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.cache-table td { font-family: var(--font-mono); padding: 0.3rem 0.5rem 0.3rem 0.3rem; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.cache-table td.ty { white-space: nowrap; }
+.cache-table td.left { white-space: nowrap; font-family: var(--font-body); }
+.cache-table tr.fresh td { background: var(--mark); }
+.clock { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin-top: 0.9rem; font-size: 0.85rem; }
+.clock span { color: var(--muted); margin-right: 0.25rem; font-variant-numeric: tabular-nums; }
+.clock button { font-size: 0.82rem; padding: 0.2rem 0.6rem; }
+
+/* result */
+.result { display: flex; flex-direction: column; gap: 0.75rem; }
+.status { align-self: flex-start; font-weight: 700; padding: 0.1rem 0.7rem; border-radius: 3px; border: 1px solid transparent; }
+.status.ok { background: var(--ask-soft); border-color: var(--ask); }
+.status.fail { border-color: var(--bad); color: var(--bad); }
+.answer { margin: 0; font-family: var(--font-mono); font-size: 0.9rem; line-height: 1.7; overflow-x: auto; }
+
+/* zone editor */
+.tune { display: flex; flex-direction: column; gap: 1rem; }
+.table-wrap { overflow-x: auto; }
+.zone-table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.zone-table th, .zone-table td { padding: 0.35rem 0.75rem 0.35rem 0; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.zone-table th { font-size: 0.8rem; color: var(--muted); font-weight: 700; }
+.zone-table td.fixed { font-family: var(--font-mono); font-size: 0.9rem; color: var(--muted); }
+.zone-table input[data-f="name"] { width: 9rem; }
+.zone-table input[data-f="value"] { width: 16rem; }
+.zone-table input[data-f="ttl"] { width: 5.5rem; }
+.zone-table button { font-size: 0.82rem; padding: 0.2rem 0.6rem; }
+.errors { margin: 0; padding-left: 1.2rem; color: var(--bad); max-width: 38em; display: flex; flex-direction: column; gap: 0.35rem; }
+.tune-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">DNS</span> 解析逐步圖解</h1>
+    <p class="lead">打開一個網址之前,瀏覽器得先把名稱換成 IP 位址。按「下一步」看這個問題被問了幾次、誰回答了什麼。</p>
+  </header>
+
+  <section class="prose">
+    <h2>誰在回答問題</h2>
+    <p>你的電腦只問一台伺服器:<strong>遞迴解析器</strong>,通常是網路業者提供的,或 1.1.1.1、8.8.8.8 這類公用的。真正跑去問一圈的是它。</p>
+    <p>DNS 是一棵樹,每一層伺服器只知道下一層該問誰。根伺服器知道 <code>.dev</code> 歸誰管,<code>.dev</code> 伺服器知道 <code>huatsai.dev</code> 歸誰管,最後那台<strong>權威伺服器</strong>才有真正的紀錄。下圖用兩種顏色區分 <i class="ask">問</i> 和 <i class="reply">答</i>。</p>
+  </section>
+
+  <section class="bench" aria-label="逐步執行">
+    <form class="row input-row" id="query-form">
+      <label for="q-name">名稱</label>
+      <input id="q-name" type="text" spellcheck="false" autocomplete="off" value="explorables.huatsai.dev">
+      <label for="q-type">類型</label>
+      <select id="q-type"><option>A</option><option>AAAA</option><option>CNAME</option></select>
+      <button type="submit" class="primary" id="btn-query">查詢</button>
+      <div class="presets" id="presets"></div>
+    </form>
+
+    <div class="row diagram-wrap" id="diagram-wrap"></div>
+
+    <div class="row verdict">
+      <div class="msg">
+        <div class="msg-head" id="msg-head"></div>
+        <pre class="msg-body" id="msg-body"></pre>
+      </div>
+      <p class="say" id="say" aria-live="polite"></p>
+      <div class="controls">
+        <button id="btn-reset" type="button">重來</button>
+        <button id="btn-prev" type="button">上一步</button>
+        <button id="btn-next" type="button" class="primary">下一步</button>
+        <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count" id="count"></span>
+      </div>
+    </div>
+
+    <div class="panels">
+      <div class="panel">
+        <p class="panel-title">對話紀錄(點任一行可以跳過去)</p>
+        <ol class="log" id="log"></ol>
+      </div>
+      <div class="panel">
+        <p class="panel-title">解析器的快取</p>
+        <div id="cache"></div>
+        <div class="clock">
+          <span id="clock-now"></span>
+          <button type="button" data-dt="60">過 1 分鐘</button>
+          <button type="button" data-dt="300">過 5 分鐘</button>
+          <button type="button" data-dt="3600">過 1 小時</button>
+          <button type="button" id="btn-flush">清空快取</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="result">
+    <h2>查詢結果</h2>
+    <div class="status" id="status"></div>
+    <pre class="answer" id="answer"></pre>
+    <p id="stats"></p>
+  </section>
+
+  <section class="tune">
+    <div class="prose">
+      <h2>改 huatsai.dev 的紀錄試試看</h2>
+      <p>下面是 <code>huatsai.dev</code> 權威伺服器手上的紀錄。只有 <code>explorables</code> 那筆對應真實設定,其他是示範用的。改完按上面的「查詢」。</p>
+      <p>如果答案沒變,看一下快取:解析器在 TTL 過期前不會再去問權威伺服器,所以改了紀錄不會馬上生效。</p>
+    </div>
+    <div class="table-wrap">
+      <table class="zone-table">
+        <thead><tr><th>名稱</th><th>類型</th><th>值</th><th>TTL(秒)</th><th></th></tr></thead>
+        <tbody id="zone-body"></tbody>
+      </table>
+    </div>
+    <ul class="errors" id="zone-errors" hidden></ul>
+    <div class="tune-actions">
+      <button id="btn-add" type="button">新增一筆</button>
+      <button id="btn-defaults" type="button">還原預設值</button>
+    </div>
+  </section>
+
+  <section class="prose">
+    <h2>這個模型省略了什麼</h2>
+    <ul>
+      <li>這個站實際上開了 Cloudflare 的 proxy(橘色雲)。開了之後權威伺服器不會回 CNAME,而是直接回 Cloudflare 自己的 A 和 AAAA。這裡畫的是 DNS only(灰色雲)的情況。</li>
+      <li>沙盒裡只有 <code>.dev</code> 和 <code>.io</code> 兩個頂級網域,底下各一個網域。每個網域實際上有好幾台名稱伺服器,這裡只列一台。</li>
+      <li>解析器拿到 NS 紀錄後,還得知道那台伺服器的 IP。這通常由同一個回應附帶的 glue 紀錄提供,這裡略過。</li>
+      <li>NXDOMAIN 和空答案實際上也會被快取一段時間(負快取),這裡不會。</li>
+      <li>同一個 zone 內的 CNAME 鏈,真實的權威伺服器通常在一次回應裡就附上後續紀錄。這裡每一跳都重新查詢,比較容易看清楚。</li>
+      <li>新的解析器會做 QNAME minimization:問根伺服器時只問 <code>dev</code>,不透露完整名稱。這裡每次都問完整的名稱。</li>
+      <li>瀏覽器和作業系統自己也有一層快取。DNSSEC 完全沒有畫。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+const ORIGIN = 'huatsai.dev.';
+// Delegations and GitHub's records below were read with dig on 2026-10-08.
+const DELEGATIONS = {
+  '.': [
+    { zone: 'dev.', ns: 'ns-tld1.charlestonroadregistry.com.', ttl: 172800 },
+    { zone: 'io.', ns: 'a0.nic.io.', ttl: 172800 },
+  ],
+  'dev.': [{ zone: 'huatsai.dev.', ns: 'ariadne.ns.cloudflare.com.', ttl: 10800 }],
+  'io.': [{ zone: 'github.io.', ns: 'dns1.p05.nsone.net.', ttl: 3600 }],
+};
+const GITHUB_RECORDS = [
+  ...['185.199.108.153', '185.199.109.153', '185.199.110.153', '185.199.111.153']
+    .map(value => ({ name: 'huatsai.github.io.', type: 'A', value, ttl: 3600 })),
+  ...['2606:50c0:8000::153', '2606:50c0:8001::153', '2606:50c0:8002::153', '2606:50c0:8003::153']
+    .map(value => ({ name: 'huatsai.github.io.', type: 'AAAA', value, ttl: 3600 })),
+];
+const ZONES_DEEP_FIRST = ['huatsai.dev.', 'github.io.', 'dev.', 'io.'];
+const PARENT = { 'huatsai.dev.': 'dev.', 'github.io.': 'io.' };
+
+const DEFAULT_ROWS = [
+  { name: 'explorables', type: 'CNAME', value: 'huatsai.github.io', ttl: 300 },
+  { name: 'docs', type: 'CNAME', value: 'explorables.huatsai.dev', ttl: 300 },
+  { name: 'v4only', type: 'A', value: '192.0.2.10', ttl: 300 },
+  { name: 'loop-a', type: 'CNAME', value: 'loop-b.huatsai.dev', ttl: 300 },
+  { name: 'loop-b', type: 'CNAME', value: 'loop-a.huatsai.dev', ttl: 300 },
+];
+const PRESETS = [
+  { label: '正常解析', name: 'explorables.huatsai.dev', type: 'A' },
+  { label: 'CNAME 鏈', name: 'docs.huatsai.dev', type: 'A' },
+  { label: '沒有 IPv6', name: 'v4only.huatsai.dev', type: 'AAAA' },
+  { label: '名稱不存在', name: 'nope.huatsai.dev', type: 'A' },
+  { label: 'CNAME 迴圈', name: 'loop-a.huatsai.dev', type: 'A' },
+];
+
+const TITLE = {
+  stub: '你的電腦', resolver: '解析器', '.': '根伺服器', 'dev.': '.dev 伺服器', 'io.': '.io 伺服器',
+  'huatsai.dev.': 'huatsai.dev 權威伺服器', 'github.io.': 'github.io 權威伺服器',
+};
+const NODES = {
+  '.': { x: 360, y: 34, w: 132, h: 46, t: '根伺服器', s: '.' },
+  'dev.': { x: 190, y: 122, w: 132, h: 46, t: '.dev 伺服器', s: '頂級網域' },
+  'io.': { x: 530, y: 122, w: 132, h: 46, t: '.io 伺服器', s: '頂級網域' },
+  'huatsai.dev.': { x: 110, y: 210, w: 164, h: 46, t: 'huatsai.dev', s: '權威伺服器' },
+  'github.io.': { x: 610, y: 210, w: 164, h: 46, t: 'github.io', s: '權威伺服器' },
+  stub: { x: 110, y: 300, w: 132, h: 46, t: '你的電腦', s: '瀏覽器' },
+  resolver: { x: 360, y: 300, w: 148, h: 46, t: '遞迴解析器', s: '例如 1.1.1.1' },
+};
+const LINKS = [['.', 'dev.'], ['.', 'io.'], ['dev.', 'huatsai.dev.'], ['io.', 'github.io.'], ['stub', 'resolver']];
+
+let rows = DEFAULT_ROWS.map(r => ({ ...r }));
+const state = { cache: new Map(), now: 0, trace: null, step: 0, notice: '', noticeErr: false };
+
+const norm = s => { s = s.trim().toLowerCase(); return !s || s.endsWith('.') ? s : s + '.'; };
+const within = (name, zone) => zone === '.' || name === zone || name.endsWith('.' + zone);
+
+function fmt(s) {
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60, p = [];
+  if (h) p.push(h + ' 小時');
+  if (m) p.push(m + ' 分鐘');
+  if (x || !p.length) p.push(x + ' 秒');
+  return p.join(' ');
+}
+
+/* ---------- the zone the user edits ---------- */
+function validateZone() {
+  const errors = [], recs = [];
+  rows.forEach((r, i) => {
+    const at = `第 ${i + 1} 筆`;
+    const n = r.name.trim().toLowerCase();
+    let name;
+    if (n === '@' || n === 'huatsai.dev') name = ORIGIN;
+    else if (/^([a-z0-9_-]+\.)*[a-z0-9_-]+$/.test(n)) name = n.endsWith('.huatsai.dev') ? n + '.' : n + '.' + ORIGIN;
+    else { errors.push(`${at}:名稱格式不對。用 @ 代表根網域,或填子網域名稱。`); return; }
+    const ttl = parseInt(r.ttl, 10);
+    if (!(ttl >= 1)) { errors.push(`${at}:TTL 要是正整數。`); return; }
+    let value = r.value.trim().toLowerCase();
+    if (r.type === 'A' && !/^(\d{1,3}\.){3}\d{1,3}$/.test(value)) { errors.push(`${at}:A 紀錄的值要是 IPv4 位址,例如 192.0.2.10。`); return; }
+    if (r.type === 'AAAA' && !(/^[0-9a-f:]+$/.test(value) && value.includes(':'))) { errors.push(`${at}:AAAA 紀錄的值要是 IPv6 位址,例如 2001:db8::10。`); return; }
+    if (r.type === 'CNAME') {
+      if (!/^([a-z0-9_-]+\.)+[a-z0-9_-]+\.?$/.test(value)) { errors.push(`${at}:CNAME 的值要是完整的名稱,例如 huatsai.github.io。`); return; }
+      value = norm(value);
+    }
+    recs.push({ name, type: r.type, value, ttl });
+  });
+  for (const name of new Set(recs.map(r => r.name))) {
+    const group = recs.filter(r => r.name === name);
+    if (!group.some(r => r.type === 'CNAME')) continue;
+    if (name === ORIGIN) errors.push('根網域(@)不能放 CNAME:那裡一定有 NS 和 SOA 紀錄,而有 CNAME 的名稱不能再有別的紀錄。Cloudflare 的 CNAME flattening 是在回答時把它換成 A 紀錄來繞過這個限制。');
+    else if (group.length > 1) errors.push(`${name.slice(0, -ORIGIN.length - 1)} 同時有 CNAME 和其他紀錄。有 CNAME 的名稱不能再有別的紀錄,因為 CNAME 的意思是「這個名稱的一切都去問另一個名稱」。`);
+  }
+  return { errors, recs };
+}
+
+/* ---------- what each server says ---------- */
+function ask(zone, qname, qtype, recs) {
+  if (DELEGATIONS[zone]) {
+    const d = DELEGATIONS[zone].find(d => within(qname, d.zone));
+    if (d) return { kind: 'referral', zone: d.zone, ns: d.ns, ttl: d.ttl };
+    return { kind: qname === zone ? 'nodata' : 'nxdomain' };
+  }
+  const all = zone === ORIGIN ? recs : GITHUB_RECORDS;
+  const mine = all.filter(r => r.name === qname);
+  if (!mine.length) {
+    const exists = qname === zone || all.some(r => r.name.endsWith('.' + qname));
+    return { kind: exists ? 'nodata' : 'nxdomain' };
+  }
+  const cname = mine.find(r => r.type === 'CNAME');
+  if (cname && qtype !== 'CNAME') return { kind: 'cname', target: cname.value, ttl: cname.ttl };
+  const hit = mine.filter(r => r.type === qtype);
+  if (hit.length) return { kind: 'answer', values: hit.map(r => r.value), ttl: Math.min(...hit.map(r => r.ttl)) };
+  return { kind: 'nodata' };
+}
+
+/* ---------- the recursive resolver, recording a snapshot at every step ---------- */
+function resolve(qname, qtype, recs, cache, now) {
+  const steps = [];
+  for (const e of cache.values()) e.born = -1;
+  const live = (name, type) => { const e = cache.get(name + '|' + type); return e && e.expires > now ? e : null; };
+  const put = (name, type, values, ttl) => cache.set(name + '|' + type, { name, type, values, expires: now + ttl, born: steps.length });
+  const snap = s => steps.push({
+    ...s,
+    cache: [...cache.values()].filter(e => e.expires > now)
+      .map(e => ({ name: e.name, type: e.type, values: e.values, left: e.expires - now, fresh: e.born === steps.length })),
+  });
+
+  const chain = [], seen = new Set();
+  let name = qname, asked = 0, result;
+  snap({ kind: 'stubQuery', from: 'stub', to: 'resolver', name, type: qtype });
+
+  outer: for (;;) {
+    if (seen.has(name)) { snap({ kind: 'loop', at: 'resolver', name }); result = { status: 'SERVFAIL' }; break; }
+    seen.add(name);
+
+    const hit = live(name, qtype);
+    if (hit) {
+      const left = hit.expires - now;
+      snap({ kind: 'cacheAnswer', at: 'resolver', name, type: qtype, values: hit.values, left });
+      result = { status: 'NOERROR', name, values: hit.values, ttl: left, cached: true };
+      break;
+    }
+    const alias = qtype !== 'CNAME' && live(name, 'CNAME');
+    if (alias) {
+      const target = alias.values[0], left = alias.expires - now;
+      snap({ kind: 'cacheCname', at: 'resolver', name, target, left });
+      chain.push({ name, target, ttl: left, cached: true });
+      name = target;
+      continue;
+    }
+
+    let zone = '.', known = null;
+    for (const z of ZONES_DEEP_FIRST) {
+      const e = within(name, z) && live(z, 'NS');
+      if (e) { zone = z; known = e; break; }
+    }
+    snap({ kind: 'plan', at: 'resolver', name, type: qtype, zone, ns: known && known.values[0], left: known && known.expires - now });
+
+    for (;;) {
+      snap({ kind: 'query', from: 'resolver', to: zone, name, type: qtype });
+      asked++;
+      const r = ask(zone, name, qtype, recs);
+      if (r.kind === 'referral') {
+        put(r.zone, 'NS', [r.ns], r.ttl);
+        snap({ kind: 'referral', from: zone, to: 'resolver', zone: r.zone, ns: r.ns, ttl: r.ttl });
+        zone = r.zone;
+        continue;
+      }
+      if (r.kind === 'cname') {
+        put(name, 'CNAME', [r.target], r.ttl);
+        snap({ kind: 'cname', from: zone, to: 'resolver', name, target: r.target, ttl: r.ttl });
+        chain.push({ name, target: r.target, ttl: r.ttl, cached: false });
+        name = r.target;
+        continue outer;
+      }
+      if (r.kind === 'answer') {
+        put(name, qtype, r.values, r.ttl);
+        snap({ kind: 'answer', from: zone, to: 'resolver', name, type: qtype, values: r.values, ttl: r.ttl });
+        result = { status: 'NOERROR', name, values: r.values, ttl: r.ttl, cached: false };
+        break outer;
+      }
+      snap({ kind: r.kind, from: zone, to: 'resolver', name, type: qtype, sandbox: !!DELEGATIONS[zone] });
+      result = { status: r.kind === 'nxdomain' ? 'NXDOMAIN' : 'NODATA', name };
+      break outer;
+    }
+  }
+  result = { ...result, qname, qtype, chain, asked };
+  snap({ kind: 'final', from: 'resolver', to: 'stub', result });
+  return { steps, result };
+}
+
+/* ---------- wording ---------- */
+const pad = (s, n) => String(s).padEnd(n);
+const rr = (name, ttl, type, value) => `${pad(name, 26)} ${pad(ttl, 7)} IN  ${pad(type, 6)} ${value}`.trimEnd();
+
+function answerLines(res) {
+  const lines = res.chain.map(c => rr(c.name, c.ttl, 'CNAME', c.target));
+  if (res.status === 'NOERROR') for (const v of res.values) lines.push(rr(res.name, res.ttl, res.qtype, v));
+  return lines;
+}
+
+function body(s) {
+  switch (s.kind) {
+    case 'stubQuery':
+    case 'query': return ';; QUESTION\n' + rr(s.name, '', s.type, '');
+    case 'plan': return `;; 快取裡沒有 ${s.name} ${s.type}\n` + (s.zone === '.'
+      ? ';; 也沒有任何上層的 NS,從根伺服器開始'
+      : ';; 但是有這一筆:\n' + rr(s.zone, s.left, 'NS', s.ns));
+    case 'referral': return ';; status: NOERROR\n;; ANSWER: 0\n;; AUTHORITY\n' + rr(s.zone, s.ttl, 'NS', s.ns);
+    case 'cname': return ';; status: NOERROR\n;; ANSWER\n' + rr(s.name, s.ttl, 'CNAME', s.target);
+    case 'answer': return ';; status: NOERROR\n;; ANSWER\n' + s.values.map(v => rr(s.name, s.ttl, s.type, v)).join('\n');
+    case 'nxdomain': return ';; status: NXDOMAIN\n;; ANSWER: 0';
+    case 'nodata': return ';; status: NOERROR\n;; ANSWER: 0';
+    case 'cacheAnswer': return ';; 快取命中,TTL 欄是剩餘秒數\n' + s.values.map(v => rr(s.name, s.left, s.type, v)).join('\n');
+    case 'cacheCname': return ';; 快取命中,TTL 欄是剩餘秒數\n' + rr(s.name, s.left, 'CNAME', s.target);
+    case 'loop': return `;; ${s.name} 已經查過\n;; status: SERVFAIL`;
+    case 'final': {
+      const res = s.result, lines = answerLines(res);
+      const status = res.status === 'NODATA' ? 'NOERROR' : res.status;
+      return `;; status: ${status}\n` + (lines.length ? ';; ANSWER\n' + lines.join('\n') : ';; ANSWER: 0');
+    }
+  }
+  return '';
+}
+
+function narrate(s) {
+  const T = TITLE[s.from];
+  switch (s.kind) {
+    case 'stubQuery': return `你的電腦問遞迴解析器:${s.name} 的 ${s.type} 紀錄是什麼?它只問這一台,剩下的交給解析器。`;
+    case 'plan':
+      if (s.zone === '.') return `解析器先翻快取:沒有 ${s.name} 的答案,也沒有任何上層的 NS 紀錄。只好從根伺服器問起,根伺服器的位址是解析器內建的。`;
+      return `解析器先翻快取:沒有 ${s.name} 的答案,但還留著 ${s.zone} 的 NS 紀錄。直接去問那一台,跳過${PARENT[s.zone] ? `根伺服器和${TITLE[PARENT[s.zone]]}` : '根伺服器'}。`;
+    case 'query': return `解析器問${TITLE[s.to]}:${s.name} 的 ${s.type} 紀錄是什麼?` + (s.to === '.' ? '問的是完整的名稱,每一層都問同一個問題。' : '');
+    case 'referral': return `${T}沒有這筆紀錄,但知道 ${s.zone} 歸誰管,回了一筆 NS 紀錄當作轉介。解析器把它存進快取(${fmt(s.ttl)}),接著去問那一台。`;
+    case 'cname': return `${s.name} 是別名,真正的名稱是 ${s.target}。解析器把這筆 CNAME 存進快取,然後拿新名稱重新查一次。`;
+    case 'answer': return `${T}有這筆紀錄,回了 ${s.values.length} 筆 ${s.type}。解析器存進快取,${fmt(s.ttl)}內不用再問。`;
+    case 'nxdomain': return s.sandbox
+      ? `${T}的委派清單裡沒有這個網域,回 NXDOMAIN。這個沙盒只有 huatsai.dev 和 github.io 兩個網域。`
+      : `${T}的紀錄裡沒有 ${s.name} 這個名稱,回 NXDOMAIN。`;
+    case 'nodata': return `${s.name} 這個名稱存在,但沒有 ${s.type} 紀錄。狀態是 NOERROR、答案是空的,這和 NXDOMAIN 不一樣。`;
+    case 'cacheAnswer': return `快取裡有 ${s.name} 的 ${s.type} 紀錄,還有 ${fmt(s.left)}才過期。不用問任何伺服器。`;
+    case 'cacheCname': return `快取裡有 ${s.name} 的 CNAME,指向 ${s.target},還有 ${fmt(s.left)}才過期。改查 ${s.target}。`;
+    case 'loop': return `${s.name} 在這次查詢裡已經出現過,CNAME 繞成一圈了。解析器放棄,回報 SERVFAIL。`;
+    case 'final': {
+      const res = s.result;
+      if (res.status === 'NOERROR') return '解析器把答案回給你的電腦。' + (res.qtype === 'CNAME' ? '' : '瀏覽器現在知道要連到哪個位址了。');
+      if (res.status === 'NXDOMAIN') return '解析器告訴你的電腦:這個名稱不存在。';
+      if (res.status === 'NODATA') return `解析器告訴你的電腦:名稱存在,但沒有 ${res.qtype} 紀錄。`;
+      return '解析器告訴你的電腦:解析失敗。';
+    }
+  }
+  return '';
+}
+
+function logLine(s) {
+  const arrow = s.from ? `${TITLE[s.from].replace(' 權威伺服器', '')} → ${TITLE[s.to].replace(' 權威伺服器', '')}` : '解析器';
+  switch (s.kind) {
+    case 'stubQuery':
+    case 'query': return [arrow, `${s.name} ${s.type} ?`];
+    case 'plan': return [arrow, s.zone === '.' ? '快取沒有,從根伺服器開始' : `快取有 ${s.zone} 的 NS,直接問它`];
+    case 'referral': return [arrow, `轉介:${s.zone} NS ${s.ns}`];
+    case 'cname': return [arrow, `CNAME ${s.target}`];
+    case 'answer': return [arrow, `${s.type} ${s.values[0]}` + (s.values.length > 1 ? ` 等 ${s.values.length} 筆` : '')];
+    case 'nxdomain': return [arrow, 'NXDOMAIN'];
+    case 'nodata': return [arrow, 'NOERROR,答案是空的'];
+    case 'cacheAnswer': return [arrow, `快取命中:${s.type} ${s.values[0]}` + (s.values.length > 1 ? ` 等 ${s.values.length} 筆` : '')];
+    case 'cacheCname': return [arrow, `快取命中:CNAME ${s.target}`];
+    case 'loop': return [arrow, 'CNAME 迴圈'];
+    case 'final': {
+      const res = s.result;
+      if (res.status !== 'NOERROR') return [arrow, res.status === 'NODATA' ? 'NOERROR,答案是空的' : res.status];
+      return [arrow, res.values[0] + (res.values.length > 1 ? ` 等 ${res.values.length} 筆` : '')];
+    }
+  }
+  return [arrow, ''];
+}
+
+const tone = s => s.at ? 'think' : (s.kind === 'stubQuery' || s.kind === 'query' ? 'ask' : 'reply');
+
+/* ---------- rendering ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function border(a, b, gap) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const k = Math.min(dx ? (a.w / 2 + gap) / Math.abs(dx) : Infinity, dy ? (a.h / 2 + gap) / Math.abs(dy) : Infinity);
+  return { x: a.x + dx * k, y: a.y + dy * k };
+}
+
+function renderDiagram(s) {
+  const f = n => n.toFixed(1);
+  let h = `<svg class="diagram" viewBox="0 0 720 336" role="img" aria-label="DNS 伺服器的階層,以及目前這一步是誰在跟誰說話">`;
+  for (const [a, b] of LINKS) {
+    const p = border(NODES[a], NODES[b], 0), q = border(NODES[b], NODES[a], 0);
+    h += `<line class="link" x1="${f(p.x)}" y1="${f(p.y)}" x2="${f(q.x)}" y2="${f(q.y)}"></line>`;
+  }
+  if (s && s.from) {
+    const t = tone(s), p = border(NODES[s.from], NODES[s.to], 4), q = border(NODES[s.to], NODES[s.from], 4);
+    const len = Math.hypot(q.x - p.x, q.y - p.y), ux = (q.x - p.x) / len, uy = (q.y - p.y) / len;
+    const bx = q.x - ux * 11, by = q.y - uy * 11;
+    h += `<line class="wire ${t}" x1="${f(p.x)}" y1="${f(p.y)}" x2="${f(bx)}" y2="${f(by)}"></line>`
+      + `<polygon class="head ${t}" points="${f(q.x)},${f(q.y)} ${f(bx - uy * 5.5)},${f(by + ux * 5.5)} ${f(bx + uy * 5.5)},${f(by - ux * 5.5)}"></polygon>`;
+  }
+  for (const [id, n] of Object.entries(NODES)) {
+    const cls = s && s.at === id ? ' think' : (s && (s.from === id || s.to === id) ? ' on' : '');
+    h += `<g class="node${cls}"><rect x="${n.x - n.w / 2}" y="${n.y - n.h / 2}" width="${n.w}" height="${n.h}" rx="4"></rect>`
+      + `<text class="t" x="${n.x}" y="${n.y - 3}">${esc(n.t)}</text><text class="s" x="${n.x}" y="${n.y + 13}">${esc(n.s)}</text></g>`;
+  }
+  $('diagram-wrap').innerHTML = h + '</svg>';
+}
+
+function renderCache(entries, now) {
+  $('clock-now').textContent = `時間:第 ${now} 秒`;
+  if (!entries.length) { $('cache').innerHTML = '<span class="empty">快取是空的。</span>'; return; }
+  $('cache').innerHTML = '<table class="cache-table"><thead><tr><th>名稱</th><th>類型</th><th>值</th><th>還剩</th></tr></thead><tbody>'
+    + entries.map(e => `<tr${e.fresh ? ' class="fresh"' : ''}><td>${esc(e.name)}</td><td class="ty">${e.type}</td>`
+      + `<td>${esc(e.values[0])}${e.values.length > 1 ? ` 等 ${e.values.length} 筆` : ''}</td><td class="left">${fmt(e.left)}</td></tr>`).join('')
+    + '</tbody></table>';
+}
+
+function renderResult() {
+  const t = state.trace;
+  const status = $('status');
+  if (!t) {
+    status.className = 'status';
+    status.textContent = '';
+    $('answer').textContent = '';
+    $('stats').textContent = '按「查詢」之後,答案會出現在這裡。';
+    return;
+  }
+  const res = t.result, ok = res.status === 'NOERROR';
+  status.className = 'status ' + (ok ? 'ok' : 'fail');
+  status.textContent = ok ? 'NOERROR:有答案'
+    : res.status === 'NXDOMAIN' ? 'NXDOMAIN:名稱不存在'
+    : res.status === 'NODATA' ? `NOERROR:名稱存在,但沒有 ${res.qtype} 紀錄`
+    : 'SERVFAIL:解析失敗';
+  $('answer').textContent = answerLines(res).join('\n');
+  const cached = res.cached || res.chain.some(c => c.cached);
+  $('stats').textContent = (res.asked ? `解析器問了 ${res.asked} 次伺服器。` : '整個答案都來自快取,沒有問任何伺服器。')
+    + (cached ? '快取裡的紀錄在過期前不會重新查詢,這段時間內修改紀錄不會生效。' : '');
+}
+
+function renderStep() {
+  const t = state.trace;
+  const s = t ? t.steps[state.step] : null;
+  renderDiagram(s);
+  const say = $('say');
+  say.classList.toggle('err', !t && state.noticeErr);
+  if (s) {
+    const tn = tone(s);
+    $('msg-head').innerHTML = `<span class="tag ${tn}">${tn === 'ask' ? '問' : tn === 'reply' ? '答' : '查快取'}</span>`
+      + `<span>${s.from ? `${esc(TITLE[s.from])} → ${esc(TITLE[s.to])}` : '解析器自己的判斷'}</span>`;
+    $('msg-body').textContent = body(s);
+    say.textContent = narrate(s);
+    $('log').innerHTML = t.steps.map((x, i) => {
+      const [who, what] = logLine(x);
+      return `<li><button type="button" class="log-row ${tone(x)}${i === state.step ? ' on' : i > state.step ? ' future' : ''}" data-step="${i}">`
+        + `<span><span class="who">${esc(who)}</span><span class="what">${esc(what)}</span></span></button></li>`;
+    }).join('');
+    renderCache(s.cache, state.now);
+  } else {
+    $('msg-head').innerHTML = '<span>等待查詢</span>';
+    $('msg-body').textContent = '';
+    say.textContent = state.notice;
+    $('log').innerHTML = '<li class="empty">還沒有對話。</li>';
+    renderCache([...state.cache.values()].map(e => ({ ...e, left: e.expires - state.now, fresh: false })), state.now);
+  }
+  const last = t ? t.steps.length - 1 : 0;
+  $('btn-reset').disabled = !t || state.step === 0;
+  $('btn-prev').disabled = !t || state.step === 0;
+  $('btn-next').disabled = !t || state.step === last;
+  const range = $('step-range');
+  range.max = last;
+  range.value = state.step;
+  range.disabled = !t;
+  $('count').textContent = t ? `步驟 ${state.step + 1} / ${last + 1}` : '';
+}
+
+function idle(notice, isErr) {
+  state.trace = null;
+  state.step = 0;
+  state.notice = notice;
+  state.noticeErr = !!isErr;
+  renderResult();
+  renderStep();
+}
+
+function runQuery() {
+  const qname = norm($('q-name').value), qtype = $('q-type').value;
+  if (!/^([a-z0-9_-]+\.)+$/.test(qname)) return idle('名稱格式不對。請輸入像 explorables.huatsai.dev 這樣的名稱。', true);
+  const { errors, recs } = validateZone();
+  if (errors.length) return idle('huatsai.dev 的紀錄有錯誤,權威伺服器不會載入。先修正頁面下方標出的問題。', true);
+  state.trace = resolve(qname, qtype, recs, state.cache, state.now);
+  state.step = 0;
+  renderResult();
+  renderStep();
+}
+
+function go(n) {
+  if (!state.trace) return;
+  state.step = Math.max(0, Math.min(state.trace.steps.length - 1, n));
+  renderStep();
+}
+
+function renderZoneErrors() {
+  const { errors } = validateZone();
+  const el = $('zone-errors');
+  el.hidden = !errors.length;
+  el.innerHTML = errors.map(e => `<li>${esc(e)}</li>`).join('');
+}
+
+function renderZone() {
+  const fixed = [['@', 'NS', 'ariadne.ns.cloudflare.com', '86400'], ['@', 'SOA', '這個 zone 的管理資訊', '1800']]
+    .map(r => `<tr>${r.map(c => `<td class="fixed">${esc(c)}</td>`).join('')}<td class="fixed">固定</td></tr>`).join('');
+  $('zone-body').innerHTML = fixed + rows.map((r, i) =>
+    `<tr><td><input id="z-${i}-name" type="text" spellcheck="false" data-i="${i}" data-f="name" value="${esc(r.name)}" aria-label="第 ${i + 1} 筆的名稱"></td>`
+    + `<td><select id="z-${i}-type" data-i="${i}" data-f="type" aria-label="第 ${i + 1} 筆的類型">`
+    + ['A', 'AAAA', 'CNAME'].map(t => `<option${t === r.type ? ' selected' : ''}>${t}</option>`).join('') + '</select></td>'
+    + `<td><input id="z-${i}-value" type="text" spellcheck="false" data-i="${i}" data-f="value" value="${esc(r.value)}" aria-label="第 ${i + 1} 筆的值"></td>`
+    + `<td><input id="z-${i}-ttl" type="number" min="1" step="1" data-i="${i}" data-f="ttl" value="${esc(r.ttl)}" aria-label="第 ${i + 1} 筆的 TTL"></td>`
+    + `<td><button type="button" data-del="${i}">刪除</button></td></tr>`).join('');
+  renderZoneErrors();
+}
+
+function init() {
+  $('presets').innerHTML = PRESETS.map((p, i) => `<button type="button" data-preset="${i}">${esc(p.label)}</button>`).join('');
+  $('presets').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const p = PRESETS[Number(b.dataset.preset)];
+    $('q-name').value = p.name;
+    $('q-type').value = p.type;
+    runQuery();
+  });
+  $('query-form').addEventListener('submit', e => { e.preventDefault(); runQuery(); });
+  $('btn-reset').addEventListener('click', () => go(0));
+  $('btn-prev').addEventListener('click', () => go(state.step - 1));
+  $('btn-next').addEventListener('click', () => go(state.step + 1));
+  $('step-range').addEventListener('input', e => go(Number(e.target.value)));
+  $('log').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (b) go(Number(b.dataset.step));
+  });
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (e.key === 'ArrowRight') go(state.step + 1);
+    else if (e.key === 'ArrowLeft') go(state.step - 1);
+  });
+
+  document.querySelector('.clock').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.id === 'btn-flush') {
+      state.cache.clear();
+      return idle('快取已清空。下一次查詢會從根伺服器問起。');
+    }
+    const dt = Number(b.dataset.dt);
+    state.now += dt;
+    for (const [k, e2] of state.cache) if (e2.expires <= state.now) state.cache.delete(k);
+    idle(`時間往後 ${fmt(dt)}。過期的紀錄已經從快取消失,再按一次「查詢」看哪些步驟被跳過。`);
+  });
+
+  const zb = $('zone-body');
+  const onEdit = e => {
+    const el = e.target;
+    if (!el.dataset.f) return;
+    rows[Number(el.dataset.i)][el.dataset.f] = el.value;
+    renderZoneErrors();
+  };
+  zb.addEventListener('input', onEdit);
+  zb.addEventListener('change', onEdit);
+  zb.addEventListener('click', e => {
+    const b = e.target.closest('button[data-del]');
+    if (!b) return;
+    rows.splice(Number(b.dataset.del), 1);
+    renderZone();
+  });
+  $('btn-add').addEventListener('click', () => {
+    rows.push({ name: '', type: 'A', value: '192.0.2.20', ttl: 300 });
+    renderZone();
+    $(`z-${rows.length - 1}-name`).focus();
+  });
+  $('btn-defaults').addEventListener('click', () => {
+    rows = DEFAULT_ROWS.map(r => ({ ...r }));
+    renderZone();
+  });
+
+  renderZone();
+  runQuery();
+}
+
+init();
+</script>
+</body>
+</html>

@@ -42,12 +42,15 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
 .entry .text { flex: 1 1 16rem; min-width: 0; }
 
 /* per-entry thumbnail: a small piece of the page it links to */
-.glyph { flex: 0 0 auto; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.6rem 0.4rem; }
+.glyph { flex: 0 0 auto; width: 12.5rem; display: flex; justify-content: center; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.6rem 0.4rem; }
 .mini-tape { display: flex; gap: 0.15rem; font-family: var(--font-mono); }
 .mini-tape span { display: flex; flex-direction: column; align-items: center; min-width: 2.1rem; font-size: 1.1rem; font-weight: 600; line-height: 1.4; }
 .mini-tape small { display: flex; justify-content: space-between; gap: 0.3rem; width: 100%; min-height: 1rem; font-size: 0.62rem; font-weight: 400; line-height: 1rem; font-variant-numeric: tabular-nums; }
 .mini-tape .l { color: var(--left); }
 .mini-tape .r { color: var(--right); }
+.mini-tree { margin: 0; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.35; }
+.mini-tree b { font-weight: 600; }
+.mini-tree .dim { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -72,6 +75,19 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         <div class="text">
           <h2>Pratt Parser 逐步圖解</h2>
           <p>逐步執行運算子優先級解析,看每一步怎麼比較 l_bp 和 min_bp,也可以自己改結合力。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="dns-resolution/">
+        <div class="glyph" aria-hidden="true">
+<pre class="mini-tree"><b>.</b>
+<span class="dim">└─</span> <b>dev</b>
+   <span class="dim">└─</span> <b>huatsai.dev</b></pre>
+        </div>
+        <div class="text">
+          <h2>DNS 解析逐步圖解</h2>
+          <p>逐步執行一次 DNS 查詢,看解析器怎麼從根伺服器一路問到權威伺服器,也可以改紀錄、讓快取過期。</p>
         </div>
       </a>
     </li>
