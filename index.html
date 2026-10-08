@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Explorables</title>
+<meta name="description" content="可以動手操作的互動解說。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --right: #0a6f6a;
+  --left: #9b2f6b;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --right: #56c9c0; --left: #ea86b8; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 46rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 3.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw, 3rem); line-height: 1.1; letter-spacing: -0.03em; margin: 0; }
+.lead { color: var(--muted); margin: 0.75rem 0 0; max-width: 34em; }
+
+.entries { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.entries li { border-bottom: 1px solid var(--line); }
+.entry { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem 1.75rem; padding: 1.25rem 0; color: inherit; text-decoration: none; }
+.entry:focus-visible { outline: 2px solid var(--right); outline-offset: 4px; }
+.entry h2 { font-size: 1.2rem; line-height: 1.35; margin: 0; }
+.entry:hover h2 { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.entry p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.95rem; }
+.entry .text { flex: 1 1 16rem; min-width: 0; }
+
+/* per-entry thumbnail: a small piece of the page it links to */
+.glyph { flex: 0 0 auto; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.6rem 0.4rem; }
+.mini-tape { display: flex; gap: 0.15rem; font-family: var(--font-mono); }
+.mini-tape span { display: flex; flex-direction: column; align-items: center; min-width: 2.1rem; font-size: 1.1rem; font-weight: 600; line-height: 1.4; }
+.mini-tape small { display: flex; justify-content: space-between; gap: 0.3rem; width: 100%; min-height: 1rem; font-size: 0.62rem; font-weight: 400; line-height: 1rem; font-variant-numeric: tabular-nums; }
+.mini-tape .l { color: var(--left); }
+.mini-tape .r { color: var(--right); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <h1>Explorables</h1>
+    <p class="lead">可以動手操作的互動解說。每一頁挑一個主題,讓你自己一步一步走過去。</p>
+  </header>
+
+  <ul class="entries">
+    <li>
+      <a class="entry" href="pratt-parser/">
+        <div class="glyph" aria-hidden="true">
+          <div class="mini-tape">
+            <span>1<small></small></span>
+            <span>+<small><b class="l">10</b><b class="r">11</b></small></span>
+            <span>2<small></small></span>
+            <span>*<small><b class="l">20</b><b class="r">21</b></small></span>
+            <span>3<small></small></span>
+          </div>
+        </div>
+        <div class="text">
+          <h2>Pratt Parser 逐步圖解</h2>
+          <p>逐步執行運算子優先級解析,看每一步怎麼比較 l_bp 和 min_bp,也可以自己改結合力。</p>
+        </div>
+      </a>
+    </li>
+  </ul>
+</main>
+</body>
+</html>

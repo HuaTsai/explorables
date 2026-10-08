@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pratt Parser 逐步圖解</title>
+<meta name="description" content="逐步執行 Pratt parser,看每一步怎麼比較 l_bp 和 min_bp。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the stepper is a single workbench — token tape on top,
+   the tug-of-war verdict under it, code and call stack side by side. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --right: #0a6f6a;       /* 右側結合力:r_bp、min_bp */
+  --right-soft: #d5ebe8;
+  --left: #9b2f6b;        /* 左側結合力:l_bp */
+  --left-soft: #f3dbe8;
+  --mark: #fdf0b8;        /* 目前這一步 */
+  --bad: #b3261e;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --right: #56c9c0; --right-soft: #123532; --left: #ea86b8; --left-soft: #3a1a2b;
+    --mark: #3d3610; --bad: #ff8a80; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 60rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 38em; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+i.r, i.l { font-style: normal; font-weight: 600; }
+.r { color: var(--right); }
+.l { color: var(--left); }
+.empty { color: var(--muted); font-size: 0.9rem; }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+:focus-visible { outline: 2px solid var(--right); outline-offset: 2px; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row, .row + .panels, .panels + .row { border-top: 1px solid var(--line); }
+
+.input-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+.input-row label { font-size: 0.85rem; color: var(--muted); }
+#expr-input { font-family: var(--font-mono); font-size: 1.05rem; padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--ink); flex: 1 1 14rem; min-width: 0; }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.presets button { font-family: var(--font-mono); font-size: 0.85rem; }
+
+/* tape */
+.tape-wrap { overflow-x: auto; }
+.tape { display: flex; gap: 0.25rem; width: max-content; font-family: var(--font-mono); }
+.cell { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; min-width: 3.4rem; padding: 0.4rem 0.35rem 0.35rem; border-radius: 4px; border: 1px solid transparent; }
+.cell .tok { font-size: 1.5rem; font-weight: 600; line-height: 1.8rem; }
+.cell .bps { display: flex; justify-content: space-between; gap: 0.5rem; width: 100%; min-height: 1.3rem; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.cell .bps b { font-weight: 400; padding: 0 0.25rem; border-radius: 3px; }
+.cell .bps .cmp.l { background: var(--left); color: var(--surface); font-weight: 600; }
+.cell .bps .cmp.r { background: var(--right); color: var(--surface); font-weight: 600; }
+.cell.read .tok { opacity: 0.35; }
+.cell.read .bps b:not(.cmp) { opacity: 0.5; }
+.cell.cur { background: var(--mark); border-color: var(--line); }
+.cell.bad { border-color: var(--bad); }
+.cell.bad .tok { color: var(--bad); }
+.cell.eof .tok { font-family: var(--font-body); font-size: 0.8rem; font-weight: 400; color: var(--muted); }
+
+/* verdict */
+.verdict { display: flex; flex-direction: column; gap: 0.75rem; }
+.tug { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr); gap: 0.5rem; align-items: stretch; }
+.tug > div { padding: 0.5rem 0.75rem; border-radius: 4px; border: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+.tug small { font-size: 0.75rem; color: var(--muted); line-height: 1.4; }
+.tug strong { font-family: var(--font-mono); font-size: 1.4rem; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.from-left strong { color: var(--right); }
+.from-right { text-align: right; }
+.from-right strong { color: var(--left); }
+.from-left.win { background: var(--right-soft); border-color: var(--right); }
+.from-right.win { background: var(--left-soft); border-color: var(--left); }
+.tug .lose { opacity: 0.45; }
+.tug .idle strong { color: var(--muted); }
+.tug .prize { text-align: center; align-items: center; background: var(--bg); border-style: dashed; }
+.tug .prize strong { font-size: 1.1rem; color: var(--ink); }
+.say { max-width: none; min-height: 3.4em; }
+.say.err { color: var(--bad); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--right); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+
+/* code + stack */
+.panels { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+.panel { padding: 1rem 1.25rem; min-width: 0; }
+.panel + .panel { border-left: 1px solid var(--line); }
+@media (max-width: 720px) {
+  .panels { grid-template-columns: minmax(0, 1fr); }
+  .panel + .panel { border-left: 0; border-top: 1px solid var(--line); }
+}
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+pre.code { margin: 0; overflow-x: auto; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.65; }
+pre.code code { display: inline-block; min-width: 100%; font-size: inherit; }
+pre.code .ln { display: block; padding-right: 0.5rem; border-radius: 3px; white-space: pre; }
+pre.code .ln::before { content: attr(data-n); display: inline-block; width: 2ch; margin-right: 1.5ch; text-align: right; color: var(--muted); opacity: 0.6; }
+pre.code .ln.on { background: var(--mark); }
+
+.stack { display: flex; flex-direction: column; gap: 0.4rem; font-family: var(--font-mono); font-size: 0.82rem; }
+.frame { border: 1px solid var(--line); border-radius: 4px; padding: 0.4rem 0.6rem; display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.frame.active { border-color: var(--ink); background: var(--bg); }
+.frame .wait { font-family: var(--font-body); font-size: 0.78rem; color: var(--muted); }
+
+/* result */
+.result { display: flex; flex-direction: column; gap: 0.75rem; }
+.result-expr { font-family: var(--font-mono); font-size: 1.35rem; font-weight: 600; overflow-wrap: anywhere; }
+.tree-wrap { overflow-x: auto; }
+svg.tree { display: block; }
+.tree line { stroke: var(--muted); stroke-width: 1.5; }
+.tree rect { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; }
+.tree .opn rect { fill: var(--ink); stroke: var(--ink); }
+.tree text { font-family: var(--font-mono); font-size: 15px; fill: var(--ink); text-anchor: middle; dominant-baseline: central; }
+.tree .opn text { fill: var(--surface); font-weight: 600; }
+
+/* bp table */
+.tune { display: flex; flex-direction: column; gap: 1rem; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { padding: 0.4rem 1.25rem 0.4rem 0; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: 0.8rem; color: var(--muted); font-weight: 700; }
+td.op { font-family: var(--font-mono); font-size: 1.15rem; font-weight: 600; }
+td input { width: 4.5rem; font-family: var(--font-mono); font-size: 0.95rem; padding: 0.25rem 0.4rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); }
+.tune-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">Pratt Parser</span> 逐步圖解</h1>
+    <p class="lead">一個遞迴函式加一個迴圈,靠比較兩個數字決定運算元歸誰。按「下一步」看它怎麼解析一個式子。</p>
+  </header>
+
+  <section class="prose">
+    <h2>結合力怎麼比</h2>
+    <p>每個二元運算子有兩個數字:<i class="l">左側結合力 l_bp</i> 和 <i class="r">右側結合力 r_bp</i>,寫在下方紙帶的運算子兩側。運算元夾在兩個運算子中間時,左邊的運算子用右側結合力拉它,右邊的用左側結合力拉它,數字大的搶到。</p>
+    <p>程式裡的 <i class="r">min_bp</i> 就是「左邊那個運算子的右側結合力」。迴圈每遇到一個新運算子只做一件事:拿它的 <i class="l">l_bp</i> 跟 <i class="r">min_bp</i> 比。</p>
+  </section>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row input-row">
+      <label for="expr-input">式子</label>
+      <input id="expr-input" type="text" spellcheck="false" autocomplete="off" value="1 + 2 * 3 - 4">
+      <div class="presets" id="presets"></div>
+    </div>
+
+    <div class="row tape-wrap" id="tape-wrap">
+      <div class="tape" id="tape"></div>
+    </div>
+
+    <div class="row verdict">
+      <div class="tug" id="tug"></div>
+      <p class="say" id="say" aria-live="polite"></p>
+      <div class="controls">
+        <button id="btn-reset" type="button">重來</button>
+        <button id="btn-prev" type="button">上一步</button>
+        <button id="btn-next" type="button" class="primary">下一步</button>
+        <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count" id="count"></span>
+      </div>
+    </div>
+
+    <div class="panels">
+      <div class="panel">
+        <p class="panel-title">程式碼</p>
+        <pre class="code"><code id="code"></code></pre>
+      </div>
+      <div class="panel">
+        <p class="panel-title">呼叫堆疊(最下面是目前這一層)</p>
+        <div class="stack" id="stack"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="result">
+    <h2>解析結果</h2>
+    <div class="result-expr" id="result-expr"></div>
+    <div class="tree-wrap" id="tree-wrap"></div>
+  </section>
+
+  <section class="tune">
+    <div class="prose">
+      <h2>改結合力試試看</h2>
+      <p>同一個運算子的右側比左側大就是左結合,反過來是右結合。不同層級的數字範圍通常不重疊。改下面的數字,上面的結果會立刻重算。</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>運算子</th><th>位置</th><th>左側 l_bp</th><th>右側 r_bp</th><th>結合性</th></tr></thead>
+        <tbody id="bp-body"></tbody>
+      </table>
+    </div>
+    <div class="tune-actions">
+      <button id="btn-interleave" type="button">套用交錯範例:+ (10, 20)、* (11, 21)</button>
+      <button id="btn-defaults" type="button">還原預設值</button>
+    </div>
+    <p class="empty">交錯範例的結果是全部由左往右結合:+ 和 * 變成同一層,數字的差距沒有意義。</p>
+  </section>
+</main>
+
+<script>
+const DEFAULTS = [
+  { op: '+', kind: 'binary', l: 10, r: 11 },
+  { op: '-', kind: 'binary', l: 10, r: 11 },
+  { op: '*', kind: 'binary', l: 20, r: 21 },
+  { op: '/', kind: 'binary', l: 20, r: 21 },
+  { op: '^', kind: 'binary', l: 31, r: 30 },
+  { op: '-', kind: 'prefix', r: 25 },
+  { op: '+', kind: 'prefix', r: 25 },
+];
+const PRESETS = ['1 + 2 * 3 - 4', '1 - 2 - 3', '2 ^ 3 ^ 2', '-2 ^ 2', '(1 + 2) * 3'];
+const CODE = [
+  'def parse_expr(toks, <i class="r">min_bp</i>=0):',
+  '    tok = toks.next()',
+  "    if tok == '(':",
+  '        lhs = parse_expr(toks, 0)',
+  "        toks.expect(')')",
+  '    elif tok in PREFIX:',
+  '        lhs = (tok, parse_expr(toks, PREFIX[tok]))',
+  '    else:',
+  '        lhs = tok',
+  '',
+  '    while True:',
+  '        op = toks.peek()',
+  '        if op not in BINARY:',
+  '            break',
+  '        <i class="l">l_bp</i>, <i class="r">r_bp</i> = BINARY[op]',
+  '        if <i class="l">l_bp</i> &lt; <i class="r">min_bp</i>:',
+  '            break',
+  '        toks.next()',
+  '        lhs = (op, lhs, parse_expr(toks, <i class="r">r_bp</i>))',
+  '    return lhs',
+];
+
+let rows = DEFAULTS.map(r => ({ ...r }));
+const state = { toks: [], trace: null, error: null, step: 0 };
+
+function tables() {
+  const t = { binary: {}, prefix: {} };
+  for (const r of rows) {
+    if (r.kind === 'binary') t.binary[r.op] = [r.l, r.r];
+    else t.prefix[r.op] = r.r;
+  }
+  return t;
+}
+
+class ParseError extends Error {
+  constructor(msg, pos) { super(msg); this.pos = pos; }
+}
+
+function tokenize(src) {
+  const toks = [];
+  const re = /\s*(?:(\d+(?:\.\d+)?|[A-Za-z_]\w*)|([-+*\/^()]))/y;
+  let i = 0;
+  for (;;) {
+    re.lastIndex = i;
+    const m = re.exec(src);
+    if (!m) break;
+    toks.push(m[1] !== undefined ? { text: m[1], kind: 'atom' } : { text: m[2], kind: 'op' });
+    i = re.lastIndex;
+  }
+  const rest = src.slice(i).trim();
+  if (rest) throw new ParseError(`看不懂的字元「${rest[0]}」。可以用數字、變數名、+ - * / ^ 和括號。`, -1);
+  if (!toks.length) throw new ParseError('請輸入一個式子。', -1);
+  return toks;
+}
+
+function show(n) {
+  if (n.atom !== undefined) return n.atom;
+  if (n.args.length === 1) return `(${n.op}${show(n.args[0])})`;
+  return `(${show(n.args[0])} ${n.op} ${show(n.args[1])})`;
+}
+
+// Same algorithm as CODE above, recording a snapshot at every step.
+function buildTrace(toks, bp) {
+  const steps = [];
+  const stack = [];
+  const roles = toks.map(() => null);
+  let pos = 0;
+
+  const snap = s => steps.push({
+    ...s, pos,
+    stack: stack.map(f => ({ minBp: f.minBp, minSrc: f.minSrc, minLabel: f.minLabel, lhs: f.lhs ? show(f.lhs) : null, wait: f.wait })),
+  });
+
+  function parse(minBp, minSrc, why) {
+    const minLabel = why.type === 'top' ? '起點,左邊沒有運算子'
+      : why.type === 'paren' ? '括號起點'
+      : why.type === 'prefix' ? `前綴 ${why.op} 的結合力`
+      : `${why.op} 的右側結合力`;
+    const frame = { minBp, minSrc, minLabel, lhs: null, wait: null };
+    stack.push(frame);
+    snap({ kind: 'call', lines: [1], why });
+
+    const t = toks[pos];
+    if (!t) throw new ParseError('式子到這裡就結束了,但還需要一個運算元。', pos);
+    if (t.text === '(') {
+      roles[pos] = 'paren';
+      const open = pos++;
+      frame.wait = '括號內的式子';
+      snap({ kind: 'paren', lines: [2, 3, 4], cur: open });
+      const inner = parse(0, null, { type: 'paren' });
+      if (!toks[pos] || toks[pos].text !== ')') throw new ParseError('少了右括號 )。', pos);
+      roles[pos] = 'paren';
+      pos++;
+      frame.lhs = inner;
+      frame.wait = null;
+      snap({ kind: 'parenClose', lines: [5], cur: pos - 1 });
+    } else if (t.kind === 'op' && bp.prefix[t.text] !== undefined) {
+      roles[pos] = 'prefix';
+      const at = pos++;
+      const v = bp.prefix[t.text];
+      frame.wait = `${t.text} 的右邊`;
+      snap({ kind: 'prefix', lines: [2, 6, 7], cur: at, op: t.text, bp: v });
+      const rhs = parse(v, at, { type: 'prefix', op: t.text, bp: v });
+      frame.lhs = { op: t.text, args: [rhs] };
+      frame.wait = null;
+      snap({ kind: 'prefixDone', lines: [7], cur: at });
+    } else if (t.kind === 'atom') {
+      roles[pos] = 'atom';
+      pos++;
+      frame.lhs = { atom: t.text };
+      snap({ kind: 'atom', lines: [2, 9], cur: pos - 1, tok: t.text });
+    } else {
+      throw new ParseError(`這裡需要一個運算元,卻看到 ${t.text}。`, pos);
+    }
+
+    for (;;) {
+      const o = toks[pos];
+      if (!o || bp.binary[o.text] === undefined) {
+        if (o && o.text !== ')') throw new ParseError(`${o.text} 前面少了運算子。`, pos);
+        snap({ kind: 'stop', lines: [12, 13, 14], cur: pos, tok: o ? o.text : null });
+        break;
+      }
+      const [l, r] = bp.binary[o.text];
+      if (l < minBp) {
+        snap({ kind: 'lose', lines: [12, 15, 16, 17], cur: pos, op: o.text, l });
+        break;
+      }
+      roles[pos] = 'binary';
+      const at = pos;
+      snap({ kind: 'win', lines: [12, 15, 16, 18], cur: at, op: o.text, l });
+      pos++;
+      frame.wait = `${o.text} 的右邊`;
+      const rhs = parse(r, at, { type: 'binary', op: o.text, bp: r });
+      frame.lhs = { op: o.text, args: [frame.lhs, rhs] };
+      frame.wait = null;
+      snap({ kind: 'combine', lines: [19], cur: at });
+    }
+    snap({ kind: 'return', lines: [20] });
+    stack.pop();
+    return frame.lhs;
+  }
+
+  const ast = parse(0, null, { type: 'top' });
+  if (pos < toks.length) throw new ParseError(`多出來的 ${toks[pos].text},沒有對應的左括號或運算子。`, pos);
+  return { steps, ast, roles };
+}
+
+function narrate(s) {
+  const top = s.stack[s.stack.length - 1];
+  switch (s.kind) {
+    case 'call':
+      if (s.why.type === 'top') return '從最外層開始:parse_expr(min_bp = 0)。0 表示左邊沒有運算子在拉。';
+      if (s.why.type === 'paren') return '括號裡重新開一局:parse_expr(min_bp = 0)。括號外的運算子拉不到裡面。';
+      if (s.why.type === 'prefix') return `解析前綴 ${s.why.op} 的右邊:parse_expr(min_bp = ${s.why.bp})。後面的運算子左側要 ≥ ${s.why.bp} 才搶得走運算元。`;
+      return `解析 ${s.why.op} 的右邊:把 ${s.why.op} 的右側結合力 ${s.why.bp} 當成 min_bp 傳下去。`;
+    case 'atom': return `讀到 ${s.tok},它就是這一層的 lhs。`;
+    case 'paren': return '讀到 (,先解析括號內的整個式子。';
+    case 'parenClose': return `括號內回傳 ${top.lhs},吃掉 )。整個括號當成一個運算元。`;
+    case 'prefix': return `讀到前綴 ${s.op}(結合力 ${s.bp}),它需要右邊的運算元。`;
+    case 'prefixDone': return `右邊回來了,組成 lhs = ${top.lhs}。`;
+    case 'stop': return s.tok === null ? '後面沒有 token 了,離開迴圈。' : '下一個是 ),不是二元運算子,離開迴圈。';
+    case 'win': return `${s.op} 的左側 ${s.l} ≥ min_bp ${top.minBp},${s.op} 搶到 ${top.lhs}。吃掉 ${s.op},接著解析它的右邊。`;
+    case 'lose': return `${s.op} 的左側 ${s.l} < min_bp ${top.minBp},搶不到 ${top.lhs}。break,把 ${s.op} 留給外層處理。`;
+    case 'combine': return `右邊回來了,組成 lhs = ${top.lhs}。回到迴圈開頭,看下一個運算子。`;
+    case 'return': return s.stack.length > 1 ? `回傳 ${top.lhs} 給上一層。` : `最外層回傳,解析完成:${top.lhs}`;
+  }
+  return '';
+}
+
+/* ---------- rendering ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function renderTape(s) {
+  const { toks, trace, error } = state;
+  const el = $('tape');
+  if (!toks.length) { el.innerHTML = '<span class="empty">沒有可以顯示的 token</span>'; return; }
+  const roles = trace ? trace.roles : [];
+  const t = tables();
+  const top = s ? s.stack[s.stack.length - 1] : null;
+  const cmp = !!s && (s.kind === 'win' || s.kind === 'lose');
+  let h = '';
+  toks.forEach((tk, i) => {
+    const cls = ['cell'];
+    if (s && i === s.cur) cls.push('cur');
+    else if (s && i < s.pos) cls.push('read');
+    if (error && i === error.pos) cls.push('bad');
+    const rCmp = cmp && top.minSrc === i ? ' cmp' : '';
+    let bps = '';
+    if (roles[i] === 'binary') {
+      const [l, r] = t.binary[tk.text];
+      bps = `<b class="l${cmp && i === s.cur ? ' cmp' : ''}">${l}</b><b class="r${rCmp}">${r}</b>`;
+    } else if (roles[i] === 'prefix') {
+      bps = `<b></b><b class="r${rCmp}">${t.prefix[tk.text]}</b>`;
+    }
+    h += `<div class="${cls.join(' ')}"><span class="tok">${esc(tk.text)}</span><span class="bps">${bps}</span></div>`;
+  });
+  const end = toks.length;
+  h += `<div class="cell eof${s && s.cur === end ? ' cur' : ''}${error && error.pos === end ? ' bad' : ''}"><span class="tok">結束</span><span class="bps"></span></div>`;
+  el.innerHTML = h;
+  const cur = el.querySelector('.cur');
+  const wrap = $('tape-wrap');
+  if (cur) wrap.scrollLeft = Math.max(0, cur.offsetLeft - wrap.clientWidth / 2);
+}
+
+function renderTug(s) {
+  const el = $('tug');
+  if (!s) {
+    el.innerHTML = '<div class="from-left idle"><small>min_bp</small><strong>—</strong></div>'
+      + '<div class="prize"><small>運算元 lhs</small><strong>—</strong></div>'
+      + '<div class="from-right idle"><small>下一個運算子的 l_bp</small><strong>—</strong></div>';
+    return;
+  }
+  const top = s.stack[s.stack.length - 1];
+  const cmp = s.kind === 'win' || s.kind === 'lose';
+  const leftCls = cmp ? (s.kind === 'lose' ? ' win' : ' lose') : '';
+  const rightCls = cmp ? (s.kind === 'win' ? ' win' : ' lose') : ' idle';
+  el.innerHTML =
+    `<div class="from-left${leftCls}"><small>min_bp · ${esc(top.minLabel)}</small><strong>${top.minBp}</strong></div>`
+    + `<div class="prize"><small>運算元 lhs</small><strong>${top.lhs ? esc(top.lhs) : '?'}</strong></div>`
+    + (cmp
+      ? `<div class="from-right${rightCls}"><small>l_bp · ${esc(s.op)} 的左側結合力</small><strong>${s.l}</strong></div>`
+      : `<div class="from-right${rightCls}"><small>l_bp · 這一步沒有比較</small><strong>—</strong></div>`);
+}
+
+function renderStack(s) {
+  const el = $('stack');
+  if (!s) { el.innerHTML = '<span class="empty">—</span>'; return; }
+  el.innerHTML = s.stack.map((f, i) => {
+    const active = i === s.stack.length - 1;
+    return `<div class="frame${active ? ' active' : ''}" style="margin-left:${Math.min(i, 6) * 0.75}rem">`
+      + `<span>parse_expr(<i class="r">min_bp</i> = ${f.minBp})</span>`
+      + `<span>lhs = ${f.lhs ? esc(f.lhs) : '尚未讀取'}</span>`
+      + (f.wait ? `<span class="wait">等 ${esc(f.wait)}回傳</span>` : '')
+      + '</div>';
+  }).join('');
+}
+
+function renderCode(s) {
+  const on = new Set(s ? s.lines : []);
+  $('code').innerHTML = CODE.map((line, i) =>
+    `<span class="ln${on.has(i + 1) ? ' on' : ''}" data-n="${i + 1}">${line || ' '}</span>`).join('');
+}
+
+function renderTree() {
+  const { trace } = state;
+  if (!trace) {
+    $('result-expr').textContent = '—';
+    $('tree-wrap').innerHTML = '<span class="empty">式子可以解析時,這裡會畫出語法樹。</span>';
+    return;
+  }
+  $('result-expr').textContent = show(trace.ast);
+  const nodes = [], edges = [];
+  let leaf = 0, maxDepth = 0, maxLen = 1;
+  (function walk(n, depth) {
+    maxDepth = Math.max(maxDepth, depth);
+    let node;
+    if (n.atom !== undefined) {
+      node = { label: n.atom, x: leaf++, depth, op: false };
+    } else {
+      const kids = n.args.map(a => walk(a, depth + 1));
+      node = { label: n.op, x: (kids[0].x + kids[kids.length - 1].x) / 2, depth, op: true };
+      kids.forEach(k => edges.push([node, k]));
+    }
+    maxLen = Math.max(maxLen, node.label.length);
+    nodes.push(node);
+    return node;
+  })(trace.ast, 0);
+  const boxW = Math.max(36, maxLen * 10 + 16), cw = boxW + 24, rh = 60;
+  const W = leaf * cw, H = (maxDepth + 1) * rh;
+  const px = n => n.x * cw + cw / 2, py = n => n.depth * rh + rh / 2;
+  let h = `<svg class="tree" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="語法樹:${esc(show(trace.ast))}">`;
+  for (const [a, b] of edges) h += `<line x1="${px(a)}" y1="${py(a)}" x2="${px(b)}" y2="${py(b)}"></line>`;
+  for (const n of nodes) {
+    const w = n.op ? 36 : boxW;
+    h += `<g${n.op ? ' class="opn"' : ''}><rect x="${px(n) - w / 2}" y="${py(n) - 18}" width="${w}" height="36" rx="18"></rect>`
+      + `<text x="${px(n)}" y="${py(n)}">${esc(n.label)}</text></g>`;
+  }
+  $('tree-wrap').innerHTML = h + '</svg>';
+}
+
+function renderStep() {
+  const { trace, error } = state;
+  const s = trace ? trace.steps[state.step] : null;
+  renderTape(s);
+  renderTug(s);
+  renderStack(s);
+  renderCode(s);
+  const say = $('say');
+  say.classList.toggle('err', !!error);
+  say.textContent = error ? `無法解析:${error.message}` : narrate(s);
+  const last = trace ? trace.steps.length - 1 : 0;
+  $('btn-reset').disabled = !trace || state.step === 0;
+  $('btn-prev').disabled = !trace || state.step === 0;
+  $('btn-next').disabled = !trace || state.step === last;
+  const range = $('step-range');
+  range.max = last;
+  range.value = state.step;
+  range.disabled = !trace;
+  $('count').textContent = trace ? `步驟 ${state.step + 1} / ${last + 1}` : '';
+}
+
+function run() {
+  state.step = 0;
+  state.trace = null;
+  state.error = null;
+  state.toks = [];
+  try {
+    state.toks = tokenize($('expr-input').value);
+    state.trace = buildTrace(state.toks, tables());
+  } catch (e) {
+    if (!(e instanceof ParseError)) throw e;
+    state.error = e;
+  }
+  renderTree();
+  renderStep();
+}
+
+function go(n) {
+  if (!state.trace) return;
+  state.step = Math.max(0, Math.min(state.trace.steps.length - 1, n));
+  renderStep();
+}
+
+function renderBpTable() {
+  $('bp-body').innerHTML = rows.map((r, i) => {
+    const assoc = r.kind === 'prefix' ? '—' : (r.r > r.l ? '左結合' : '右結合');
+    const left = r.kind === 'binary'
+      ? `<input id="bp-${i}-l" type="number" min="0" step="1" value="${r.l}" data-i="${i}" data-side="l" aria-label="${r.op} 的左側結合力">`
+      : '—';
+    return `<tr><td class="op">${esc(r.op)}</td><td>${r.kind === 'binary' ? '二元' : '前綴'}</td><td>${left}</td>`
+      + `<td><input id="bp-${i}-r" type="number" min="0" step="1" value="${r.r}" data-i="${i}" data-side="r" aria-label="${r.op} 的右側結合力"></td>`
+      + `<td id="bp-${i}-assoc">${assoc}</td></tr>`;
+  }).join('');
+}
+
+function init() {
+  $('presets').innerHTML = PRESETS.map(p => `<button type="button" data-expr="${esc(p)}">${esc(p)}</button>`).join('');
+  $('presets').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    $('expr-input').value = b.dataset.expr;
+    run();
+  });
+  $('expr-input').addEventListener('input', run);
+  $('btn-reset').addEventListener('click', () => go(0));
+  $('btn-prev').addEventListener('click', () => go(state.step - 1));
+  $('btn-next').addEventListener('click', () => go(state.step + 1));
+  $('step-range').addEventListener('input', e => go(Number(e.target.value)));
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.key === 'ArrowRight') go(state.step + 1);
+    else if (e.key === 'ArrowLeft') go(state.step - 1);
+  });
+
+  $('bp-body').addEventListener('input', e => {
+    const inp = e.target;
+    const v = parseInt(inp.value, 10);
+    if (!inp.dataset.side || Number.isNaN(v) || v < 0) return;
+    const r = rows[Number(inp.dataset.i)];
+    r[inp.dataset.side] = v;
+    if (r.kind === 'binary') $(`bp-${inp.dataset.i}-assoc`).textContent = r.r > r.l ? '左結合' : '右結合';
+    run();
+  });
+  $('btn-interleave').addEventListener('click', () => {
+    rows = DEFAULTS.map(r => ({ ...r }));
+    Object.assign(rows[0], { l: 10, r: 20 });
+    Object.assign(rows[2], { l: 11, r: 21 });
+    renderBpTable();
+    $('expr-input').value = '1 + 2 * 3 + 4';
+    run();
+  });
+  $('btn-defaults').addEventListener('click', () => {
+    rows = DEFAULTS.map(r => ({ ...r }));
+    renderBpTable();
+    run();
+  });
+
+  renderBpTable();
+  run();
+}
+
+init();
+</script>
+</body>
+</html>
