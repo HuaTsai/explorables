@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>find_rows 逐步圖解</title>
+<meta name="description" content="一行一步執行排序加二分搜尋的向量化查表,看 pos、hit、回傳值每個中間 tensor 長什麼樣,以及為什麼 clamp 不會製造假命中。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the stepper is a single workbench — keys tape,
+   sorted tape, the 2-D queries grid, then code and narration side by side.
+   One step == one line of the real function; every step shows the WHOLE
+   intermediate tensor, never one query at a time. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --right: #0a6f6a;       /* 排序後的位置:pos */
+  --right-soft: #d5ebe8;
+  --left: #9b2f6b;        /* 原始 row 編號 */
+  --left-soft: #f3dbe8;
+  --mark: #fdf0b8;        /* 目前這一步 / 被 clamp 改動的格 */
+  --good: #2e7d32;
+  --good-soft: #dcefdc;
+  --bad: #b3261e;
+  --bad-soft: #f6dcda;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --right: #56c9c0; --right-soft: #123532; --left: #ea86b8; --left-soft: #3a1a2b;
+    --mark: #3d3610; --good: #7bd389; --good-soft: #15301a; --bad: #ff8a80; --bad-soft: #3a1714;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 60rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+h3 { font-size: 1rem; margin: 0; }
+p { margin: 0; max-width: 38em; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+i.r, i.l, i.g, i.b { font-style: normal; font-weight: 600; }
+.r { color: var(--right); }
+.l { color: var(--left); }
+.g { color: var(--good); }
+.b { color: var(--bad); }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); text-decoration: underline; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+input[type="text"] { font: inherit; font-family: var(--font-mono); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0.35rem 0.6rem; width: 100%; }
+input[type="text"]:focus-visible { outline: 2px solid var(--right); outline-offset: 1px; }
+
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row, .row + .panels, .panels + .row, .row + .rows2, .rows2 + .row { border-top: 1px solid var(--line); }
+.rows2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.rows2 > .row { min-width: 0; }
+.rows2 > .row:nth-child(n + 3) { border-top: 1px solid var(--line); }
+.rows2 > .row:nth-child(even) { border-left: 1px solid var(--line); }
+@media (max-width: 52rem) {
+  .rows2 { grid-template-columns: 1fr; }
+  .rows2 > .row:nth-child(even) { border-left: 0; }
+  .rows2 > .row:nth-child(n + 2) { border-top: 1px solid var(--line); }
+}
+.row-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.4rem; display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.row-title code { font-weight: 400; letter-spacing: 0; color: var(--ink); }
+.row.active .row-title { color: var(--ink); }
+.row.active .row-title > span:first-child::before { content: "▶ "; color: var(--right); }
+.row.pending .tape-wrap { opacity: 0.35; }
+
+/* tapes and the 2-D grid share one cell style */
+.tape-wrap { overflow-x: auto; padding-bottom: 0.25rem; }
+.tape { display: flex; gap: 0.25rem; width: max-content; font-family: var(--font-mono); }
+.grid { display: flex; flex-direction: column; gap: 0.25rem; width: max-content; font-family: var(--font-mono); }
+.grid .tape { gap: 0.25rem; }
+.cell { display: flex; flex-direction: column; align-items: center; min-width: 3.9rem; padding: 0.3rem 0.4rem; border-radius: 4px; border: 1px solid transparent; }
+.cell small { font-size: 0.72rem; line-height: 1.2rem; min-height: 1.2rem; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.cell .key { font-size: 1.4rem; font-weight: 600; line-height: 1.8rem; }
+.cell .row-tag { color: var(--left); font-weight: 600; }
+.cell .pos-tag { color: var(--right); }
+.cell .val { font-weight: 600; font-size: 0.85rem; }
+.cell .val.r { color: var(--right); }
+.cell .val.l { color: var(--left); }
+.cell .val.g { color: var(--good); }
+.cell .val.b { color: var(--bad); }
+.cell.cur { background: var(--mark); border-color: var(--line); }
+.cell.good { background: var(--good-soft); border-color: var(--good); }
+.cell.bad { background: var(--bad-soft); border-color: var(--bad); }
+.cell.found { background: var(--left-soft); border-color: var(--left); }
+.cell.ghost { border-style: dashed; border-color: var(--line); }
+.cell.ghost .key { color: var(--muted); font-weight: 400; font-size: 1rem; }
+.cell.focus { outline: 2px solid var(--right); outline-offset: 1px; }
+.cell.hoverable { cursor: default; }
+.empty { color: var(--muted); font-size: 0.9rem; font-family: var(--font-body); }
+.hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.4rem; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--right); }
+.controls .count { font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); min-width: 4rem; text-align: right; }
+
+.panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
+.panel { padding: 1rem 1.25rem; min-width: 0; }
+.panel + .panel { border-left: 1px solid var(--line); }
+@media (max-width: 44rem) {
+  .panels { grid-template-columns: 1fr; }
+  .panel + .panel { border-left: 0; border-top: 1px solid var(--line); }
+}
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+pre.code { margin: 0; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; overflow-x: auto; }
+pre.code .ln { display: block; padding: 0 0.5rem; border-radius: 3px; white-space: pre; }
+pre.code .ln.cur { background: var(--mark); }
+pre.code .ln.done { opacity: 0.55; }
+pre.code .ln.skip { opacity: 0.3; text-decoration: line-through; }
+.narr { display: flex; flex-direction: column; gap: 0.6rem; font-size: 0.95rem; }
+.narr p { max-width: none; }
+.narr pre { margin: 0; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.5; padding: 0.5rem 0.7rem; border-radius: 4px; background: var(--bg); overflow-x: auto; }
+.narr pre .shape { color: var(--muted); }
+
+.inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem 1rem; }
+@media (max-width: 44rem) { .inputs { grid-template-columns: 1fr; } }
+.inputs label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--muted); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.presets button { font-size: 0.85rem; }
+.error { color: var(--bad); font-size: 0.9rem; margin-top: 0.5rem; min-height: 1.5rem; }
+
+.cmp { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0.75rem; }
+.cmp div { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 0.9rem 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.cmp h3 { font-family: var(--font-mono); font-size: 0.95rem; }
+.cmp p { font-size: 0.92rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">find_rows</span> 逐步圖解</h1>
+    <p class="lead">一個 <code>{key: row}</code> 的 dict 查表,用「排序 + 二分搜尋」寫成沒有迴圈的 tensor 運算。一行 code 一步,每一步把整個中間 tensor 攤開來看:<code>pos</code> 長什麼樣、<code>hit</code> 長什麼樣、最後回傳的又長什麼樣。</p>
+  </header>
+
+  <section class="prose">
+    <h2>問題是什麼</h2>
+    <p>稀疏卷積把每個 active voxel 的座標 <code>(b, z, y, x)</code> 壓成一個整數 <code>key</code>,存在 <code>keys[N]</code> 裡。<b>第 <i class="l">i</i> 個 key 就是 feature table 的第 <i class="l">i</i> 個 row</b>。建 rulebook 時,對每個 voxel 的每個鄰居座標算出 key,問:「這個鄰居是 active 的嗎?是的話它在第幾 row?」</p>
+    <p>單筆查詢就是 Python 的 <code>table.get(q, -1)</code>。但一次要查幾百萬筆,而且在 GPU 上,所以要寫成不帶 Python 迴圈的 tensor 運算:每一行 code 對<b>整個</b> <code>queries</code> tensor 做一次,中間值都跟 <code>queries</code> 同形狀。這裡 <code>queries</code> 故意用二維 <code>[Q, K]</code>,對應「Q 個 voxel 各有 K 個鄰居」,看形狀怎麼一路保留到回傳值。</p>
+  </section>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row">
+      <div class="inputs">
+        <label><span>keys — N 個,不重複;row 順序就是你輸入的順序</span>
+          <input id="keys-input" type="text" spellcheck="false" autocomplete="off">
+        </label>
+        <label><span>queries — 用 <code>;</code> 分列,每列個數要相同;不加 <code>;</code> 就是一維</span>
+          <input id="queries-input" type="text" spellcheck="false" autocomplete="off">
+        </label>
+      </div>
+      <div class="presets" id="presets"></div>
+      <div class="error" id="error" role="alert"></div>
+    </div>
+
+    <div class="rows2">
+    <div class="row">
+      <p class="row-title"><span>KEYS — 原始順序,<i class="l">row</i> 就是 feature table 的列號</span><code id="keys-shape"></code></p>
+      <div class="tape-wrap"><div class="tape" id="keys-tape"></div></div>
+    </div>
+
+    <div class="row">
+      <p class="row-title"><span>QUERIES — 輸入,不會變</span><code id="queries-shape"></code></p>
+      <div class="tape-wrap"><div class="grid" id="queries-grid"></div></div>
+    </div>
+
+    <div class="row" id="row-sorted">
+      <p class="row-title"><span>SORTED_KEYS — 每格掛著<i class="l">原本的 row</i>,底下是落在這格的 query 數</span><code id="sorted-shape"></code></p>
+      <div class="tape-wrap"><div class="tape" id="sorted-tape"></div></div>
+    </div>
+
+    <div class="row" id="row-pos">
+      <p class="row-title"><span>POS — <code>searchsorted</code> 插入點,<code>clamp</code> 後</span><code id="pos-shape"></code></p>
+      <div class="tape-wrap"><div class="grid" id="pos-grid"></div></div>
+    </div>
+
+    <div class="row" id="row-hit">
+      <p class="row-title"><span>HIT — <code>sorted_keys[pos] == queries</code></span><code id="hit-shape"></code></p>
+      <div class="tape-wrap"><div class="grid" id="hit-grid"></div></div>
+    </div>
+
+    <div class="row" id="row-ret">
+      <p class="row-title"><span>RETURN — <code>torch.where(hit, order[pos], -1)</code></span><code id="ret-shape"></code></p>
+      <div class="tape-wrap"><div class="grid" id="ret-grid"></div></div>
+      <p class="hint" id="grid-hint"></p>
+    </div>
+    </div>
+
+    <div class="row">
+      <div class="controls">
+        <button id="btn-reset" type="button">重來</button>
+        <button id="btn-prev" type="button">上一步</button>
+        <button id="btn-next" type="button" class="primary">下一步</button>
+        <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count" id="step-count"></span>
+      </div>
+    </div>
+
+    <div class="panels">
+      <div class="panel">
+        <p class="panel-title">CODE — minispconv/rulebook.py,每一行只執行一次</p>
+        <pre class="code"><code id="code"></code></pre>
+      </div>
+      <div class="panel">
+        <p class="panel-title">這一行算出了什麼</p>
+        <div class="narr" id="narr"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="prose">
+    <h2>為什麼要先排序</h2>
+    <p><code>searchsorted</code> 是二分搜尋,前提是序列已排序,但 <code>keys</code> 的順序是 feature table 的 row 順序,不能動。所以用 <code>argsort</code> 拿到一個<b>排列</b> <code>order</code>:<code>order[i]</code> 是「排序後第 <i class="r">i</i> 格原本是第幾 <i class="l">row</i>」。排序後的 tape 每一格都掛著自己原本的 row 號,找到位置之後查回去就行,這就是最後 <code>order[pos]</code> 那一下。</p>
+    <p>排序只做一次,之後 27 個 kernel tap 的鄰居查詢都對同一份 <code>sorted_keys</code> 做。這是 <code>linearize</code> 和 <code>find_rows</code> 拆成兩個函式的原因:key 算一次,查很多次。</p>
+  </section>
+
+  <section class="prose">
+    <h2>clamp 為什麼不會製造假命中</h2>
+    <p><code>searchsorted</code> 回傳的是「插入點」:第一個 <code>&ge; q</code> 的位置。如果 <code>q</code> 比所有 key 都大,插入點是 <code>N</code>,而 <code>sorted_keys[N]</code> 越界,直接索引會炸。</p>
+    <p>於是把 <code>pos</code> clamp 到 <code>N - 1</code>。這看起來像在亂改答案,但接下來要比的是 <code>sorted_keys[N - 1] == q</code>,也就是跟<b>最大的 key</b> 比。<code>q</code> 之所以會落到 <code>N</code>,正是因為它嚴格大於所有 key,包括最大那個,所以這個比較<b>必定是 False</b>。clamp 只是讓越界的 query 走到一個保證 miss 的格子,不會把它變成命中。試試上面「全部越界」的範例,在 clamp 那一步看哪幾格被改動,再看下一步 <code>hit</code> 那幾格全是 False。</p>
+    <p>反過來,小於所有 key 的 query 落在 <code>pos = 0</code>,不越界,直接跟最小 key 比,也是 miss。所以只需要 clamp 上界。</p>
+  </section>
+
+  <section class="prose">
+    <h2>兩個容易漏掉的細節</h2>
+    <p><b>dtype。</b><code>argsort</code> 和 <code>searchsorted</code> 一律回 int64,不看輸入是什麼。rulebook 全程 int32,所以 <code>order</code> 建立時就轉成 int32,之後 <code>order[pos]</code> 和 <code>where(..., -1)</code> 都維持 int32。漏掉這一步,錯誤要到 <code>Rulebook.__post_init__</code> 才會爆。</p>
+    <p><b>空的 keys。</b>N = 0 時 <code>N - 1 = -1</code>,clamp 和索引都會出錯。整幀點雲被 range 濾光在推論端是真的會發生的事,所以函式開頭直接回全 -1,讓它對空輸入也有定義,上層就不必每一處都防。</p>
+  </section>
+
+  <section class="prose">
+    <h2>這跟 hash table 的關係</h2>
+    <div class="cmp">
+      <div>
+        <h3>sort + searchsorted(L1)</h3>
+        <p>建表 O(N log N),每筆查詢 O(log N)。沒有碰撞處理、沒有 load factor、沒有 sentinel key,正確性可以一眼看完。</p>
+      </div>
+      <div>
+        <h3>GPU hash table(L2)</h3>
+        <p>建表 O(N),每筆查詢期望 O(1)。要處理碰撞、選 empty key、調 capacity。spconv 上游走這條。</p>
+      </div>
+    </div>
+    <p>兩者的介面完全一樣:<code>find_rows(keys, queries) -&gt; rows</code>。docstring 刻意說「背後用什麼是這個函式的私事」,就是為了之後換成 hash table 時,呼叫端和測試一行都不用改。L1 版本的價值是當 L2 的對拍基準。</p>
+  </section>
+</main>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const PRESETS = [
+  { name: '測試裡的例子,2×4', keys: '42 7 19 3', queries: '19 5 42 42; 100 3 0 7' },
+  { name: '全部命中、順序打亂', keys: '10 20 30 40', queries: '30 10; 40 20' },
+  { name: '全部越界', keys: '3 7', queries: '7 8 1000000' },
+  { name: '比最小的還小', keys: '50 60', queries: '0 49; 50 61' },
+  { name: '沒有 key', keys: '', queries: '0 1; 2 3' },
+];
+
+// The real function, line for line. Each line is one step of the trace.
+const CODE = [
+  { id: 'def',     text: 'def find_rows(keys, queries):' },
+  { id: 'empty',   text: '    if keys.numel() == 0:' },
+  { id: 'empty2',  text: '        return torch.full_like(queries, -1)' },
+  { id: 'argsort', text: '    order = torch.argsort(keys).to(torch.int32)' },
+  { id: 'gather',  text: '    sorted_keys = keys[order]' },
+  { id: 'search',  text: '    pos = torch.searchsorted(sorted_keys, queries)' },
+  { id: 'clamp',   text: '    pos = torch.clamp(pos, max=keys.shape[0] - 1)' },
+  { id: 'hit',     text: '    hit = sorted_keys[pos] == queries' },
+  { id: 'where',   text: '    return torch.where(hit, order[pos], -1)' },
+];
+const ORDER_OF = Object.fromEntries(CODE.map((l, i) => [l.id, i]));
+
+let state = { keys: [], Q: [], shape: [], order: [], sorted: [], trace: [], step: 0, focus: null };
+
+/* ---------- parsing ---------- */
+
+function parseInts(src) {
+  const parts = src.trim().split(/[\s,]+/).filter(Boolean);
+  return parts.map(p => {
+    if (!/^-?\d+$/.test(p)) throw new Error(`「${p}」不是整數`);
+    return Number(p);
+  });
+}
+
+// "19 5; 42 100" -> {rows: [[19,5],[42,100]], shape: [2,2]}; no ';' -> 1-D
+function parseQueries(src) {
+  if (!src.trim()) return { rows: [[]], shape: [0] };
+  if (!src.includes(';')) { const r = parseInts(src); return { rows: [r], shape: [r.length] }; }
+  const rows = src.split(';').map(parseInts);
+  if (rows.some(r => r.length !== rows[0].length)) throw new Error('queries 每一列的個數要相同,才是一個矩形 tensor');
+  return { rows, shape: [rows.length, rows[0].length] };
+}
+
+/* ---------- the algorithm, vectorised: every array below has queries' shape ---------- */
+
+function lowerBound(sorted, q) {   // torch.searchsorted(..., right=False)
+  let lo = 0, hi = sorted.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < q) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+const mapQ = (Q, f) => Q.map((row, i) => row.map((q, j) => f(q, i, j)));
+
+function buildTrace(keys, Q) {
+  const N = keys.length;
+  const trace = [];
+  trace.push({ line: 'def' });
+  if (N === 0) {
+    trace.push({ line: 'empty' });
+    trace.push({ line: 'empty2', result: mapQ(Q, () => -1) });
+    return { order: [], sorted: [], trace };
+  }
+  const order = keys.map((_, i) => i).sort((a, b) => keys[a] - keys[b] || a - b);
+  const sorted = order.map(i => keys[i]);
+  const raw = mapQ(Q, q => lowerBound(sorted, q));
+  const pos = mapQ(raw, p => Math.min(p, N - 1));
+  const hit = mapQ(pos, (p, i, j) => sorted[p] === Q[i][j]);
+  const result = mapQ(hit, (h, i, j) => h ? order[pos[i][j]] : -1);
+  trace.push({ line: 'argsort', order });
+  trace.push({ line: 'gather', order, sorted });
+  trace.push({ line: 'search', order, sorted, pos: raw });
+  trace.push({ line: 'clamp', order, sorted, pos, raw });
+  trace.push({ line: 'hit', order, sorted, pos, hit });
+  trace.push({ line: 'where', order, sorted, pos, hit, result });
+  return { order, sorted, trace };
+}
+
+/* ---------- rendering ---------- */
+
+const cell = (cls, lines, attrs = '') => `<div class="cell ${cls}" ${attrs}>${lines.join('')}</div>`;
+const flat = A => A.flat();
+const fmt2d = (A, f = x => x) => {
+  if (state.shape.length === 1) return `[${A[0].map(f).join(', ')}]`;
+  return '[' + A.map((r, i) => (i ? ' ' : '') + `[${r.map(f).join(', ')}]`).join(',\n') + ']';
+};
+const shapeStr = () => `[${state.shape.join(', ')}]`;
+
+function renderKeysTape(s) {
+  const { keys } = state;
+  if (keys.length === 0) { $('keys-tape').innerHTML = '<span class="empty">keys 是空的(N = 0)</span>'; return; }
+  const found = new Set(s.result ? flat(s.result).filter(r => r >= 0) : []);
+  $('keys-tape').innerHTML = keys.map((k, i) =>
+    cell(found.has(i) ? 'found' : '', [`<small class="row-tag">row ${i}</small>`, `<span class="key">${k}</span>`, `<small></small>`])).join('');
+}
+
+function renderSortedTape(s) {
+  const { keys } = state;
+  const N = keys.length;
+  if (N === 0) { $('sorted-tape').innerHTML = '<span class="empty">沒有東西可排序,直接走 return</span>'; return; }
+  if (!s.order) { $('sorted-tape').innerHTML = state.keys.map((_, i) => cell('ghost', [`<small class="pos-tag">pos ${i}</small>`, `<span class="key">·</span>`, `<small></small>`, `<small></small>`])).join(''); return; }
+  const landed = new Array(N + 1).fill(0);
+  if (s.pos) flat(s.pos).forEach(p => landed[p]++);
+  const focusPos = (state.focus && s.pos) ? s.pos[state.focus[0]][state.focus[1]] : -1;
+  const html = [];
+  for (let i = 0; i <= N; i++) {
+    const ghost = i === N;
+    let cls = ghost ? 'ghost' : '';
+    if (s.line === 'clamp' && !ghost && i === N - 1 && flat(s.raw).some(p => p === N)) cls += ' cur';
+    if (s.line === 'search' && ghost && landed[N] > 0) cls += ' bad';
+    if (i === focusPos) cls += ' focus';
+    html.push(cell(cls, [
+      `<small class="pos-tag">pos ${i}</small>`,
+      `<span class="key">${ghost ? '越界' : (s.sorted ? s.sorted[i] : '·')}</span>`,
+      `<small class="row-tag">${ghost ? '' : `row ${s.order[i]}`}</small>`,
+      `<small class="val r">${s.pos && landed[i] ? `↑ ${landed[i]} 筆` : ''}</small>`,
+    ]));
+  }
+  $('sorted-tape').innerHTML = html.join('');
+}
+
+// One 2-D grid in queries' shape. `cellOf(i, j)` returns {text, cls} or null for "not yet".
+function renderGrid(id, cellOf, top = null) {
+  const { Q, shape } = state;
+  if (shape[shape.length - 1] === 0) { $(id).innerHTML = '<span class="empty">沒有 query,形狀 [0] 的空 tensor</span>'; return; }
+  $(id).innerHTML = Q.map((row, i) => '<div class="tape">' + row.map((q, j) => {
+    const c = cellOf(i, j);
+    const idx = shape.length === 1 ? `[${j}]` : `[${i},${j}]`;
+    const focus = state.focus && state.focus[0] === i && state.focus[1] === j ? ' focus' : '';
+    return cell((c ? c.cls || '' : 'ghost') + focus + ' hoverable',
+      [`<small>${top ? top(i, j) : idx}</small>`, `<span class="key">${c ? c.text : '·'}</span>`, `<small>${c && c.sub ? c.sub : ''}</small>`],
+      `data-i="${i}" data-j="${j}"`);
+  }).join('') + '</div>').join('');
+}
+
+function renderGrids(s) {
+  const { Q, shape } = state;
+  const N = state.keys.length;
+  const sh = shapeStr();
+  // QUERIES: fixed input
+  renderGrid('queries-grid', (i, j) => ({ text: Q[i][j] }));
+  $('queries-shape').textContent = `queries: ${sh} int32`;
+  // POS: raw at the searchsorted step, clamped afterwards; changed cells marked
+  const havePos = !!s.pos;
+  renderGrid('pos-grid', (i, j) => {
+    if (!havePos) return null;
+    const p = s.pos[i][j];
+    if (s.line === 'search') return { text: `<span class="${p === N ? 'b' : 'r'}">${p}</span>`, cls: p === N ? 'bad' : '', sub: p === N ? '= N 越界' : '' };
+    const changed = s.raw && s.raw[i][j] !== p;
+    return { text: `<span class="r">${p}</span>`, cls: changed ? 'cur' : '', sub: changed ? `${s.raw[i][j]} → ${p}` : '' };
+  });
+  $('pos-shape').textContent = havePos ? `pos: ${sh} int64${s.line === 'search' ? '(clamp 前)' : ''}` : '尚未執行';
+  // HIT
+  renderGrid('hit-grid', (i, j) => s.hit ? { text: `<span class="${s.hit[i][j] ? 'g' : 'b'}">${s.hit[i][j] ? 'T' : 'F'}</span>`, cls: s.hit[i][j] ? 'good' : 'bad', sub: `${s.sorted[s.pos[i][j]]} == ${Q[i][j]}` } : null);
+  $('hit-shape').textContent = s.hit ? `hit: ${sh} bool` : '尚未執行';
+  // RETURN
+  renderGrid('ret-grid', (i, j) => {
+    if (!s.result) return null;
+    const r = s.result[i][j];
+    return r >= 0 ? { text: `<span class="l">${r}</span>`, cls: 'found', sub: `row ${r}` } : { text: `<span class="b">-1</span>`, cls: 'bad', sub: s.hit ? 'miss' : 'N = 0' };
+  });
+  $('ret-shape').textContent = s.result ? `return: ${sh} int32` : '尚未執行';
+  $('grid-hint').textContent = havePos ? '滑過任一格,同一格和它的 pos 會一起框出。' : '';
+  // row states: which row the current line writes to, which are still pending
+  const writes = { argsort: 'row-sorted', gather: 'row-sorted', search: 'row-pos', clamp: 'row-pos', hit: 'row-hit', where: 'row-ret', empty2: 'row-ret' };
+  for (const [id, have] of [['row-sorted', !!s.order], ['row-pos', havePos], ['row-hit', !!s.hit], ['row-ret', !!s.result]]) {
+    $(id).classList.toggle('pending', !have);
+    $(id).classList.toggle('active', writes[s.line] === id);
+  }
+}
+
+function renderCode(s) {
+  const cur = ORDER_OF[s.line];
+  const emptyPath = state.keys.length === 0;
+  $('code').innerHTML = CODE.map((l, i) => {
+    let cls = '';
+    if (i === cur) cls = 'cur';
+    else if (emptyPath && i > ORDER_OF.empty2) cls = 'skip';
+    else if (!emptyPath && (l.id === 'empty2')) cls = 'skip';
+    else if (i < cur) cls = 'done';
+    return `<span class="ln ${cls}">${esc(l.text)}</span>`;
+  }).join('');
+}
+
+function tensor(name, A, dtype, f) {
+  return `<pre><span class="shape"># ${name}: shape ${shapeStr()}, ${dtype}</span>\n${fmt2d(A, f)}</pre>`;
+}
+
+function narrate(s) {
+  const { keys, Q, shape } = state;
+  const N = keys.length;
+  const nq = flat(Q).length;
+  const fb = h => h ? '<i class="g">True</i>' : '<i class="b">False</i>';
+  const fr = r => r === -1 ? '<i class="b">-1</i>' : `<i class="l">${r}</i>`;
+  switch (s.line) {
+    case 'def':
+      return `<p>進入函式。<code>keys</code> 是 <code>[${N}]</code> int32;<code>queries</code> 是 <code>${shapeStr()}</code> int32,共 ${nq} 筆。</p>
+              <p>接下來每一行對<b>整個</b> <code>queries</code> 做一次。沒有迴圈、不會回頭。中間值 <code>pos</code>、<code>hit</code>、回傳值,形狀全部是 <code>${shapeStr()}</code>。</p>`;
+    case 'empty':
+      return `<p>N = 0,條件成立。再往下走 <code>N - 1 = -1</code>,clamp 和索引都會出錯,所以在這裡攔住。</p>`;
+    case 'empty2':
+      return `<p>回一個跟 <code>queries</code> 同形狀、全是 -1 的 tensor。空輸入也有定義,上層不必再防。</p>
+              ${tensor('return', s.result, 'int32', fr)}`;
+    case 'argsort':
+      return `<p><code>argsort</code> 不動 <code>keys</code>,而是回一個<b>排列</b>:排序後第 <i class="r">i</i> 格原本是第幾 <i class="l">row</i>。這一行跟 <code>queries</code> 無關,只看 <code>keys</code>。</p>
+              <pre><span class="shape"># order: shape [${N}], int32(argsort 給 int64,立刻轉)</span>\n[${s.order.map(r => `<i class="l">${r}</i>`).join(', ')}]</pre>`;
+    case 'gather':
+      return `<p>用 <code>order</code> 當索引去撿 key,得到排好序的 tape。每格仍然掛著自己原本的 <i class="l">row</i>,等一下查到位置就能查回去。</p>
+              <pre><span class="shape"># sorted_keys: shape [${N}], int32</span>\n[${s.sorted.join(', ')}]</pre>`;
+    case 'search': {
+      const over = flat(s.pos).filter(p => p === N).length;
+      return `<p>對 <code>queries</code> 的每一格獨立做二分搜尋,回傳<b>插入點</b>:<code>sorted_keys</code> 裡第一個 <code>&ge; q</code> 的位置。所以 <code>pos</code> 跟 <code>queries</code> 同形狀。</p>
+              ${tensor('pos', s.pos, 'int64', p => p === N ? `<i class="b">${p}</i>` : `<i class="r">${p}</i>`)}
+              ${over ? `<p>有 ${over} 格是 <i class="b">${N}</i>,等於 N:那些 query 比所有 key 都大。<code>sorted_keys[${N}]</code> 不存在,下一行不處理就會炸。</p>` : `<p>沒有任何一格等於 N,全部在 <code>[0, ${N - 1}]</code> 內。</p>`}`;
+    }
+    case 'clamp': {
+      const changed = [];
+      flat(s.raw).forEach((p, k) => { if (p !== flat(s.pos)[k]) changed.push(k); });
+      return `<p>把每一格的 <code>pos</code> 限制在 <code>&le; N - 1 = ${N - 1}</code>。只有原本等於 N 的格子會變,其他格子原樣。</p>
+              ${tensor('pos', s.pos, 'int64', (p, i) => `<i class="r">${p}</i>`)}
+              ${changed.length
+                ? `<p>${changed.length} 格從 ${N} 變成 ${N - 1},現在指到<b>最大的 key</b> ${s.sorted[N - 1]}。這不會製造假命中:那些 query 既然大於所有 key,下一行跟 ${s.sorted[N - 1]} 比必定是 False。</p>`
+                : `<p>這次沒有格子被改動,clamp 是 no-op。</p>`}`;
+    }
+    case 'hit':
+      return `<p>用 <code>pos</code> 去撿 <code>sorted_keys</code>,得到每格「插入點上的 key」,再跟 <code>queries</code> 逐格比較。二分搜尋只告訴你「該插在哪」,等不等於要自己比。</p>
+              ${tensor('sorted_keys[pos]', mapQ(s.pos, p => s.sorted[p]), 'int32')}
+              ${tensor('hit', s.hit, 'bool', fb)}`;
+    case 'where': {
+      const nHit = flat(s.hit).filter(Boolean).length;
+      return `<p><code>order[pos]</code> 把每格的排序位置換回<b>原本的 row</b>,形狀還是 <code>${shapeStr()}</code>。<code>where</code> 逐格挑:<code>hit</code> 為 True 取 <code>order[pos]</code>,否則取 -1。</p>
+              ${tensor('order[pos]', mapQ(s.pos, p => s.order[p]), 'int32', r => `<i class="l">${r}</i>`)}
+              ${tensor('return', s.result, 'int32', fr)}
+              <p>${nq} 筆查詢,${nHit} 筆命中。上面 KEYS tape 亮起的 row 就是被命中的那些。整個函式六個 tensor 運算、零迴圈,所以 GPU 上百萬筆也是同一份 code。</p>`;
+    }
+  }
+  return '';
+}
+
+function renderStep() {
+  const s = state.trace[state.step];
+  renderKeysTape(s);
+  renderSortedTape(s);
+  renderGrids(s);
+  renderCode(s);
+  $('narr').innerHTML = narrate(s);
+  $('step-range').max = state.trace.length - 1;
+  $('step-range').value = state.step;
+  $('step-count').textContent = `${state.step} / ${state.trace.length - 1}`;
+  $('btn-prev').disabled = state.step === 0;
+  $('btn-next').disabled = state.step === state.trace.length - 1;
+  $('keys-shape').textContent = `keys: [${state.keys.length}] int32`;
+  $('sorted-shape').textContent = state.keys.length ? `order, sorted_keys: [${state.keys.length}] int32` : '';
+}
+
+function run() {
+  $('error').textContent = '';
+  let keys, parsed;
+  try {
+    keys = parseInts($('keys-input').value);
+    parsed = parseQueries($('queries-input').value);
+    if (new Set(keys).size !== keys.length) throw new Error('keys 不能重複:每個 active voxel 的 key 都是唯一的');
+  } catch (e) {
+    $('error').textContent = e.message;
+    return;
+  }
+  const { order, sorted, trace } = buildTrace(keys, parsed.rows);
+  state = { keys, Q: parsed.rows, shape: parsed.shape, order, sorted, trace, step: 0, focus: null };
+  renderStep();
+}
+
+function go(n) {
+  state.step = Math.max(0, Math.min(state.trace.length - 1, n));
+  renderStep();
+}
+
+function init() {
+  $('presets').innerHTML = PRESETS.map((p, i) => `<button type="button" data-i="${i}">${esc(p.name)}</button>`).join('');
+  $('presets').addEventListener('click', e => {
+    const b = e.target.closest('button[data-i]');
+    if (!b) return;
+    const p = PRESETS[Number(b.dataset.i)];
+    $('keys-input').value = p.keys;
+    $('queries-input').value = p.queries;
+    run();
+  });
+  $('keys-input').addEventListener('input', run);
+  $('queries-input').addEventListener('input', run);
+  $('btn-reset').addEventListener('click', () => go(0));
+  $('btn-prev').addEventListener('click', () => go(state.step - 1));
+  $('btn-next').addEventListener('click', () => go(state.step + 1));
+  $('step-range').addEventListener('input', e => go(Number(e.target.value)));
+  document.querySelector('.bench').addEventListener('mouseover', e => {
+    const c = e.target.closest('.cell.hoverable');
+    if (!c) return;
+    const f = [Number(c.dataset.i), Number(c.dataset.j)];
+    if (state.focus && state.focus[0] === f[0] && state.focus[1] === f[1]) return;
+    state.focus = f; renderStep();
+  });
+  document.querySelector('.bench').addEventListener('mouseleave', () => { if (state.focus) { state.focus = null; renderStep(); } });
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
+    if (e.key === 'ArrowRight') { go(state.step + 1); e.preventDefault(); }
+    if (e.key === 'ArrowLeft') { go(state.step - 1); e.preventDefault(); }
+  });
+  $('keys-input').value = PRESETS[0].keys;
+  $('queries-input').value = PRESETS[0].queries;
+  run();
+}
+init();
+</script>
+</body>
+</html>
