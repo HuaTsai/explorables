@@ -70,6 +70,12 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
 .mini-bar span { position: absolute; top: -1px; bottom: -1px; right: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--ink); border-radius: 2px; background: var(--surface); }
 .mini-bar span.l { border-color: var(--left); }
 .mini-bar span.r { border-color: var(--right); }
+.mini-frames { display: flex; flex-direction: column; gap: 0.15rem; width: 100%; font-family: var(--font-mono); font-size: 0.66rem; }
+.mf { border: 1px solid var(--line); border-left: 3px solid var(--muted); border-radius: 2px; padding: 0.12rem 0.4rem; display: flex; justify-content: space-between; }
+.mf.a { border-left-color: var(--right); }
+.mf.b { border-left-color: var(--left); }
+.mf.b span { color: var(--muted); }
+.mf.sp { border-style: dashed; border-left-color: var(--ink); color: var(--muted); }
 </style>
 </head>
 <body>
@@ -188,6 +194,21 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         <div class="text">
           <h2>x86-64 暫存器地圖</h2>
           <p>點開每一個暫存器看別名怎麼疊、SysV 和 Win64 各給它什麼角色,再用幾個 C 函式逐步看參數怎麼進暫存器。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="call-stack/">
+        <div class="glyph" aria-hidden="true">
+          <div class="mini-frames">
+            <div class="mf a">add</div>
+            <div class="mf b">printf <span>ret→</span></div>
+            <div class="mf sp">rsp →</div>
+          </div>
+        </div>
+        <div class="text">
+          <h2>函式呼叫與 Stack 逐步圖解</h2>
+          <p>用真實位址一步步看 call 和 ret 怎麼搬動 rip 與 rsp、frame 怎麼疊起來又拆掉、為什麼 call 的瞬間 rsp 必須是 16 的倍數,還有返回位址被蓋掉會怎樣。</p>
         </div>
       </a>
     </li>
