@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>x86-64 暫存器地圖</title>
+<meta name="description" content="點開每一個 x86-64 暫存器,看它的別名怎麼疊、在 SysV 和 Win64 下各扮演什麼角色,再用幾個 C 函式逐步看參數怎麼進暫存器。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column. Two workbenches — the register map (click a register, see
+   its aliases and ABI role) and the call stepper (a C function, its assembly, the register
+   file changing line by line). */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --right: #0a6f6a;       /* 寫入、回傳值 */
+  --right-soft: #d5ebe8;
+  --left: #9b2f6b;        /* 讀取、參數 */
+  --left-soft: #f3dbe8;
+  --keep: #8a5a00;        /* callee-saved */
+  --keep-soft: #f6e7c4;
+  --mark: #fdf0b8;        /* 目前這一步 */
+  --bad: #b3261e;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --right: #56c9c0; --right-soft: #123532; --left: #ea86b8; --left-soft: #3a1a2b;
+    --keep: #e0b05a; --keep-soft: #3a2e12;
+    --mark: #3d3610; --bad: #ff8a80; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 60rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+h3 { font-size: 1rem; margin: 0; }
+p { margin: 0; max-width: 38em; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+i.r, i.l, i.k { font-style: normal; font-weight: 600; }
+.r { color: var(--right); }
+.l { color: var(--left); }
+.k { color: var(--keep); }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+:focus-visible { outline: 2px solid var(--right); outline-offset: 2px; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row, .row + .panels, .panels + .row { border-top: 1px solid var(--line); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; align-items: center; }
+.toolbar label { font-size: 0.85rem; color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; font-family: var(--font-mono); font-size: 0.85rem; padding: 0.3rem 0.8rem; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--ink); color: var(--surface); }
+.legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.8rem; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 0.7em; height: 0.7em; border-radius: 2px; margin-right: 0.35em; vertical-align: -0.05em; border: 1px solid var(--line); }
+.legend .arg::before { background: var(--left-soft); border-color: var(--left); }
+.legend .ret::before { background: var(--right-soft); border-color: var(--right); }
+.legend .callee::before { background: var(--keep-soft); border-color: var(--keep); }
+.legend .caller::before { background: var(--surface); }
+.legend .sp::before { background: var(--bg); border-style: dashed; border-color: var(--ink); }
+
+/* register grid */
+.grid-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+.grid-title + .grid { margin-bottom: 1rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.6rem, 1fr)); gap: 0.4rem; }
+@media (min-width: 900px) { .grid { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
+.reg { display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); text-align: left; min-width: 0; line-height: 1.3; }
+.reg b { font-family: var(--font-mono); font-size: 1.05rem; font-weight: 600; }
+.reg small { font-size: 0.72rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.reg.arg { background: var(--left-soft); border-color: var(--left); }
+.reg.arg small { color: var(--left); }
+.reg.ret { background: var(--right-soft); border-color: var(--right); }
+.reg.ret small { color: var(--right); }
+.reg.callee { background: var(--keep-soft); border-color: var(--keep); }
+.reg.callee small { color: var(--keep); }
+.reg.sp { background: var(--bg); border-style: dashed; border-color: var(--ink); }
+.reg.sel { outline: 2px solid var(--ink); outline-offset: 1px; }
+.reg.wide { grid-column: span 2; }
+
+/* detail */
+.detail { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 1.25rem; }
+@media (max-width: 720px) { .detail { grid-template-columns: minmax(0, 1fr); } }
+.detail h3 { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; }
+.detail h3 small { font-family: var(--font-body); font-size: 0.85rem; font-weight: 400; color: var(--muted); margin-left: 0.5rem; }
+.alias { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; }
+.alias .lane { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: 0.5rem; align-items: center; }
+.alias .lane > span { color: var(--muted); text-align: right; font-size: 0.75rem; }
+.alias .bar { position: relative; height: 1.7rem; border: 1px dashed var(--line); border-radius: 3px; }
+.alias .seg-bar { position: absolute; top: -1px; bottom: -1px; border: 1px solid var(--ink); border-radius: 3px; background: var(--right-soft); display: flex; align-items: center; justify-content: center; font-weight: 600; overflow: hidden; white-space: nowrap; }
+.alias .seg-bar.ghost { background: var(--left-soft); border-color: var(--left); }
+.alias .ruler { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: 0.5rem; }
+.alias .ruler div { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--muted); }
+.roles { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.75rem; }
+.roles > div { border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.7rem; }
+.roles .tag { display: block; font-size: 0.72rem; color: var(--muted); font-family: var(--font-mono); }
+.roles .role { font-weight: 700; }
+.roles .arg .role { color: var(--left); }
+.roles .ret .role { color: var(--right); }
+.roles .callee .role { color: var(--keep); }
+.notes { margin: 0.75rem 0 0; padding-left: 1.2rem; font-size: 0.92rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.notes li { max-width: none; }
+.flags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.75rem; font-family: var(--font-mono); font-size: 0.8rem; }
+.flags span { border: 1px solid var(--line); border-radius: 3px; padding: 0.1rem 0.45rem; }
+.flags span small { font-family: var(--font-body); color: var(--muted); margin-left: 0.3rem; }
+.empty { color: var(--muted); font-size: 0.9rem; }
+
+/* stepper */
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.presets button { font-family: var(--font-mono); font-size: 0.85rem; }
+.presets button.on { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.panel { padding: 1rem 1.25rem; min-width: 0; }
+.panel + .panel { border-left: 1px solid var(--line); }
+@media (max-width: 720px) {
+  .panels { grid-template-columns: minmax(0, 1fr); }
+  .panel + .panel { border-left: 0; border-top: 1px solid var(--line); }
+}
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+pre.code { margin: 0; overflow-x: auto; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.65; }
+pre.code code { display: inline-block; min-width: 100%; font-size: inherit; }
+pre.code .ln { display: block; padding-right: 0.5rem; border-radius: 3px; white-space: pre; }
+pre.code .ln::before { content: attr(data-n); display: inline-block; width: 2ch; margin-right: 1.5ch; text-align: right; color: var(--muted); opacity: 0.6; }
+pre.code .ln.on { background: var(--mark); }
+pre.code .ln.done { opacity: 0.55; }
+pre.code .cm { color: var(--muted); }
+.csrc { margin-bottom: 1rem; }
+pre.code.csrc .ln { white-space: pre-wrap; text-indent: -3.5ch; padding-left: 3.5ch; }
+.csrc .ln.hl { background: var(--mark); }
+
+.say { max-width: none; min-height: 3.4em; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--right); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+
+.file { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.4rem, 1fr)); gap: 0.35rem; }
+.cellr { border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.5rem; font-family: var(--font-mono); line-height: 1.3; min-width: 0; }
+.cellr b { display: block; font-size: 0.8rem; font-weight: 600; }
+.cellr span { display: block; font-size: 0.95rem; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cellr span.unk { color: var(--muted); }
+.cellr.arg { border-color: var(--left); }
+.cellr.ret { border-color: var(--right); }
+.cellr.callee { border-color: var(--keep); }
+.cellr.sp { border-style: dashed; border-color: var(--ink); }
+.cellr.rd { background: var(--left-soft); box-shadow: inset 0 0 0 1px var(--left); }
+.cellr.wr { background: var(--right-soft); box-shadow: inset 0 0 0 1px var(--right); }
+.cellr.rd.wr { background: linear-gradient(135deg, var(--left-soft) 50%, var(--right-soft) 50%); box-shadow: inset 0 0 0 1px var(--right); }
+.file-title { margin-top: 1rem; }
+.stack { display: flex; flex-direction: column; gap: 0.25rem; font-family: var(--font-mono); font-size: 0.8rem; }
+.slot { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.5rem; border: 1px solid var(--line); border-radius: 3px; padding: 0.2rem 0.5rem; }
+.slot .addr { color: var(--muted); }
+.slot.top { border-color: var(--ink); border-style: dashed; }
+.slot.rd { background: var(--left-soft); }
+.slot.wr { background: var(--right-soft); }
+.slot .shadow { color: var(--muted); font-family: var(--font-body); font-size: 0.75rem; }
+.ret-line { font-family: var(--font-mono); font-size: 0.9rem; margin-top: 0.75rem; }
+
+/* tables */
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.92rem; }
+th, td { padding: 0.45rem 1.1rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+td.mono { white-space: nowrap; }
+details { border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem 1.25rem; background: var(--surface); }
+summary { cursor: pointer; font-weight: 700; }
+details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.92rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">x86-64</span> 暫存器地圖</h1>
+    <p class="lead">CPU 只認得指令,它不知道哪個暫存器該放參數。那些是 ABI 的約定。點開每一個暫存器看它的別名怎麼疊、兩套 ABI 各給它什麼角色,再用幾個 C 函式逐步看參數怎麼進去。</p>
+  </header>
+
+  <section class="prose">
+    <h2>硬體給的是格子,ABI 決定格子怎麼用</h2>
+    <p>x86-64 有 16 個 64 位元通用暫存器,每一個對 CPU 來說地位相同。<code>mov rdi, 5</code> 和 <code>mov rcx, 5</code> 都是合法指令,CPU 不會偏好哪一個。</p>
+    <p>但編譯器需要一個約定,讓 caller 和 callee 對得上:參數放哪、回傳值放哪、呼叫過後哪些暫存器還能信。Linux、macOS、BSD 用 <strong>System V AMD64 psABI</strong>,Windows 用自己的 <strong>Microsoft x64</strong>。下面的地圖可以切換兩套標籤,同一批暫存器會換上不同顏色。</p>
+  </section>
+
+  <section class="bench" aria-label="暫存器地圖">
+    <div class="row toolbar">
+      <label>ABI 標籤</label>
+      <div class="seg" role="group" aria-label="選擇 ABI">
+        <button type="button" data-abi="sysv" class="on">SysV</button>
+        <button type="button" data-abi="win64">Win64</button>
+      </div>
+      <div class="legend">
+        <span class="arg">參數</span>
+        <span class="ret">回傳值</span>
+        <span class="callee">callee-saved</span>
+        <span class="caller">caller-saved</span>
+        <span class="sp">stack 指標</span>
+      </div>
+    </div>
+    <div class="row">
+      <p class="grid-title">通用暫存器 · 64-bit · 16 個</p>
+      <div class="grid" id="grid-gpr"></div>
+      <p class="grid-title">控制</p>
+      <div class="grid" id="grid-ctl"></div>
+      <p class="grid-title">向量 / 浮點 · 128-bit · 16 個(AVX-512 下 32 個)</p>
+      <div class="grid" id="grid-xmm"></div>
+    </div>
+    <div class="row detail" id="detail"></div>
+  </section>
+
+  <section class="prose">
+    <h2>別名不是副本,是同一塊的一部分</h2>
+    <p><code>eax</code> 就是 <code>rax</code> 的低 32 位元,<code>ax</code> 是低 16 位元,<code>al</code> 是最低 8 位元。寫 <code>al</code> 會直接改到 <code>rax</code> 的最低一個 byte。這是 8086 → 80386 → x86-64 三代擴充留下來的疊層。</p>
+    <p>唯一一條不對稱的規則:<strong>寫 32 位元別名會把高 32 位元清零</strong>,寫 16 或 8 位元別名則保留高位元不動。所以 <code>mov eax, 1</code> 之後整個 <code>rax</code> 就是 1,編譯器也因此常用 <code>xor eax, eax</code> 來清空 <code>rax</code>,省一個 byte。</p>
+  </section>
+
+  <section class="prose">
+    <h2>用 C 函式看參數怎麼進暫存器</h2>
+    <p>下面四個函式都用 <code>clang -O1</code> 編譯,一次指定 <code>--target=x86_64-linux-gnu</code>、一次 <code>--target=x86_64-pc-windows-msvc</code>。C 原始碼一模一樣,只有 ABI 不同。按「下一步」逐條執行,<i class="l">粉色</i>是這一步讀到的暫存器,<i class="r">綠色</i>是寫入的。</p>
+  </section>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row toolbar">
+      <label>範例</label>
+      <div class="presets" id="presets"></div>
+      <label>ABI</label>
+      <div class="seg" role="group" aria-label="選擇 ABI">
+        <button type="button" data-abi="sysv" class="on">SysV</button>
+        <button type="button" data-abi="win64">Win64</button>
+      </div>
+    </div>
+    <div class="panels">
+      <div class="panel">
+        <p class="panel-title">C</p>
+        <pre class="code csrc"><code id="csrc"></code></pre>
+        <p class="panel-title">組語 · Intel 語法</p>
+        <pre class="code"><code id="asm"></code></pre>
+      </div>
+      <div class="panel">
+        <p class="panel-title">暫存器</p>
+        <div class="file" id="file"></div>
+        <p class="panel-title file-title">Stack · 高位址在上</p>
+        <div class="stack" id="stack"></div>
+        <div class="ret-line" id="retline"></div>
+      </div>
+    </div>
+    <div class="row">
+      <p class="say" id="say" aria-live="polite"></p>
+      <div class="controls">
+        <button id="btn-reset" type="button">重來</button>
+        <button id="btn-prev" type="button">上一步</button>
+        <button id="btn-next" type="button" class="primary">下一步</button>
+        <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count" id="count"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="prose">
+    <h2>其他架構怎麼約定</h2>
+    <p>換一顆 CPU,格子的數量和名字都不同,但「參數放哪、回傳放哪、誰負責保存」這三個問題一樣要有人回答。RISC-V 乾脆把 ABI 角色烙進名字裡,組語寫 <code>a0</code> 而不是 <code>x10</code>。NVPTX 更極端,它根本不是真的暫存器,而是給後端分配用的無上限虛擬名字。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>目標</th><th>通用暫存器</th><th>整數參數</th><th>整數回傳</th><th>浮點參數</th><th>callee-saved</th></tr></thead>
+        <tbody>
+          <tr><td>x86-64 SysV</td><td>16</td><td class="mono">rdi rsi rdx rcx r8 r9</td><td class="mono">rax (rdx)</td><td class="mono">xmm0–7</td><td class="mono">rbx rbp r12–r15</td></tr>
+          <tr><td>x86-64 Win64</td><td>16</td><td class="mono">rcx rdx r8 r9</td><td class="mono">rax</td><td class="mono">xmm0–3(按位置)</td><td class="mono">rbx rbp rsi rdi r12–r15 xmm6–15</td></tr>
+          <tr><td>AArch64 AAPCS64</td><td>31 + sp</td><td class="mono">x0–x7</td><td class="mono">x0 (x1)</td><td class="mono">v0–v7</td><td class="mono">x19–x28 x29(fp) x30(lr)</td></tr>
+          <tr><td>RISC-V LP64D</td><td>32</td><td class="mono">a0–a7 (x10–x17)</td><td class="mono">a0 (a1)</td><td class="mono">fa0–fa7</td><td class="mono">s0–s11 sp</td></tr>
+          <tr><td>NVPTX</td><td>無上限虛擬 %r %rd %f %fd</td><td colspan="4">kernel 參數放 param space,由 <code>ld.param</code> 讀入;device 函式呼叫多半被 inline,真正的實體暫存器由 ptxas 分配</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <details>
+    <summary>地圖上沒畫的暫存器</summary>
+    <ul>
+      <li><strong>區段暫存器</strong> <code>cs ds es ss fs gs</code>:64-bit 模式下前四個基底固定為 0。<code>fs</code>、<code>gs</code> 保留 base,Linux 用 <code>fs</code> 指向 thread-local storage,Windows 用 <code>gs</code> 指向 TEB。</li>
+      <li><strong>x87 / MMX</strong> <code>st0–st7</code>、<code>mm0–mm7</code>:80-bit 浮點堆疊,<code>long double</code> 才會用到。MMX 和 x87 共用同一塊實體空間。</li>
+      <li><strong>AVX-512 遮罩</strong> <code>k0–k7</code>:向量指令的 per-lane 開關,<code>k0</code> 代表不遮罩。</li>
+      <li><strong>APX</strong> <code>r16–r31</code>:2024 年起 Intel 新增的 16 個通用暫存器,需要 CPU 與 OS 支援,還不在 SysV 預設 ABI 內。</li>
+      <li><strong>AMX</strong> <code>tmm0–tmm7</code>:每個最大 1 KB 的矩陣 tile。</li>
+      <li><strong>只有 kernel 能碰的</strong>:控制暫存器 <code>cr0 cr2 cr3 cr4 cr8</code>、除錯暫存器 <code>dr0–dr7</code>、描述表 <code>gdtr idtr ldtr tr</code>、以及用 <code>rdmsr</code>/<code>wrmsr</code> 存取的上千個 MSR(例如 <code>IA32_EFER</code>、<code>IA32_LSTAR</code>)。</li>
+    </ul>
+  </details>
+</main>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+
+/* ---------- register data ---------- */
+const GPR = ['rax','rbx','rcx','rdx','rsi','rdi','rbp','rsp','r8','r9','r10','r11','r12','r13','r14','r15'];
+const XMM = Array.from({ length: 16 }, (_, i) => `xmm${i}`);
+
+function aliasesOf(r) {
+  if (/^r\d+$/.test(r)) return [{ n: r, b: 64 }, { n: r + 'd', b: 32 }, { n: r + 'w', b: 16 }, { n: r + 'b', b: 8 }];
+  const base = r.slice(1);                       // ax, bx, si, sp ...
+  if (['ax','bx','cx','dx'].includes(base)) {
+    const c = base[0];
+    return [{ n: r, b: 64 }, { n: 'e' + base, b: 32 }, { n: base, b: 16 }, { n: c + 'l', b: 8 }, { n: c + 'h', b: 8, hi: true }];
+  }
+  return [{ n: r, b: 64 }, { n: 'e' + base, b: 32 }, { n: base, b: 16 }, { n: base + 'l', b: 8 }];
+}
+
+const NOTES = {
+  rax: ['乘除法的隱含運算元:<code>mul</code>/<code>div</code> 用 <code>rdx:rax</code> 當 128 位元的被乘數或被除數。', 'Linux syscall 編號放這裡,回來後也從這裡拿回傳值。', 'SysV 呼叫可變參數函式(如 <code>printf</code>)時,<code>al</code> 要先填入用了幾個 xmm 暫存器。'],
+  rbx: ['最早的「base」暫存器,現在沒有特殊硬體用途。', '兩套 ABI 都列為 callee-saved,所以常被編譯器拿來放要跨越 <code>call</code> 的值。'],
+  rcx: ['<code>shl</code>/<code>shr</code> 的可變位移量只能放 <code>cl</code>。', '<code>rep movsb</code> 這類字串指令用 <code>rcx</code> 當計數。', '<code>syscall</code> 指令會覆寫它(存返回位址),所以 SysV 把它排在第 4 個參數,避開 syscall 的前三個參數。'],
+  rdx: ['乘除法的高 64 位元;<code>cqo</code> 把 <code>rax</code> 的符號擴充進來。', '<code>in</code>/<code>out</code> 的 I/O port 編號。', 'SysV 回傳 128 位元值(如 <code>__int128</code>)時當第 2 個回傳暫存器。'],
+  rsi: ['Source Index:字串指令 <code>movs</code>/<code>lods</code> 的來源指標。', 'SysV 當第 2 個參數,Win64 卻是 callee-saved,兩套 ABI 的角色完全相反。'],
+  rdi: ['Destination Index:字串指令 <code>movs</code>/<code>stos</code> 的目的指標。', 'SysV 的第 1 個參數,Win64 的 callee-saved。'],
+  rbp: ['傳統上是 frame pointer,指向目前 stack frame 的底。', '開 <code>-fomit-frame-pointer</code>(<code>-O1</code> 以上預設)後就是一個普通的 callee-saved 暫存器。'],
+  rsp: ['<code>push</code>/<code>pop</code>/<code>call</code>/<code>ret</code> 都會隱含修改它。', 'SysV 要求執行 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數,所以常看到看似多餘的 <code>push rax</code> 或 <code>sub rsp, 8</code>。', '定址時不能當 index 暫存器,只能當 base。'],
+  r8: ['x86-64 新增,用到需要 REX prefix,指令多 1 byte。'],
+  r9: ['x86-64 新增,用到需要 REX prefix,指令多 1 byte。'],
+  r10: ['SysV 下是 caller-saved,但不傳參數;編譯器用來放 static chain(巢狀函式)。', 'Linux syscall 的第 4 個參數用 <code>r10</code> 而不是 <code>rcx</code>,因為 <code>rcx</code> 會被 <code>syscall</code> 指令覆寫。'],
+  r11: ['<code>syscall</code> 指令會把 <code>rflags</code> 存進來,所以兩套 ABI 都當它是 caller-saved。', 'PLT 跳板也會用它當暫時暫存器。'],
+  r12: ['定址時當 base 需要額外的 SIB byte(和 <code>rsp</code> 編碼衝突)。'],
+  r13: ['定址時沒有位移量也要補一個 0 位移(和 <code>rbp</code> 編碼衝突)。'],
+  r14: ['x86-64 新增,callee-saved。'],
+  r15: ['x86-64 新增,callee-saved;PIC 程式碼在 32-bit 時代用 <code>ebx</code> 放 GOT,64-bit 改用 <code>rip</code> 相對定址後不再需要。'],
+};
+
+const ROLES = {
+  sysv: {
+    rdi: { k: 'arg', t: '第 1 個參數' }, rsi: { k: 'arg', t: '第 2 個參數' }, rdx: { k: 'arg', t: '第 3 個參數', x: '第 2 個回傳值' },
+    rcx: { k: 'arg', t: '第 4 個參數' }, r8: { k: 'arg', t: '第 5 個參數' }, r9: { k: 'arg', t: '第 6 個參數' },
+    rax: { k: 'ret', t: '回傳值' },
+    rbx: { k: 'callee', t: 'callee-saved' }, rbp: { k: 'callee', t: 'callee-saved', x: 'frame pointer' },
+    r12: { k: 'callee', t: 'callee-saved' }, r13: { k: 'callee', t: 'callee-saved' }, r14: { k: 'callee', t: 'callee-saved' }, r15: { k: 'callee', t: 'callee-saved' },
+    r10: { k: 'caller', t: 'caller-saved' }, r11: { k: 'caller', t: 'caller-saved' },
+    rsp: { k: 'sp', t: 'stack 指標' },
+    clobber: ['rax','rcx','rdx','rsi','rdi','r8','r9','r10','r11', ...XMM],
+    intArgs: ['rdi','rsi','rdx','rcx','r8','r9'], fpArgs: ['xmm0','xmm1','xmm2','xmm3','xmm4','xmm5','xmm6','xmm7'],
+    xmm: i => i < 8 ? { k: 'arg', t: i === 0 ? '浮點 1 / 回傳' : i === 1 ? '浮點 2 / 回傳 2' : `浮點參數 ${i + 1}` } : { k: 'caller', t: 'caller-saved' },
+  },
+  win64: {
+    rcx: { k: 'arg', t: '第 1 個參數' }, rdx: { k: 'arg', t: '第 2 個參數' }, r8: { k: 'arg', t: '第 3 個參數' }, r9: { k: 'arg', t: '第 4 個參數' },
+    rax: { k: 'ret', t: '回傳值' },
+    rbx: { k: 'callee', t: 'callee-saved' }, rbp: { k: 'callee', t: 'callee-saved', x: 'frame pointer' },
+    rsi: { k: 'callee', t: 'callee-saved' }, rdi: { k: 'callee', t: 'callee-saved' },
+    r12: { k: 'callee', t: 'callee-saved' }, r13: { k: 'callee', t: 'callee-saved' }, r14: { k: 'callee', t: 'callee-saved' }, r15: { k: 'callee', t: 'callee-saved' },
+    r10: { k: 'caller', t: 'caller-saved' }, r11: { k: 'caller', t: 'caller-saved' },
+    rsp: { k: 'sp', t: 'stack 指標' },
+    clobber: ['rax','rcx','rdx','r8','r9','r10','r11','xmm0','xmm1','xmm2','xmm3','xmm4','xmm5'],
+    intArgs: ['rcx','rdx','r8','r9'], fpArgs: ['xmm0','xmm1','xmm2','xmm3'],
+    xmm: i => i < 4 ? { k: 'arg', t: i === 0 ? '位置 0 浮點 / 回傳' : `位置 ${i} 的浮點` } : i < 6 ? { k: 'caller', t: 'caller-saved' } : { k: 'callee', t: 'callee-saved' },
+  },
+};
+const ABI_NAME = { sysv: 'SysV', win64: 'Win64' };
+
+function roleOf(abi, r) {
+  if (r.startsWith('xmm')) return ROLES[abi].xmm(Number(r.slice(3)));
+  return ROLES[abi][r] || { k: 'caller', t: 'caller-saved' };
+}
+
+/* ---------- state ---------- */
+let abi = 'sysv';
+let selected = 'rax';
+
+/* ---------- register map ---------- */
+function regButton(name, sub, extraClass) {
+  return `<button type="button" class="reg ${extraClass || ''}" data-reg="${name}"><b>${name}</b><small>${sub}</small></button>`;
+}
+
+function renderGrid() {
+  $('grid-gpr').innerHTML = GPR.map(r => { const o = roleOf(abi, r); return regButton(r, o.t, o.k); }).join('');
+  $('grid-ctl').innerHTML = regButton('rip', '指令指標', 'wide') + regButton('rflags', '狀態旗標', 'wide');
+  $('grid-xmm').innerHTML = XMM.map((r, i) => { const o = roleOf(abi, r); return regButton(r, o.t, o.k); }).join('');
+  document.querySelectorAll('.reg').forEach(b => {
+    b.classList.toggle('sel', b.dataset.reg === selected);
+    b.addEventListener('click', () => { selected = b.dataset.reg; renderGrid(); renderDetail(); });
+  });
+}
+
+function aliasDiagram(parts, total) {
+  // parts: [{n, b, hi}] widest first. One lane per width; the 8-bit lane may hold two.
+  const lanes = [];
+  for (const p of parts) {
+    const w = p.b / total * 100;
+    const left = p.hi ? w : 0;
+    const lane = lanes.find(l => l.b === p.b);
+    const seg = `<div class="seg-bar ${p.hi ? 'ghost' : ''}" style="right:${left}%;width:${w}%">${p.n}</div>`;
+    if (lane) lane.html += seg; else lanes.push({ b: p.b, html: seg });
+  }
+  return `<div class="alias">${lanes.map(l => `<div class="lane"><span>${l.b}-bit</span><div class="bar">${l.html}</div></div>`).join('')}
+    <div class="ruler"><span></span><div><span>bit ${total - 1}</span><span>bit 0</span></div></div></div>`;
+}
+
+function roleCards(r) {
+  return `<div class="roles">${['sysv','win64'].map(a => { const o = roleOf(a, r); return `<div class="${o.k}"><span class="tag">${ABI_NAME[a]}</span><span class="role">${o.t}</span>${o.x ? `<br><small>${o.x}</small>` : ''}</div>`; }).join('')}</div>`;
+}
+
+function renderDetail() {
+  const r = selected;
+  let html = '';
+  if (GPR.includes(r)) {
+    const al = aliasesOf(r);
+    html = `<div><h3>${r}<small>64-bit 通用暫存器</small></h3>
+      <p class="empty">同一塊 64 位元,從不同寬度看就有不同名字。寫 <code>${al[1].n}</code> 會把高 32 位元清零;寫 <code>${al[2].n}</code>、<code>${al[3].n}</code>${al[4] ? `、<code>${al[4].n}</code>` : ''} 則保留其他位元。</p>
+      ${aliasDiagram(al, 64)}
+      ${al[4] ? `<p class="empty" style="margin-top:0.5rem"><code>${al[4].n}</code> 是 8086 留下的「高 8 位元」。同一條指令裡不能同時用它和 <code>sil</code>、<code>dil</code>、<code>bpl</code>、<code>spl</code>、<code>r8b</code>–<code>r15b</code>,因為後者需要 REX prefix,而 REX 一出現,原本代表 <code>${al[4].n}</code> 的編碼就變成 <code>${al[0].n.slice(1) === 'ax' ? 'spl' : al[0].n.slice(1) === 'cx' ? 'bpl' : al[0].n.slice(1) === 'dx' ? 'sil' : 'dil'}</code>。</p>` : ''}
+    </div>
+    <div><h3>ABI 角色</h3>${roleCards(r)}
+      <ul class="notes">${(NOTES[r] || []).map(n => `<li>${n}</li>`).join('')}</ul></div>`;
+  } else if (r.startsWith('xmm')) {
+    const i = r.slice(3);
+    html = `<div><h3>${r}<small>128-bit 向量暫存器</small></h3>
+      <p class="empty">SSE 看到的是 128 位元 <code>xmm${i}</code>,AVX 把它延伸成 256 位元 <code>ymm${i}</code>,AVX-512 再延伸成 512 位元 <code>zmm${i}</code>,同時多出 <code>xmm16</code>–<code>xmm31</code>。純量 <code>double</code> 只用最低 64 位元,<code>float</code> 只用最低 32 位元。</p>
+      ${aliasDiagram([{ n: 'zmm' + i, b: 512 }, { n: 'ymm' + i, b: 256 }, { n: 'xmm' + i, b: 128 }], 512)}
+    </div>
+    <div><h3>ABI 角色</h3>${roleCards(r)}
+      <ul class="notes">
+        <li>SysV:前 8 個傳浮點參數,<code>xmm0</code>/<code>xmm1</code> 回傳,全部 caller-saved,呼叫過後一個都不能信。</li>
+        <li>Win64:只有 4 個傳參數,而且按參數「位置」對應,第 2 個參數若是浮點就用 <code>xmm1</code>,不管前面有沒有浮點。<code>xmm6</code>–<code>xmm15</code> 的低 128 位元是 callee-saved。</li>
+        <li>向量化後的 <code>memcpy</code>、<code>strlen</code> 以及所有 SIMD 運算都在這裡。</li>
+      </ul></div>`;
+  } else if (r === 'rip') {
+    html = `<div><h3>rip<small>指令指標</small></h3>
+      <p class="empty">下一條要執行的指令位址。不能直接 <code>mov</code> 它,只能靠 <code>jmp</code>、<code>call</code>、<code>ret</code>、分支間接改變。</p></div>
+    <div><h3>備註</h3><ul class="notes">
+      <li>x86-64 新增 <code>rip</code> 相對定址:<code>mov rax, [rip + foo]</code>,讓位置無關程式碼(PIC)不需要 GOT 暫存器。你在 <code>-O2</code> 的組語裡看到的 <code>lea rdi, [rip + .L.str]</code> 就是這個。</li>
+      <li><code>call</code> 把下一條指令的位址(也就是當時的 <code>rip</code>)push 到 stack,<code>ret</code> 再 pop 回來。</li>
+      <li>ABI 不給它角色,因為沒有人能直接指定它。</li></ul></div>`;
+  } else if (r === 'rflags') {
+    html = `<div><h3>rflags<small>狀態與控制旗標</small></h3>
+      <p class="empty">算術指令會更新它,條件跳躍讀它。<code>cmp a, b</code> 其實就是做 <code>a - b</code> 然後只留旗標。</p>
+      <div class="flags">
+        <span>CF<small>進位</small></span><span>PF<small>同位</small></span><span>AF<small>輔助進位</small></span><span>ZF<small>為零</small></span>
+        <span>SF<small>符號</small></span><span>TF<small>單步</small></span><span>IF<small>中斷</small></span><span>DF<small>字串方向</small></span><span>OF<small>溢位</small></span>
+      </div></div>
+    <div><h3>備註</h3><ul class="notes">
+      <li>兩套 ABI 都規定:函式進入與離開時 <code>DF</code> 必須是 0,其他算術旗標不保證,算 caller-saved。</li>
+      <li><code>lea</code> 不更新旗標,<code>add</code> 會。所以編譯器喜歡用 <code>lea rax, [rdi + rsi]</code> 做加法,不會打亂前面 <code>cmp</code> 留下的結果。</li>
+      <li><code>pushfq</code>/<code>popfq</code> 可以整個存取;<code>IF</code>、<code>IOPL</code> 這些只有 kernel 能改。</li></ul></div>`;
+  }
+  $('detail').innerHTML = html;
+}
+
+/* ---------- stepper: presets ---------- */
+const PRESETS = [
+  {
+    id: 'add3', label: 'add3', title: '三個整數參數',
+    c: ['long long add3(long long a, long long b, long long c) {', '  return a + b + c;', '}'],
+    args: [['a', 1], ['b', 2], ['c', 3]],
+    asm: {
+      sysv: ['lea rax, [rdi + rsi]', 'add rax, rdx', 'ret'],
+      win64: ['lea rax, [rcx + rdx]', 'add rax, r8', 'ret'],
+    },
+    entry: {
+      sysv: 'caller 已經把 a、b、c 依序放進 rdi、rsi、rdx,然後 call 進來。[rsp] 是 call 留下的返回位址。',
+      win64: '同一份 C,caller 改放 rcx、rdx、r8。Win64 還要求 caller 在返回位址上方預留 32 bytes 的 shadow space,即使只有 3 個參數。',
+    },
+    notes: {
+      sysv: { 0: 'lea 本來是算位址的指令,這裡拿來當一條不影響旗標的加法,結果直接寫進回傳用的 rax。', 2: 'ret 從 [rsp] 取回返回位址跳回 caller。caller 會到 rax 拿結果。' },
+      win64: { 0: 'CPU 指令一模一樣,只是暫存器名字從 rdi、rsi 換成 rcx、rdx。這就是 ABI 的全部:約定,不是硬體。' },
+    },
+  },
+  {
+    id: 'sum8', label: 'sum8', title: '八個參數,暫存器不夠',
+    c: ['long long sum8(long long a, long long b, long long c, long long d,', '               long long e, long long f, long long g, long long h) {', '  return a + b + c + d + e + f + g + h;', '}'],
+    args: [['a', 1], ['b', 2], ['c', 3], ['d', 4], ['e', 5], ['f', 6], ['g', 7], ['h', 8]],
+    asm: {
+      sysv: ['add rsi, rdi', 'lea rax, [rdx + rcx]', 'add rax, rsi', 'add rax, r8', 'add rax, r9', 'add rax, qword ptr [rsp + 8]', 'add rax, qword ptr [rsp + 16]', 'ret'],
+      win64: ['add rcx, rdx', 'lea rax, [r8 + r9]', 'add rax, rcx', 'add rax, qword ptr [rsp + 40]', 'add rax, qword ptr [rsp + 48]', 'add rax, qword ptr [rsp + 56]', 'add rax, qword ptr [rsp + 64]', 'ret'],
+    },
+    entry: {
+      sysv: 'SysV 給 6 個整數參數暫存器:rdi rsi rdx rcx r8 r9。第 7、8 個參數 g、h 由 caller 先 push 到 stack,所以 g 在 [rsp+8]、h 在 [rsp+16],[rsp] 是返回位址。',
+      win64: 'Win64 只有 4 個參數暫存器,e f g h 全部在 stack。加上 32 bytes shadow space 在 [rsp+8]~[rsp+32],e 要從 [rsp+40] 才開始。',
+    },
+    notes: {
+      sysv: { 0: '編譯器可以直接把參數暫存器當暫時變數用,因為它們是 caller-saved,改了不用還原。', 5: '暫存器用完了,第 7 個參數 g 要從 stack 讀。記憶體存取比暫存器慢,所以 ABI 才盡量把參數塞進暫存器。' },
+      win64: { 3: '第 5 個參數 e 在 [rsp+40]:8 bytes 返回位址 + 32 bytes shadow space。shadow space 是給 callee 需要時把 rcx rdx r8 r9 存回 stack 用的,這個函式用不到就空著。' },
+    },
+  },
+  {
+    id: 'mix', label: 'mix', title: '整數與浮點交錯',
+    c: ['double mix(long long n, double x, long long m, double y) {', '  return (n + m) * (x - y);', '}'],
+    args: [['n', 3], ['x', 2.5, 'f'], ['m', 4], ['y', 0.5, 'f']],
+    asm: {
+      sysv: ['add rdi, rsi', 'cvtsi2sd xmm2, rdi', 'subsd xmm0, xmm1', 'mulsd xmm0, xmm2', 'ret'],
+      win64: ['add rcx, r8', 'cvtsi2sd xmm0, rcx', 'subsd xmm1, xmm3', 'mulsd xmm0, xmm1', 'ret'],
+    },
+    entry: {
+      sysv: 'SysV 把整數和浮點排成兩條獨立的隊伍:n、m 依序拿 rdi、rsi,x、y 依序拿 xmm0、xmm1。型別交錯不影響各自的順位。',
+      win64: 'Win64 不分隊伍,而是按「位置」編號:第 1 個參數佔 slot 0,第 2 個佔 slot 1,依此類推。n→rcx(slot 0)、x→xmm1(slot 1)、m→r8(slot 2)、y→xmm3(slot 3)。xmm0、xmm2、rdx、r9 都空著。',
+    },
+    notes: {
+      sysv: { 1: '整數轉成 double,放進沒被參數佔用的 xmm2。', 3: '浮點回傳值放 xmm0,不是 rax。' },
+      win64: { 1: 'xmm0 沒被參數用到,正好當暫時變數。', 2: 'x 在 xmm1、y 在 xmm3,中間的 xmm2 是空的,因為位置 2 給了整數 m。' },
+    },
+  },
+  {
+    id: 'twice', label: 'twice', title: '呼叫別人之前先保存',
+    c: ['long long helper(long long v);', '', 'long long twice(long long a) {', '  return helper(a) + helper(a + 1);', '}'],
+    args: [['a', 5]],
+    helper: v => v * 10,
+    asm: {
+      sysv: ['push r14', 'push rbx', 'push rax', 'mov rbx, rdi', 'call helper', 'mov r14, rax', 'inc rbx', 'mov rdi, rbx', 'call helper', 'add rax, r14', 'add rsp, 8', 'pop rbx', 'pop r14', 'ret'],
+      win64: ['push rsi', 'push rdi', 'sub rsp, 40', 'mov rsi, rcx', 'call helper', 'mov rdi, rax', 'inc rsi', 'mov rcx, rsi', 'call helper', 'add rax, rdi', 'add rsp, 40', 'pop rdi', 'pop rsi', 'ret'],
+    },
+    entry: {
+      sysv: 'a 在 rdi。這個函式中間要 call 兩次 helper。每一次 call 都可能破壞所有 caller-saved 暫存器,所以需要能跨越 call 存活的 callee-saved 暫存器來放 a 和第一次的結果。這裡假設 helper(v) = v × 10。',
+      win64: 'a 在 rcx。Win64 把 rsi、rdi 列為 callee-saved,所以編譯器拿它們當保險箱,跟 SysV 把它們當參數暫存器完全相反。這裡假設 helper(v) = v × 10。',
+    },
+    notes: {
+      sysv: {
+        0: '借用 r14 之前先把 caller 的 r14 存進 stack。這是 callee-saved 的義務:離開前要還原。',
+        2: '這不是為了保存 rax 的值。SysV 要求 call 時 rsp 必須 16 對齊,進來時差 8(返回位址),push 兩次後又差 8,所以再 push 一次湊數,比 sub rsp, 8 短 3 個 byte。',
+        3: 'a 搬進 rbx,因為 rdi 會被 helper 破壞。',
+        4: 'helper(5) 回來後 rax 是結果。rdi rsi rdx rcx r8–r11 全部視為被破壞(問號)。rbx、r14 由 helper 保證不變。',
+        5: '第一個結果先存到 r14,否則下一次 call 會覆蓋 rax。',
+        7: '第二次呼叫的參數 a+1 要重新放進 rdi。',
+        10: '撤掉對齊用的 8 bytes。',
+        11: '照相反順序還原。離開時 rbx、r14 和進來時一模一樣,caller 完全感覺不到它們被借用過。',
+      },
+      win64: {
+        2: '預留 32 bytes shadow space 給等一下要 call 的 helper,再加 8 湊 16 對齊,一共 40。',
+        3: 'a 搬進 rsi。在 SysV 下 rsi 是第 2 個參數暫存器,呼叫就會被破壞;在 Win64 下它是 callee-saved,可以放心跨越 call。',
+        4: 'helper(5) 回來後 rax 是結果。rcx rdx r8–r11 視為被破壞,rsi rdi 保證不變。',
+        7: '第二次呼叫的參數 a+1 放回 rcx。',
+        11: '還原 rdi、rsi,離開時和進來時一模一樣。',
+      },
+    },
+  },
+];
+
+/* ---------- stepper: tiny x86 interpreter ---------- */
+function makeEntryState(preset, abi) {
+  const R = ROLES[abi];
+  const regs = {}; GPR.forEach(r => regs[r] = null); XMM.slice(0, 8).forEach(r => regs[r] = null);
+  const mem = new Map();            // offset from entry rsp -> {label, v}
+  const RSP0 = 1000;
+  regs.rsp = RSP0;
+  mem.set(0, { label: '返回位址', v: 'ret addr', fixed: true });
+  let ii = 0, fi = 0, stackOff = abi === 'win64' ? 40 : 8;
+  if (abi === 'win64') for (let o = 8; o <= 32; o += 8) mem.set(o, { label: 'shadow', v: '', shadow: true });
+  preset.args.forEach(([name, v, kind], idx) => {
+    let where;
+    if (abi === 'sysv') {
+      if (kind === 'f') { where = fi < R.fpArgs.length ? R.fpArgs[fi++] : null; }
+      else { where = ii < R.intArgs.length ? R.intArgs[ii++] : null; }
+    } else {
+      where = idx < 4 ? (kind === 'f' ? R.fpArgs[idx] : R.intArgs[idx]) : null;
+    }
+    if (where) regs[where] = v; else { mem.set(stackOff, { label: name, v }); stackOff += 8; }
+  });
+  return { regs, mem, RSP0, done: false, retv: null };
+}
+
+function parseOperand(s) {
+  s = s.trim();
+  const m = s.match(/\[(.+)\]$/);
+  if (m) {
+    const terms = m[1].split('+').map(t => t.trim());
+    return { kind: 'mem', terms };
+  }
+  if (/^-?\d+$/.test(s)) return { kind: 'imm', v: Number(s) };
+  return { kind: 'reg', n: s };
+}
+
+function execLine(state, line, preset, abi) {
+  const { regs, mem } = state;
+  const rd = new Set(), wr = new Set(), memRd = new Set(), memWr = new Set();
+  const [mn, rest = ''] = line.split(/\s+(.*)/);
+  const ops = rest ? rest.split(',').map(parseOperand) : [];
+  const val = op => {
+    if (op.kind === 'imm') return op.v;
+    if (op.kind === 'reg') { rd.add(op.n); return regs[op.n]; }
+    let addr = 0;
+    for (const t of op.terms) { if (/^\d+$/.test(t)) addr += Number(t); else { rd.add(t); addr += regs[t]; } }
+    const off = addr - state.RSP0; memRd.add(off);
+    const slot = mem.get(off); return slot ? slot.v : null;
+  };
+  const addrOf = op => { let a = 0; for (const t of op.terms) { if (/^\d+$/.test(t)) a += Number(t); else { rd.add(t); a += regs[t]; } } return a; };
+  const set = (r, v) => { regs[r] = v; wr.add(r); };
+  const push = (v, label) => { regs.rsp -= 8; wr.add('rsp'); const off = regs.rsp - state.RSP0; mem.set(off, { label, v }); memWr.add(off); };
+  const pop = () => { const off = regs.rsp - state.RSP0; memRd.add(off); const s = mem.get(off); mem.delete(off); regs.rsp += 8; wr.add('rsp'); return s ? s.v : null; };
+  let say = '';
+  switch (mn) {
+    case 'lea': { const a = addrOf(ops[1]); set(ops[0].n, a); say = `把 ${ops[1].terms.join(' + ')} 的「位址」算出來放進 ${ops[0].n},實際上就是加法。`; break; }
+    case 'add': { const b = val(ops[1]); rd.add(ops[0].n); set(ops[0].n, regs[ops[0].n] + b); say = `${ops[0].n} += ${fmtOp(ops[1])}。`; break; }
+    case 'sub': { const b = val(ops[1]); rd.add(ops[0].n); set(ops[0].n, regs[ops[0].n] - b); say = `${ops[0].n} -= ${fmtOp(ops[1])}。`; break; }
+    case 'inc': { rd.add(ops[0].n); set(ops[0].n, regs[ops[0].n] + 1); say = `${ops[0].n} += 1。`; break; }
+    case 'mov': { const b = val(ops[1]); set(ops[0].n, b); say = `複製 ${fmtOp(ops[1])} 到 ${ops[0].n}。`; break; }
+    case 'push': { rd.add(ops[0].n); push(regs[ops[0].n], `saved ${ops[0].n}`); say = `rsp 減 8,把 ${ops[0].n} 的值存到 [rsp]。`; break; }
+    case 'pop': { set(ops[0].n, pop()); say = `從 [rsp] 取回值放進 ${ops[0].n},rsp 加 8。`; break; }
+    case 'cvtsi2sd': { const b = val(ops[1]); set(ops[0].n, Number(b)); say = `把整數 ${ops[1].n} 轉成 double 放進 ${ops[0].n}。`; break; }
+    case 'subsd': { rd.add(ops[0].n); const b = val(ops[1]); set(ops[0].n, regs[ops[0].n] - b); say = `${ops[0].n} -= ${ops[1].n}(純量 double)。`; break; }
+    case 'mulsd': { rd.add(ops[0].n); const b = val(ops[1]); set(ops[0].n, regs[ops[0].n] * b); say = `${ops[0].n} *= ${ops[1].n}(純量 double)。`; break; }
+    case 'call': {
+      const argReg = ROLES[abi].intArgs[0];
+      rd.add(argReg);
+      const arg = regs[argReg];
+      const result = preset.helper(arg);
+      for (const r of ROLES[abi].clobber) if (r in regs) regs[r] = undefined;
+      ROLES[abi].clobber.forEach(r => { if (r in regs) wr.add(r); });
+      set('rax', result);
+      say = `呼叫 helper(${arg}),它從 ${argReg} 拿參數,結果 ${result} 放在 rax。`;
+      break;
+    }
+    case 'ret': {
+      memRd.add(regs.rsp - state.RSP0); mem.delete(regs.rsp - state.RSP0); regs.rsp += 8; wr.add('rsp'); state.done = true;
+      state.retv = preset.id === 'mix' ? ['xmm0', regs.xmm0] : ['rax', regs.rax];
+      rd.add(state.retv[0]);
+      say = `從 [rsp] 取回返回位址跳回 caller。回傳值 ${fmt(state.retv[1])} 在 ${state.retv[0]}。`;
+      break;
+    }
+  }
+  return { rd, wr, memRd, memWr, say };
+}
+
+function fmtOp(op) { return op.kind === 'mem' ? `[${op.terms.join(' + ')}]` : op.kind === 'imm' ? String(op.v) : op.n; }
+function fmt(v) { if (v === null) return ''; if (v === undefined) return '?'; if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, ''); return String(v); }
+
+function buildSteps(preset, abi) {
+  const steps = [];
+  const state = makeEntryState(preset, abi);
+  steps.push({ line: -1, state: snapshot(state), rd: new Set(), wr: new Set(), memRd: new Set(), memWr: new Set(), say: preset.entry[abi] });
+  preset.asm[abi].forEach((line, i) => {
+    const r = execLine(state, line, preset, abi);
+    const note = preset.notes[abi][i];
+    steps.push({ line: i, state: snapshot(state), ...r, say: note ? `${r.say} ${note}` : r.say });
+  });
+  return steps;
+}
+function snapshot(s) { return { regs: { ...s.regs }, mem: new Map([...s.mem].map(([k, v]) => [k, { ...v }])), RSP0: s.RSP0, done: s.done, retv: s.retv }; }
+
+/* ---------- stepper: render ---------- */
+let presetId = 'add3';
+let steps = [];
+let cur = 0;
+
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function renderStepper() {
+  const preset = PRESETS.find(p => p.id === presetId);
+  const st = steps[cur];
+  $('csrc').innerHTML = preset.c.map((l, i) => `<span class="ln ${i === preset.c.findIndex(x => x.includes('return')) ? 'hl' : ''}" data-n="${i + 1}">${esc(l) || ' '}</span>`).join('');
+  $('asm').innerHTML = preset.asm[abi].map((l, i) => `<span class="ln ${i === st.line ? 'on' : i < st.line ? 'done' : ''}" data-n="${i + 1}">${esc(l)}</span>`).join('');
+
+  const shown = [...GPR, ...XMM.slice(0, 4)];
+  $('file').innerHTML = shown.map(r => {
+    const o = roleOf(abi, r); const v = st.state.regs[r];
+    const cls = [o.k, st.rd.has(r) ? 'rd' : '', st.wr.has(r) ? 'wr' : ''].join(' ');
+    const txt = r === 'rsp' ? `entry${v - st.state.RSP0 >= 0 ? '+' : ''}${v - st.state.RSP0}` : fmt(v);
+    return `<div class="cellr ${cls}" title="${o.t}"><b>${r}</b><span class="${v == null ? 'unk' : ''}">${txt || '·'}</span></div>`;
+  }).join('');
+
+  const top = st.state.regs.rsp - st.state.RSP0;
+  const offs = [...st.state.mem.keys()].filter(o => o >= top).sort((a, b) => b - a);   // 低於 rsp 的已是死區
+  const lowest = offs.length ? offs[offs.length - 1] : 8;
+  const reserved = lowest > top ? `<div class="slot top ${st.wr.has('rsp') ? 'wr' : ''}"><span class="addr">[entry rsp${top}] ← rsp</span><span class="shadow">預留 ${lowest - top} bytes:shadow space 給下一個 call,加上 16 對齊</span></div>` : '';
+  $('stack').innerHTML = offs.map(o => {
+    const s = st.state.mem.get(o);
+    const cls = [o === top ? 'top' : '', st.memRd.has(o) ? 'rd' : '', st.memWr.has(o) ? 'wr' : ''].join(' ');
+    const body = s.shadow ? `<span class="shadow">shadow space</span>` : `${s.label}${s.label !== '返回位址' && fmt(s.v) !== '' ? ` = ${fmt(s.v)}` : s.v == null && s.label.startsWith('saved') ? '(caller 的值)' : ''}`;
+    return `<div class="slot ${cls}"><span class="addr">[entry rsp${o >= 0 ? '+' : ''}${o}]${o === top ? ' ← rsp' : ''}</span><span>${body}</span></div>`;
+  }).join('') + reserved || '<span class="empty">空</span>';
+  if (st.state.done) {
+    $('stack').innerHTML += `<div class="slot"><span class="addr">[entry rsp+0]</span><span class="shadow">返回位址已被 ret 取走,rsp 回到 entry+8</span></div>`;
+  }
+  $('retline').innerHTML = st.state.done ? `<span class="r">回傳 ${fmt(st.state.retv[1])}</span>,透過 <code>${st.state.retv[0]}</code>` : '';
+
+  $('say').textContent = st.say;
+  $('btn-prev').disabled = cur === 0;
+  $('btn-next').disabled = cur === steps.length - 1;
+  $('step-range').max = steps.length - 1;
+  $('step-range').value = cur;
+  $('count').textContent = `${cur} / ${steps.length - 1}`;
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('on', b.dataset.id === presetId));
+}
+
+function rebuild(keepStep) {
+  const preset = PRESETS.find(p => p.id === presetId);
+  steps = buildSteps(preset, abi);
+  cur = keepStep ? Math.min(cur, steps.length - 1) : 0;
+  renderStepper();
+}
+
+/* ---------- wiring ---------- */
+function setAbi(a) {
+  abi = a;
+  document.querySelectorAll('.seg button[data-abi]').forEach(b => b.classList.toggle('on', b.dataset.abi === abi));
+  renderGrid(); renderDetail(); rebuild(true);
+}
+document.querySelectorAll('.seg button[data-abi]').forEach(b => b.addEventListener('click', () => setAbi(b.dataset.abi)));
+
+$('presets').innerHTML = PRESETS.map(p => `<button type="button" data-id="${p.id}" title="${p.title}">${p.label}</button>`).join('');
+document.querySelectorAll('#presets button').forEach(b => b.addEventListener('click', () => { presetId = b.dataset.id; rebuild(false); }));
+$('btn-reset').addEventListener('click', () => { cur = 0; renderStepper(); });
+$('btn-prev').addEventListener('click', () => { if (cur > 0) { cur--; renderStepper(); } });
+$('btn-next').addEventListener('click', () => { if (cur < steps.length - 1) { cur++; renderStepper(); } });
+$('step-range').addEventListener('input', e => { cur = Number(e.target.value); renderStepper(); });
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input, textarea')) return;
+  if (e.key === 'ArrowRight') { $('btn-next').click(); }
+  if (e.key === 'ArrowLeft') { $('btn-prev').click(); }
+});
+
+renderGrid(); renderDetail(); rebuild(false);
+</script>
+</body>
+</html>

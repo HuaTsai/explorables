@@ -65,6 +65,11 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
 .mini-cfg rect { fill: var(--bg); stroke: var(--line); }
 .mini-cfg rect.l { stroke: var(--left); }
 .mini-cfg path { fill: none; stroke: var(--right); stroke-width: 1.5; }
+.mini-regs { display: flex; flex-direction: column; gap: 0.2rem; width: 100%; font-family: var(--font-mono); font-size: 0.68rem; font-weight: 600; }
+.mini-bar { position: relative; height: 1.05rem; border: 1px dashed var(--line); border-radius: 2px; }
+.mini-bar span { position: absolute; top: -1px; bottom: -1px; right: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--ink); border-radius: 2px; background: var(--surface); }
+.mini-bar span.l { border-color: var(--left); }
+.mini-bar span.r { border-color: var(--right); }
 </style>
 </head>
 <body>
@@ -167,6 +172,22 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         <div class="text">
           <h2>find_rows 逐步圖解</h2>
           <p>一行 code 一步,看排序加二分搜尋的向量化查表怎麼把二維 queries 變成 pos、hit、row,以及為什麼 clamp 不會製造假命中。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="x86-registers/">
+        <div class="glyph" aria-hidden="true">
+          <div class="mini-regs">
+            <div class="mini-bar"><span style="width:100%">rax</span></div>
+            <div class="mini-bar"><span style="width:50%">eax</span></div>
+            <div class="mini-bar"><span style="width:25%">ax</span></div>
+            <div class="mini-bar"><span style="width:12.5%" class="l">al</span><span style="width:12.5%; right:12.5%" class="r">ah</span></div>
+          </div>
+        </div>
+        <div class="text">
+          <h2>x86-64 暫存器地圖</h2>
+          <p>點開每一個暫存器看別名怎麼疊、SysV 和 Win64 各給它什麼角色,再用幾個 C 函式逐步看參數怎麼進暫存器。</p>
         </div>
       </a>
     </li>
