@@ -85,19 +85,21 @@ button.primary { background: var(--ink); color: var(--surface); border-color: va
 .grid-title + .grid { margin-bottom: 1rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.6rem, 1fr)); gap: 0.4rem; }
 @media (min-width: 900px) { .grid { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
-.reg { display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); text-align: left; min-width: 0; line-height: 1.3; }
+.reg { display: grid; grid-template-rows: auto auto auto; align-content: start; gap: 0.15rem; padding: 0.45rem 0.6rem 0.5rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); text-align: left; min-width: 0; line-height: 1.3; }
 .reg b { font-family: var(--font-mono); font-size: 1.05rem; font-weight: 600; }
-.reg small { font-size: 0.72rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.reg small { font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.reg small.use { color: var(--muted); }
+.reg small.save { font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.02em; }
+.reg small.save.caller { color: var(--muted); opacity: 0.8; }
+.reg small.save.callee { color: var(--keep); font-weight: 600; }
+.reg small.save.none { color: var(--muted); opacity: 0.5; }
 .reg.arg { background: var(--left-soft); border-color: var(--left); }
-.reg.arg small { color: var(--left); }
+.reg.arg small.use { color: var(--left); font-weight: 600; }
 .reg.ret { background: var(--right-soft); border-color: var(--right); }
-.reg.ret small { color: var(--right); }
+.reg.ret small.use { color: var(--right); font-weight: 600; }
 .reg.callee { background: var(--keep-soft); border-color: var(--keep); }
-.reg.callee small { color: var(--keep); }
 .reg.sp { background: var(--bg); border-style: dashed; border-color: var(--ink); }
 .reg.sel { outline: 2px solid var(--ink); outline-offset: 1px; }
-.reg small.save, .roles small.save { color: var(--muted); font-size: 0.68rem; opacity: 0.85; }
-.reg.arg small.save, .reg.ret small.save { color: var(--muted); }
 .reg.wide { grid-column: span 2; }
 
 /* detail */
@@ -116,7 +118,10 @@ button.primary { background: var(--ink); color: var(--surface); border-color: va
 .roles { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.75rem; }
 .roles > div { border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.7rem; }
 .roles .tag { display: block; font-size: 0.72rem; color: var(--muted); font-family: var(--font-mono); }
-.roles .role { font-weight: 700; }
+.roles .role { font-weight: 700; display: block; }
+.roles .save { display: block; font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); }
+.roles .save.callee { color: var(--keep); font-weight: 600; }
+.roles .save.none { opacity: 0.5; }
 .roles .arg .role { color: var(--left); }
 .roles .ret .role { color: var(--right); }
 .roles .callee .role { color: var(--keep); }
@@ -210,8 +215,8 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
         <button type="button" data-abi="win64">Win64</button>
       </div>
       <div class="legend">
-        <span class="arg">參數(caller-saved)</span>
-        <span class="ret">回傳值(caller-saved)</span>
+        <span class="arg">參數</span>
+        <span class="ret">回傳值</span>
         <span class="callee">callee-saved</span>
         <span class="caller">其他 caller-saved</span>
         <span class="sp">stack 指標</span>
@@ -348,33 +353,33 @@ const ROLES = {
     rdi: { k: 'arg', t: '第 1 個參數' }, rsi: { k: 'arg', t: '第 2 個參數' }, rdx: { k: 'arg', t: '第 3 個參數', x: '第 2 個回傳值' },
     rcx: { k: 'arg', t: '第 4 個參數' }, r8: { k: 'arg', t: '第 5 個參數' }, r9: { k: 'arg', t: '第 6 個參數' },
     rax: { k: 'ret', t: '回傳值' },
-    rbx: { k: 'callee', t: 'callee-saved' }, rbp: { k: 'callee', t: 'callee-saved', x: 'frame pointer' },
-    r12: { k: 'callee', t: 'callee-saved' }, r13: { k: 'callee', t: 'callee-saved' }, r14: { k: 'callee', t: 'callee-saved' }, r15: { k: 'callee', t: 'callee-saved' },
-    r10: { k: 'caller', t: 'caller-saved' }, r11: { k: 'caller', t: 'caller-saved' },
+    rbx: { k: 'callee', t: '一般用途' }, rbp: { k: 'callee', t: 'frame pointer' },
+    r12: { k: 'callee', t: '一般用途' }, r13: { k: 'callee', t: '一般用途' }, r14: { k: 'callee', t: '一般用途' }, r15: { k: 'callee', t: '一般用途' },
+    r10: { k: 'caller', t: '一般用途' }, r11: { k: 'caller', t: '一般用途' },
     rsp: { k: 'sp', t: 'stack 指標' },
     clobber: ['rax','rcx','rdx','rsi','rdi','r8','r9','r10','r11', ...XMM],
     intArgs: ['rdi','rsi','rdx','rcx','r8','r9'], fpArgs: ['xmm0','xmm1','xmm2','xmm3','xmm4','xmm5','xmm6','xmm7'],
-    xmm: i => i < 8 ? { k: 'arg', t: i === 0 ? '浮點 1 / 回傳' : i === 1 ? '浮點 2 / 回傳 2' : `浮點參數 ${i + 1}` } : { k: 'caller', t: 'caller-saved' },
+    xmm: i => i < 8 ? { k: 'arg', t: i === 0 ? '浮點 1 · 回傳' : i === 1 ? '浮點 2 · 回傳 2' : `浮點參數 ${i + 1}` } : { k: 'caller', t: '一般用途' },
   },
   win64: {
     rcx: { k: 'arg', t: '第 1 個參數' }, rdx: { k: 'arg', t: '第 2 個參數' }, r8: { k: 'arg', t: '第 3 個參數' }, r9: { k: 'arg', t: '第 4 個參數' },
     rax: { k: 'ret', t: '回傳值' },
-    rbx: { k: 'callee', t: 'callee-saved' }, rbp: { k: 'callee', t: 'callee-saved', x: 'frame pointer' },
-    rsi: { k: 'callee', t: 'callee-saved' }, rdi: { k: 'callee', t: 'callee-saved' },
-    r12: { k: 'callee', t: 'callee-saved' }, r13: { k: 'callee', t: 'callee-saved' }, r14: { k: 'callee', t: 'callee-saved' }, r15: { k: 'callee', t: 'callee-saved' },
-    r10: { k: 'caller', t: 'caller-saved' }, r11: { k: 'caller', t: 'caller-saved' },
+    rbx: { k: 'callee', t: '一般用途' }, rbp: { k: 'callee', t: 'frame pointer' },
+    rsi: { k: 'callee', t: '一般用途' }, rdi: { k: 'callee', t: '一般用途' },
+    r12: { k: 'callee', t: '一般用途' }, r13: { k: 'callee', t: '一般用途' }, r14: { k: 'callee', t: '一般用途' }, r15: { k: 'callee', t: '一般用途' },
+    r10: { k: 'caller', t: '一般用途' }, r11: { k: 'caller', t: '一般用途' },
     rsp: { k: 'sp', t: 'stack 指標' },
     clobber: ['rax','rcx','rdx','r8','r9','r10','r11','xmm0','xmm1','xmm2','xmm3','xmm4','xmm5'],
     intArgs: ['rcx','rdx','r8','r9'], fpArgs: ['xmm0','xmm1','xmm2','xmm3'],
-    xmm: i => i < 4 ? { k: 'arg', t: i === 0 ? '位置 0 浮點 / 回傳' : `位置 ${i} 的浮點` } : i < 6 ? { k: 'caller', t: 'caller-saved' } : { k: 'callee', t: 'callee-saved' },
+    xmm: i => i < 4 ? { k: 'arg', t: i === 0 ? '位置 0 · 回傳' : `位置 ${i} 的浮點` } : i < 6 ? { k: 'caller', t: '一般用途' } : { k: 'callee', t: '一般用途' },
   },
 };
 const ABI_NAME = { sysv: 'SysV', win64: 'Win64' };
 
 function roleOf(abi, r) {
-  const o = r.startsWith('xmm') ? ROLES[abi].xmm(Number(r.slice(3))) : (ROLES[abi][r] || { k: 'caller', t: 'caller-saved' });
+  const o = r.startsWith('xmm') ? ROLES[abi].xmm(Number(r.slice(3))) : (ROLES[abi][r] || { k: 'caller', t: '一般用途' });
   // 參數、回傳值都是 caller-saved 的子集合;rsp 兩邊都不是
-  const save = o.k === 'callee' ? 'callee-saved' : o.k === 'sp' ? '' : 'caller-saved';
+  const save = o.k === 'callee' ? 'callee-saved' : o.k === 'sp' ? '—' : 'caller-saved';
   return { ...o, save };
 }
 
@@ -384,13 +389,12 @@ let selected = 'rax';
 
 /* ---------- register map ---------- */
 function regButton(name, sub, extraClass, save) {
-  const second = save && save !== sub ? `<small class="save">${save}</small>` : '';
-  return `<button type="button" class="reg ${extraClass || ''}" data-reg="${name}"><b>${name}</b><small>${sub}</small>${second}</button>`;
+  return `<button type="button" class="reg ${extraClass || ''}" data-reg="${name}"><b>${name}</b><small class="use">${sub}</small><small class="save ${save === 'callee-saved' ? 'callee' : save === 'caller-saved' ? 'caller' : 'none'}">${save}</small></button>`;
 }
 
 function renderGrid() {
   $('grid-gpr').innerHTML = GPR.map(r => { const o = roleOf(abi, r); return regButton(r, o.t, o.k, o.save); }).join('');
-  $('grid-ctl').innerHTML = regButton('rip', '指令指標', 'wide') + regButton('rflags', '狀態旗標', 'wide');
+  $('grid-ctl').innerHTML = regButton('rip', '指令指標', 'wide', '—') + regButton('rflags', '狀態旗標', 'wide', '—');
   $('grid-xmm').innerHTML = XMM.map((r, i) => { const o = roleOf(abi, r); return regButton(r, o.t, o.k, o.save); }).join('');
   document.querySelectorAll('.reg').forEach(b => {
     b.classList.toggle('sel', b.dataset.reg === selected);
@@ -413,7 +417,7 @@ function aliasDiagram(parts, total) {
 }
 
 function roleCards(r) {
-  return `<div class="roles">${['sysv','win64'].map(a => { const o = roleOf(a, r); return `<div class="${o.k}"><span class="tag">${ABI_NAME[a]}</span><span class="role">${o.t}</span>${o.save && o.save !== o.t ? ` <small class="save">· ${o.save}</small>` : ''}${o.x ? `<br><small>${o.x}</small>` : ''}</div>`; }).join('')}</div>`;
+  return `<div class="roles">${['sysv','win64'].map(a => { const o = roleOf(a, r); return `<div class="${o.k}"><span class="tag">${ABI_NAME[a]}</span><span class="role">${o.t}</span><span class="save ${o.k === 'callee' ? 'callee' : o.k === 'sp' ? 'none' : 'caller'}">${o.save}</span></div>`; }).join('')}</div>`;
 }
 
 function renderDetail() {
@@ -669,7 +673,7 @@ function renderStepper() {
     const o = roleOf(abi, r); const v = st.state.regs[r];
     const cls = [o.k, st.rd.has(r) ? 'rd' : '', st.wr.has(r) ? 'wr' : ''].join(' ');
     const txt = r === 'rsp' ? `entry${v - st.state.RSP0 >= 0 ? '+' : ''}${v - st.state.RSP0}` : fmt(v);
-    return `<div class="cellr ${cls}" title="${o.t}${o.save && o.save !== o.t ? ' · ' + o.save : ''}"><b>${r}</b><span class="${v == null ? 'unk' : ''}">${txt || '·'}</span></div>`;
+    return `<div class="cellr ${cls}" title="${o.t} · ${o.save}"><b>${r}</b><span class="${v == null ? 'unk' : ''}">${txt || '·'}</span></div>`;
   }).join('');
 
   const top = st.state.regs.rsp - st.state.RSP0;
