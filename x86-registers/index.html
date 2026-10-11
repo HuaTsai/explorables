@@ -96,6 +96,8 @@ button.primary { background: var(--ink); color: var(--surface); border-color: va
 .reg.callee small { color: var(--keep); }
 .reg.sp { background: var(--bg); border-style: dashed; border-color: var(--ink); }
 .reg.sel { outline: 2px solid var(--ink); outline-offset: 1px; }
+.reg small.save, .roles small.save { color: var(--muted); font-size: 0.68rem; opacity: 0.85; }
+.reg.arg small.save, .reg.ret small.save { color: var(--muted); }
 .reg.wide { grid-column: span 2; }
 
 /* detail */
@@ -197,7 +199,7 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
   <section class="prose">
     <h2>硬體給的是格子,ABI 決定格子怎麼用</h2>
     <p>x86-64 有 16 個 64 位元通用暫存器,每一個對 CPU 來說地位相同。<code>mov rdi, 5</code> 和 <code>mov rcx, 5</code> 都是合法指令,CPU 不會偏好哪一個。</p>
-    <p>但編譯器需要一個約定,讓 caller 和 callee 對得上:參數放哪、回傳值放哪、呼叫過後哪些暫存器還能信。Linux、macOS、BSD 用 <strong>System V AMD64 psABI</strong>,Windows 用自己的 <strong>Microsoft x64</strong>。下面的地圖可以切換兩套標籤,同一批暫存器會換上不同顏色。</p>
+    <p>但編譯器需要一個約定,讓 caller 和 callee 對得上:參數放哪、回傳值放哪、呼叫過後哪些暫存器還能信。最後這一點把 <code>rsp</code> 以外的每個暫存器分成兩類:<i class="k">callee-saved</i> 是被呼叫的函式要負責還原的,<i class="l">caller-saved</i> 是呼叫方自己要先存好的。參數和回傳值暫存器都屬於後者。Linux、macOS、BSD 用 <strong>System V AMD64 psABI</strong>,Windows 用自己的 <strong>Microsoft x64</strong>。下面的地圖可以切換兩套標籤,同一批暫存器會換上不同顏色。</p>
   </section>
 
   <section class="bench" aria-label="暫存器地圖">
@@ -208,10 +210,10 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
         <button type="button" data-abi="win64">Win64</button>
       </div>
       <div class="legend">
-        <span class="arg">參數</span>
-        <span class="ret">回傳值</span>
+        <span class="arg">參數(caller-saved)</span>
+        <span class="ret">回傳值(caller-saved)</span>
         <span class="callee">callee-saved</span>
-        <span class="caller">caller-saved</span>
+        <span class="caller">其他 caller-saved</span>
         <span class="sp">stack 指標</span>
       </div>
     </div>
@@ -370,8 +372,10 @@ const ROLES = {
 const ABI_NAME = { sysv: 'SysV', win64: 'Win64' };
 
 function roleOf(abi, r) {
-  if (r.startsWith('xmm')) return ROLES[abi].xmm(Number(r.slice(3)));
-  return ROLES[abi][r] || { k: 'caller', t: 'caller-saved' };
+  const o = r.startsWith('xmm') ? ROLES[abi].xmm(Number(r.slice(3))) : (ROLES[abi][r] || { k: 'caller', t: 'caller-saved' });
+  // 參數、回傳值都是 caller-saved 的子集合;rsp 兩邊都不是
+  const save = o.k === 'callee' ? 'callee-saved' : o.k === 'sp' ? '' : 'caller-saved';
+  return { ...o, save };
 }
 
 /* ---------- state ---------- */
@@ -379,14 +383,15 @@ let abi = 'sysv';
 let selected = 'rax';
 
 /* ---------- register map ---------- */
-function regButton(name, sub, extraClass) {
-  return `<button type="button" class="reg ${extraClass || ''}" data-reg="${name}"><b>${name}</b><small>${sub}</small></button>`;
+function regButton(name, sub, extraClass, save) {
+  const second = save && save !== sub ? `<small class="save">${save}</small>` : '';
+  return `<button type="button" class="reg ${extraClass || ''}" data-reg="${name}"><b>${name}</b><small>${sub}</small>${second}</button>`;
 }
 
 function renderGrid() {
-  $('grid-gpr').innerHTML = GPR.map(r => { const o = roleOf(abi, r); return regButton(r, o.t, o.k); }).join('');
+  $('grid-gpr').innerHTML = GPR.map(r => { const o = roleOf(abi, r); return regButton(r, o.t, o.k, o.save); }).join('');
   $('grid-ctl').innerHTML = regButton('rip', '指令指標', 'wide') + regButton('rflags', '狀態旗標', 'wide');
-  $('grid-xmm').innerHTML = XMM.map((r, i) => { const o = roleOf(abi, r); return regButton(r, o.t, o.k); }).join('');
+  $('grid-xmm').innerHTML = XMM.map((r, i) => { const o = roleOf(abi, r); return regButton(r, o.t, o.k, o.save); }).join('');
   document.querySelectorAll('.reg').forEach(b => {
     b.classList.toggle('sel', b.dataset.reg === selected);
     b.addEventListener('click', () => { selected = b.dataset.reg; renderGrid(); renderDetail(); });
@@ -408,7 +413,7 @@ function aliasDiagram(parts, total) {
 }
 
 function roleCards(r) {
-  return `<div class="roles">${['sysv','win64'].map(a => { const o = roleOf(a, r); return `<div class="${o.k}"><span class="tag">${ABI_NAME[a]}</span><span class="role">${o.t}</span>${o.x ? `<br><small>${o.x}</small>` : ''}</div>`; }).join('')}</div>`;
+  return `<div class="roles">${['sysv','win64'].map(a => { const o = roleOf(a, r); return `<div class="${o.k}"><span class="tag">${ABI_NAME[a]}</span><span class="role">${o.t}</span>${o.save && o.save !== o.t ? ` <small class="save">· ${o.save}</small>` : ''}${o.x ? `<br><small>${o.x}</small>` : ''}</div>`; }).join('')}</div>`;
 }
 
 function renderDetail() {
@@ -664,7 +669,7 @@ function renderStepper() {
     const o = roleOf(abi, r); const v = st.state.regs[r];
     const cls = [o.k, st.rd.has(r) ? 'rd' : '', st.wr.has(r) ? 'wr' : ''].join(' ');
     const txt = r === 'rsp' ? `entry${v - st.state.RSP0 >= 0 ? '+' : ''}${v - st.state.RSP0}` : fmt(v);
-    return `<div class="cellr ${cls}" title="${o.t}"><b>${r}</b><span class="${v == null ? 'unk' : ''}">${txt || '·'}</span></div>`;
+    return `<div class="cellr ${cls}" title="${o.t}${o.save && o.save !== o.t ? ' · ' + o.save : ''}"><b>${r}</b><span class="${v == null ? 'unk' : ''}">${txt || '·'}</span></div>`;
   }).join('');
 
   const top = st.state.regs.rsp - st.state.RSP0;
