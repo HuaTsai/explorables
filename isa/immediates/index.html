@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>立即值：一個常數要花幾條指令</title>
+<meta name="description" content="輸入一個 64 位元常數，看 x86-64、AArch64、RISC-V 各要用幾條指令、幾個 byte 才能把它放進暫存器，以及每條指令的立即值欄位塞了什麼。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the workbench has presets + a free input on top, the value split into
+   16-bit chunks, then three lanes (one per ISA) each listing the instruction sequence with bytes,
+   bit fields and one sentence per instruction. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 一條做完 / 和 clang 一致 */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* 要拆好幾條 / 模擬 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.foot { color: var(--muted); font-size: 0.85rem; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* tables */
+.table-wrap { overflow-x: auto; }
+table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; min-width: 34rem; width: 100%; }
+.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.cmp td.name { font-weight: 700; white-space: nowrap; }
+.cmp td.num { font-family: var(--font-mono); font-size: 0.85rem; white-space: nowrap; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.85rem; font-family: var(--font-mono); }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
+
+.inrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
+@media (max-width: 760px) { .inrow { grid-template-columns: minmax(0, 1fr); } }
+.inbox { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.inbox input[type="text"] { font: inherit; font-family: var(--font-mono); font-size: 0.95rem; padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--ink); flex: 1 1 14rem; min-width: 0; }
+.inbox input.bad { border-color: var(--miss); }
+.parsed { font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; word-break: break-all; }
+.chunks { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.chunk { flex: 1 1 8rem; min-width: 0; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.5rem; background: var(--bg); }
+.chunk .k { font-size: 0.62rem; font-weight: 700; color: var(--muted); letter-spacing: 0.04em; }
+.chunk .h { font-family: var(--font-mono); font-size: 0.95rem; font-weight: 600; }
+.chunk .b { font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted); letter-spacing: 0.04em; word-break: break-all; }
+.chunk.z .h { color: var(--muted); font-weight: 400; }
+.chunk.o .h { color: var(--hit); }
+
+/* lanes */
+.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
+.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
+.lane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
+.lane-name { font-weight: 700; font-size: 0.95rem; }
+.lane-sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
+.tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; white-space: nowrap; }
+.tag.hit { background: var(--hit); color: var(--surface); }
+.tag.miss { background: var(--miss); color: var(--surface); }
+.tag.idle { border: 1px solid var(--line); color: var(--muted); }
+.lane-body { display: flex; flex-direction: column; }
+.ins { padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.ins + .ins { border-top: 1px dashed var(--line); }
+.ins .asm { font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; white-space: nowrap; overflow-x: auto; }
+.bytes { display: flex; gap: 0.2rem; flex-wrap: wrap; }
+.byte { display: inline-flex; min-width: 1.9rem; justify-content: center; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.5; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+.fields { display: flex; gap: 0.2rem; flex-wrap: wrap; }
+.field { display: flex; flex-direction: column; min-width: 0; padding: 0.15rem 0.35rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); flex: var(--w) 0 auto; }
+.field .k { font-size: 0.6rem; font-weight: 700; color: var(--muted); white-space: nowrap; letter-spacing: 0.02em; }
+.field .v { font-family: var(--font-mono); font-size: 0.74rem; white-space: nowrap; }
+.field .n { font-size: 0.64rem; color: var(--muted); white-space: nowrap; }
+.ins .say { font-size: 0.85rem; color: var(--ink); }
+.lane-foot { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.85rem; color: var(--muted); display: flex; flex-direction: column; gap: 0.4rem; }
+.lane-foot .alt { font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink); }
+.lane-foot .sum { font-weight: 700; color: var(--ink); }
+i.hit, i.miss { font-style: normal; font-weight: 700; }
+i.hit { color: var(--hit); }
+i.miss { color: var(--miss); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← ISA 比較</a>
+    <h1><span class="mono">立即值</span> 一個常數要花幾條指令</h1>
+    <p class="lead">程式裡寫 <code>x = 1000</code>，常數得先進到指令裡。指令只有 4 bytes 長的時候，64 位元的常數放不下，要拆。輸入一個數字，看三個 ISA 各要幾條指令才把它湊出來。</p>
+  </header>
+
+  <section class="prose">
+    <h2>立即值欄位永遠比指令短</h2>
+    <p>指令裡直接寫死的常數叫<strong>立即值</strong>（immediate）。它和 opcode、暫存器編號擠在同一條指令裡，所以能放的位元數一定小於指令長度。三個 ISA 給的空間差很多：</p>
+    <ul>
+      <li><strong>x86-64</strong>：大多數指令帶 8 或 32 位元立即值，32 位元的會符號擴展到 64 位元。另外有一條專用的 <code>mov r64, imm64</code>，10 bytes，直接塞完整 8 bytes。變長編碼的好處在這裡最明顯：常數再大也是一條。</li>
+      <li><strong>AArch64</strong>：算術指令只有 12 bits（可選擇左移 12）。搬常數靠 <code>movz</code>、<code>movn</code>、<code>movk</code> 三條：每條帶 16 bits，可放在四個 16 bit 位置之一，最多四條拼出 64 位元。邏輯指令另有一套「位元遮罩」立即值，用 13 bits 描述「重複的連續 1」樣式，像 <code>0x00ff00ff00ff00ff</code> 這種一條就能做。</li>
+      <li><strong>RISC-V</strong>：<code>addi</code> 帶 12 bits 有號立即值，<code>lui</code> 給高 20 bits，兩條湊 32 位元。再大的沒有專用指令，只能 <code>lui</code>、<code>addi</code>、<code>slli</code>、<code>addi</code> 一路接力，最長 8 條；或者放進常數池，用一次記憶體讀取換回來。</li>
+    </ul>
+    <p>下面的 12 個 preset 是 clang 23 以 <code>-O2</code> 編 <code>long f(void) { return C; }</code> 的實際輸出，頁面載入時會把模擬結果和 clang 的 bytes 逐一比對，右上角標籤會告訴你是否一致。自訂的值是依照 LLVM 的物化演算法在瀏覽器裡模擬，可能和 clang 差一條。</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>ISA</th><th>一條指令能放的立即值</th><th>範圍</th><th>放不下時</th></tr></thead>
+      <tbody>
+        <tr><td class="name">x86-64</td><td>imm8、imm32（符號擴展）、<code>mov r64, imm64</code></td><td class="num">±2³¹，或完整 64 位元</td><td>不會放不下，最長 10 bytes</td></tr>
+        <tr><td class="name">AArch64</td><td><code>add/sub</code> 12 bits；<code>movz/movn/movk</code> 16 bits × 4 個位置；邏輯指令 bitmask</td><td class="num">0–4095（×4096）；任一 16 bit chunk；重複的連續 1</td><td>movz + 最多 3 條 movk</td></tr>
+        <tr><td class="name">RISC-V</td><td><code>addi</code> 12 bits 有號；<code>lui</code> 高 20 bits</td><td class="num">−2048–2047；±2³¹（兩條）</td><td>lui/addi/slli 接力，最多 8 條；或常數池</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="bench" aria-label="輸入常數">
+    <div class="row presets" id="presets"><span class="lbl">preset</span></div>
+
+    <div class="row inrow">
+      <div>
+        <p class="panel-title">自訂常數（十進位或 0x 十六進位，可負）</p>
+        <div class="inbox"><input id="val" type="text" spellcheck="false" autocomplete="off" aria-label="常數"></div>
+        <p class="parsed" id="parsed"></p>
+        <p class="hint">preset 是 clang 實際輸出；自訂值是依照 LLVM 演算法的模擬，可能差一條。</p>
+      </div>
+      <div>
+        <p class="panel-title">這個值的四個 16 bit chunk（AArch64 的 movk 就是一次填一格）</p>
+        <div class="chunks" id="chunks"></div>
+        <p class="hint" id="chunk-hint"></p>
+      </div>
+    </div>
+
+    <div class="row lanes" id="lanes"></div>
+  </section>
+
+  <section class="prose">
+    <h2>12 個 preset 的結果</h2>
+    <p>格式：指令數 / bytes。RISC-V 這欄是純指令接力的版本；超過兩條時 clang 預設會改從常數池載入，括號裡是那個版本。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp" id="result">
+      <thead><tr><th>常數</th><th>x86-64</th><th>AArch64</th><th>RV64GC</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>看完可以帶走的三句話</h2>
+    <ol>
+      <li><strong>定長編碼的立即值欄位一定比指令短，大常數永遠要拆。</strong>4 bytes 的指令扣掉 opcode 和暫存器，剩下 12 到 20 bits。這不是 ARM 或 RISC-V 設計不好，是定長的必然代價。</li>
+      <li><strong>x86 用變長編碼直接塞 8 bytes。</strong>一條 10 bytes 的 <code>movabs</code> 換一次做完，解碼器要多吃幾個 byte，但不用多條指令。這是 CISC 在立即值上占到的便宜。</li>
+      <li><strong>ARM 用 16 bits 分四段拼，RISC-V 用 20 + 12 拼 32 位元。</strong>ARM 的 <code>movk</code> 每條只改自己那 16 bits，所以最多四條、順序無所謂；RISC-V 的 <code>addi</code> 是加法，低 12 bits 的符號會往上借位，所以 <code>lui</code> 要先補 1。超過 32 位元後 RISC-V 只能接力或查表，這是 RISC-V 被批評「指令數多」最常見的例子之一。</li>
+    </ol>
+  </section>
+
+  <section class="prose">
+    <h2>這個模型省略了什麼</h2>
+    <ul>
+      <li><strong>常數池與 PC-relative load。</strong>RISC-V 超過兩條時 clang 預設改成 <code>lui</code> + <code>ld</code> 從附近的資料區讀；AArch64 也有 <code>ldr x0, =imm</code> 偽指令走常數池。這裡 RISC-V 只標註，沒有把記憶體存取的代價畫出來。</li>
+      <li><strong>AArch64 bitmask immediate 的完整規則。</strong>這裡實作了 LLVM 的編碼檢查，但只用一句話解釋「重複的連續 1」。實際規則是：元素大小 2 到 64 bits，元素內是連續的 1 經過旋轉，再重複填滿暫存器。</li>
+      <li><strong>LLVM 的其他組合技巧。</strong>AArch64 還有「兩個邏輯立即值做 AND 或 EOR」等兩條的組合；RISC-V 在上下 32 位元相同時會用第二個暫存器做 <code>slli</code> + <code>add</code>。這些在模擬裡沒做，碰到時頁面會標出來。開 Zba、Zbs 擴充後 RISC-V 還有更多短路徑。</li>
+      <li><strong>浮點常數</strong>完全是另一套：AArch64 有 8 bits 的 <code>fmov</code> 立即值，x86 和 RISC-V 都要從記憶體或整數暫存器搬。</li>
+      <li><strong>編譯器會把重複的常數留在暫存器裡</strong>（rematerialization 與 CSE），真實程式裡一個常數不會每次用都重新物化。這裡每次都從零開始算。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+// Constant materialisation models for x86-64, AArch64, RV64GC. BigInt throughout.
+const u64 = v => BigInt.asUintN(64, v);
+const s64 = v => BigInt.asIntN(64, v);
+const sext = (v, n) => BigInt.asIntN(n, v);
+const fitsS = (v, n) => { v = s64(v); return v >= -(1n << BigInt(n - 1)) && v < (1n << BigInt(n - 1)); };
+const fitsU = (v, n) => u64(v) < (1n << BigInt(n));
+const le = (v, n) => { v = u64(v); const o = []; for (let i = 0; i < n; i++) o.push(((v >> BigInt(8 * i)) & 0xffn).toString(16).padStart(2, '0')); return o; };
+const ctz = v => { v = u64(v); if (v === 0n) return 64; let n = 0; while ((v & 1n) === 0n) { v >>= 1n; n++; } return n; };
+const clz = v => { v = u64(v); if (v === 0n) return 64; let n = 0; while ((v & (1n << 63n)) === 0n) { v <<= 1n; n++; } return n; };
+const cto = v => { v = u64(v); let n = 0; while ((v & 1n) === 1n && n < 64) { v >>= 1n; n++; } return n; };
+const clo = v => { v = u64(v); let n = 0; while ((v & (1n << 63n)) !== 0n && n < 64) { v = u64(v << 1n); n++; } return n; };
+const isShiftedMask = v => { v = u64(v); if (v === 0n) return false; const t = v >> BigInt(ctz(v)); return ((t + 1n) & t) === 0n; };
+const hex = v => { v = s64(v); return (v < 0n ? '-0x' + (-v).toString(16) : '0x' + v.toString(16)); };
+const bin = (v, n) => u64(v & ((1n << BigInt(n)) - 1n)).toString(2).padStart(n, '0');
+const F = (k, v, n = '', w = null) => ({ k, v, n, w: w ?? v.length });
+
+// ---------------- x86-64 ----------------
+function x86(v) {
+  v = s64(v);
+  if (v === 0n) return [{ asm: 'xor eax, eax', bytes: ['31', 'c0'], fields: [F('opcode', '31', 'XOR r/m32, r32', 8), F('ModRM', 'c0', 'eax, eax', 8)], note: '0 不用立即值：eax XOR 自己，2 bytes，寫 32 位元會順便清高 32 位。' }];
+  if (fitsU(v, 32)) return [{ asm: `mov eax, ${hex(v)}`, bytes: ['b8', ...le(v, 4)], fields: [F('opcode', 'b8', 'MOV r32, imm32（+rd）', 8), F('imm32', le(v, 4).join(' '), '原值', 32)], note: '放得進 32 位元無號數：用 32 位元 mov，寫 eax 會把 rax 高 32 位清零。5 bytes。' }];
+  if (fitsS(v, 32)) return [{ asm: `mov rax, ${hex(v)}`, bytes: ['48', 'c7', 'c0', ...le(v, 4)], fields: [F('REX.W', '48', '64 位元', 8), F('opcode', 'c7', 'MOV r/m64, imm32', 8), F('ModRM', 'c0', '/0, rax', 8), F('imm32', le(v, 4).join(' '), '符號擴展到 64', 32)], note: '負數但放得進 32 位元有號數：imm32 符號擴展，7 bytes。' }];
+  return [{ asm: `movabs rax, ${hex(v)}`, bytes: ['48', 'b8', ...le(v, 8)], fields: [F('REX.W', '48', '64 位元', 8), F('opcode', 'b8', 'MOV r64, imm64（+rd）', 8), F('imm64', le(v, 8).join(' '), '完整 8 bytes', 64)], note: '都不行就用 x86 唯一能帶 64 位元立即值的指令：10 bytes，一條做完。' }];
+}
+
+// ---------------- AArch64 ----------------
+// Logical immediate encoding (port of LLVM processLogicalImmediate). Returns {N, immr, imms} or null.
+function logicalImm(imm, regSize) {
+  imm = u64(imm);
+  const all1 = u64(-1n);
+  if (imm === 0n || imm === all1) return null;
+  if (regSize !== 64 && ((imm >> BigInt(regSize)) !== 0n || imm === (all1 >> BigInt(64 - regSize)))) return null;
+  let size = regSize;
+  do {
+    size /= 2;
+    const mask = (1n << BigInt(size)) - 1n;
+    if ((imm & mask) !== ((imm >> BigInt(size)) & mask)) { size *= 2; break; }
+  } while (size > 2);
+  let CTO, I;
+  const mask = all1 >> BigInt(64 - size);
+  imm &= mask;
+  if (isShiftedMask(imm)) {
+    I = ctz(imm); CTO = cto(imm >> BigInt(I));
+  } else {
+    imm |= ~mask & all1;
+    if (!isShiftedMask(~imm & all1)) return null;
+    const CLO = clo(imm);
+    I = 64 - CLO;
+    CTO = CLO + cto(imm) - (64 - size);
+  }
+  const immr = (size - I) & (size - 1);
+  let nimms = u64(BigInt(~(size - 1)) << 1n);
+  nimms |= BigInt(CTO - 1);
+  const N = Number((nimms >> 6n) & 1n) ^ 1;
+  return { N, immr, imms: Number(nimms & 0x3fn), size, I, CTO };
+}
+const enc32 = w => le(BigInt(w >>> 0), 4);
+function armInsn(kind, imm16, shift, bits, extra) {
+  const sf = bits === 64 ? 1 : 0;
+  const hw = shift / 16;
+  let w, asm, fields, note;
+  const reg = (sf ? 'x' : 'w') + '0';
+  if (kind === 'movz' || kind === 'movn' || kind === 'movk') {
+    const opc = kind === 'movz' ? 2 : kind === 'movn' ? 0 : 3;
+    w = (sf << 31) | (opc << 29) | (0b100101 << 23) | (hw << 21) | (imm16 << 5) | 0;
+    const sh = shift ? `, lsl #${shift}` : '';
+    asm = `${kind} ${reg}, #0x${imm16.toString(16)}${sh}`;
+    fields = [F('sf', String(sf), sf ? '64 位元' : '32 位元'), F('opc', bin(BigInt(opc), 2), kind.toUpperCase()), F('', '100101'), F('hw', bin(BigInt(hw), 2), `lsl #${shift}`), F('imm16', bin(BigInt(imm16), 16), `0x${imm16.toString(16)}`), F('Rd', '00000', reg)];
+    note = extra;
+  } else if (kind === 'orr') {
+    const { N, immr, imms } = extra.enc;
+    w = (sf << 31) | (0b01 << 29) | (0b100100 << 23) | (N << 22) | (immr << 16) | (imms << 10) | (31 << 5) | 0;
+    asm = `orr ${reg}, ${sf ? 'xzr' : 'wzr'}, #${hex(extra.value)}`;
+    fields = [F('sf', String(sf)), F('opc', '01', 'ORR'), F('', '100100'), F('N', String(N)), F('immr', bin(BigInt(immr), 6), `旋轉 ${immr}`), F('imms', bin(BigInt(imms), 6), `元素 ${extra.enc.size} bits，${extra.enc.CTO} 個 1`), F('Rn', '11111', sf ? 'xzr' : 'wzr'), F('Rd', '00000', reg)];
+    note = extra.note;
+  }
+  return { asm, bytes: enc32(w), fields, note };
+}
+function armSimple(imm, bits, oneChunks, zeroChunks) {
+  const mask = 0xffffn;
+  const M = bits === 64 ? u64(-1n) : 0xffffffffn;
+  let isNeg = false;
+  let v = u64(imm) & M;
+  if (oneChunks > zeroChunks) { isNeg = true; v = (~v) & M; }
+  const first = isNeg ? 'movn' : 'movz';
+  let shift = 0, last = 0;
+  if (v !== 0n) { const lz = clz(v) - (64 - bits); const tz = ctz(v); shift = Math.floor(tz / 16) * 16; last = Math.floor((bits - 1 - lz) / 16) * 16; }
+  const out = [];
+  let imm16 = Number((v >> BigInt(shift)) & mask);
+  out.push(armInsn(first, imm16, shift, bits, isNeg ? `MOVN：先寫入 ~0x${imm16.toString(16)} 再整個取反，其餘 chunk 全是 1。` : `MOVZ：把 16 bits 放到 bit ${shift} 起，其餘清零。`));
+  if (shift === last) return out;
+  if (isNeg) v = (~v) & M;
+  while (shift < last) {
+    shift += 16;
+    imm16 = Number((v >> BigInt(shift)) & mask);
+    if (imm16 === (isNeg ? 0xffff : 0)) continue;
+    out.push(armInsn('movk', imm16, shift, bits, `MOVK：只覆寫 bit ${shift} 到 ${shift + 15}，其他 bits 保留。`));
+  }
+  return out;
+}
+const chunk = (u, i) => Number((u >> BigInt(i * 16)) & 0xffffn);
+const setChunk = (u, i, c) => (u & ~(0xffffn << BigInt(i * 16))) | (BigInt(c) << BigInt(i * 16));
+const isMask = v => v !== 0n && ((v + 1n) & v) === 0n;
+function armOrrShift32() {
+  const w = 0xaa008000 >>> 0;
+  return { asm: 'orr x0, x0, x0, lsl #32', bytes: enc32(w), fields: [F('sf', '1'), F('opc', '01', 'ORR'), F('', '01010'), F('shift', '00', 'LSL'), F('N', '0'), F('Rm', '00000', 'x0'), F('imm6', '100000', '左移 32'), F('Rn', '00000', 'x0'), F('Rd', '00000', 'x0')], note: '上下 32 位元相同：先做好下半，再把自己左移 32 位 OR 回來。' };
+}
+function arm(v, force64 = false) {
+  v = s64(v);
+  const bits = (!force64 && fitsU(v, 32)) ? 32 : 64;
+  const M = bits === 64 ? u64(-1n) : 0xffffffffn;
+  const uimm = u64(v) & M;
+  let one = 0, zero = 0;
+  for (let sh = 0; sh < bits; sh += 16) { const c = (uimm >> BigInt(sh)) & 0xffffn; if (c === 0xffffn) one++; else if (c === 0n) zero++; }
+  const n = bits / 16;
+  if (n - one <= 1 || n - zero <= 1) return armSimple(uimm, bits, one, zero);
+  let enc = logicalImm(uimm, bits);
+  const orr = (L, e, note) => armInsn('orr', 0, 0, 64, { enc: e, value: s64(L), note });
+  if (enc) return [armInsn('orr', 0, 0, bits, { enc, value: bits === 64 ? v : uimm, note: '這個樣式是「重複的連續 1」，能用邏輯立即值一條 ORR 做完：欄位只存元素大小、旋轉量和 1 的個數。' })];
+  if (one >= n - 2 || zero >= n - 2) return armSimple(uimm, bits, one, zero);
+  // two instructions: ORR (logical immediate) + one MOVK that patches a single chunk
+  for (let i = 0; i < 4; i++) {
+    const cands = [0, 0xffff, ...[0, 1, 2, 3].filter(k => k !== i).map(k => chunk(uimm, k))];
+    for (const c of cands) {
+      const L = setChunk(uimm, i, c);
+      const e = logicalImm(L, 64);
+      if (e) return [orr(L, e, '先用邏輯立即值 ORR 出一個「差一個 chunk」的樣式。'), armInsn('movk', chunk(uimm, i), i * 16, 64, '再用 MOVK 把那一個 chunk 覆寫成正確的值。')];
+    }
+  }
+  // three instructions
+  if (one || zero) return armSimple(uimm, bits, one, zero);
+  const counts = new Map();
+  for (let i = 0; i < 4; i++) { const c = chunk(uimm, i); counts.set(c, (counts.get(c) || 0) + 1); }
+  for (let i = 0; i < 4; i++) {
+    const c = chunk(uimm, i); const cnt = counts.get(c);
+    if (cnt !== 2 && cnt !== 3) continue;
+    const L = BigInt(c) * 0x0001000100010001n;
+    const e = logicalImm(L, 64);
+    if (!e) continue;
+    const out = [orr(L, e, '有一個 chunk 重複出現，而它重複四次的樣式是合法的邏輯立即值：先 ORR 出來。')];
+    for (let k = 0; k < 4; k++) if (chunk(uimm, k) !== c) out.push(armInsn('movk', chunk(uimm, k), k * 16, 64, 'MOVK 補上不一樣的 chunk。'));
+    return out;
+  }
+  // sequence of ones interrupted by at most two chunks
+  {
+    let startIdx = -1, endIdx = -1;
+    for (let i = 0; i < 4; i++) {
+      const c = sext(BigInt(chunk(uimm, i)), 16);
+      if (c === 0n || c === -1n) continue;
+      if (isMask(u64(~c))) startIdx = i; else if (isMask(u64(c))) endIdx = i;
+    }
+    if (startIdx >= 0 && endIdx >= 0) {
+      let outside = 0, inside = 0xffff;
+      if (startIdx > endIdx) { [startIdx, endIdx] = [endIdx, startIdx]; [outside, inside] = [inside, outside]; }
+      let L = uimm; const fix = [];
+      for (let i = 0; i < 4; i++) {
+        const c = chunk(uimm, i);
+        if ((i < startIdx || endIdx < i) && c !== outside) { L = setChunk(L, i, outside); fix.push(i); }
+        else if (i > startIdx && i < endIdx && c !== inside) { L = setChunk(L, i, inside); fix.push(i); }
+      }
+      const e = fix.length ? logicalImm(L, 64) : null;
+      if (e && fix.length <= 2) return [orr(L, e, '中間有一段連續的 1：先 ORR 出乾淨的那一段。'), ...fix.map(i => armInsn('movk', chunk(uimm, i), i * 16, 64, 'MOVK 補上被打斷或在外面的 chunk。'))];
+    }
+  }
+  // equal halves: build the low 32 bits then OR a shifted copy
+  if ((uimm & 0xffffffffn) === (uimm >> 32n)) {
+    const half = arm(uimm & 0xffffffffn, true);
+    if (half.length + 1 < 4) return [...half, armOrrShift32()];
+  }
+  const out = armSimple(uimm, bits, one, zero);
+  out.unmodelled = true;
+  return out;
+}
+
+// ---------------- RV64GC ----------------
+function rvEnc(op, rd, rs1, imm) {
+  // returns {bytes, fields, asm}; applies C-extension compression where legal.
+  const R = 'a0'; // rd = x10
+  const i6 = x => x >= -32n && x <= 31n;
+  let w, c = false, fields, asm;
+  if (op === 'lui') {
+    const imm20 = Number(u64(imm) & 0xfffffn);
+    const s6 = sext(BigInt(imm20), 6);
+    if (i6(BigInt(sext(BigInt(imm20), 6))) && sext(BigInt(imm20), 20) === s6 && imm20 !== 0) {
+      c = true; const u = Number(s6 & 0x3fn);
+      w = 0x6001 | ((u >> 5) << 12) | (10 << 7) | ((u & 0x1f) << 2);
+      fields = [F('funct3', '011', 'C.LUI'), F('nzimm[17]', bin(BigInt(u >> 5), 1)), F('rd', '01010', R), F('nzimm[16:12]', bin(BigInt(u & 0x1f), 5)), F('op', '01')];
+    } else {
+      w = (imm20 << 12) | (10 << 7) | 0x37;
+      fields = [F('imm[31:12]', bin(BigInt(imm20), 20), `0x${imm20.toString(16)}`), F('rd', '01010', R), F('opcode', '0110111', 'LUI')];
+    }
+    asm = `lui a0, 0x${imm20.toString(16)}`;
+  } else if (op === 'addi' || op === 'addiw') {
+    const immS = sext(imm, 12);
+    const isLi = rs1 === 0;
+    if (op === 'addi' && !isLi && immS !== 0n && i6(immS)) {
+      c = true; const u = Number(immS & 0x3fn);
+      w = 0x0001 | ((u >> 5) << 12) | (10 << 7) | ((u & 0x1f) << 2);
+      fields = [F('funct3', '000', 'C.ADDI'), F('nzimm[5]', bin(BigInt(u >> 5), 1)), F('rd/rs1', '01010', R), F('nzimm[4:0]', bin(BigInt(u & 0x1f), 5)), F('op', '01')];
+    } else if (op === 'addi' && isLi && i6(immS)) {
+      c = true; const u = Number(immS & 0x3fn);
+      w = 0x4001 | ((u >> 5) << 12) | (10 << 7) | ((u & 0x1f) << 2);
+      fields = [F('funct3', '010', 'C.LI'), F('imm[5]', bin(BigInt(u >> 5), 1)), F('rd', '01010', R), F('imm[4:0]', bin(BigInt(u & 0x1f), 5)), F('op', '01')];
+    } else if (op === 'addiw' && !isLi && i6(immS)) {
+      c = true; const u = Number(immS & 0x3fn);
+      w = 0x2001 | ((u >> 5) << 12) | (10 << 7) | ((u & 0x1f) << 2);
+      fields = [F('funct3', '001', 'C.ADDIW'), F('imm[5]', bin(BigInt(u >> 5), 1)), F('rd/rs1', '01010', R), F('imm[4:0]', bin(BigInt(u & 0x1f), 5)), F('op', '01')];
+    } else {
+      const i12 = Number(immS & 0xfffn);
+      w = (i12 << 20) | (rs1 << 15) | (0 << 12) | (10 << 7) | (op === 'addi' ? 0x13 : 0x1b);
+      fields = [F('imm[11:0]', bin(BigInt(i12), 12), String(immS)), F('rs1', bin(BigInt(rs1), 5), rs1 ? R : 'x0'), F('funct3', '000'), F('rd', '01010', R), F('opcode', op === 'addi' ? '0010011' : '0011011', op === 'addi' ? 'OP-IMM' : 'OP-IMM-32')];
+    }
+    asm = isLi ? `li a0, ${immS}` : `${op} a0, a0, ${immS}`;
+  } else if (op === 'not') {
+    w = (0xfff << 20) | (10 << 15) | (4 << 12) | (10 << 7) | 0x13;
+    fields = [F('imm[11:0]', '111111111111', '-1'), F('rs1', '01010', R), F('funct3', '100', 'XORI'), F('rd', '01010', R), F('opcode', '0010011', 'OP-IMM')];
+    asm = 'not a0, a0';
+  } else if (op === 'slli' || op === 'srli' || op === 'srai') {
+    const sh = Number(imm);
+    if (op === 'slli') {
+      c = true; w = 0x0002 | ((sh >> 5) << 12) | (10 << 7) | ((sh & 0x1f) << 2);
+      fields = [F('funct3', '000', 'C.SLLI'), F('shamt[5]', bin(BigInt(sh >> 5), 1)), F('rd/rs1', '01010', R), F('shamt[4:0]', bin(BigInt(sh & 0x1f), 5)), F('op', '10')];
+    } else {
+      c = true; const f2 = op === 'srli' ? 0 : 1;
+      w = 0x8001 | ((sh >> 5) << 12) | (f2 << 10) | (2 << 7) | ((sh & 0x1f) << 2);
+      fields = [F('funct3', '100'), F('shamt[5]', bin(BigInt(sh >> 5), 1)), F('funct2', bin(BigInt(f2), 2), op === 'srli' ? 'C.SRLI' : 'C.SRAI'), F("rd'", '010', 'a0 = x10'), F('shamt[4:0]', bin(BigInt(sh & 0x1f), 5)), F('op', '01')];
+    }
+    asm = `${op} a0, a0, ${sh}`;
+  }
+  const bytes = c ? le(BigInt(w), 2) : enc32(w);
+  return { asm, bytes, fields, c };
+}
+function rvImpl(val, out) {
+  val = s64(val);
+  if (fitsS(val, 32)) {
+    const hi20 = Number((u64(val + 0x800n) >> 12n) & 0xfffffn);
+    const lo12 = sext(val, 12);
+    if (hi20) out.push(['lui', hi20]);
+    if (lo12 !== 0n || hi20 === 0) {
+      let opc = 'addi';
+      if (hi20) {
+        const luiVal = sext(BigInt(hi20) << 12n, 32);
+        if (!fitsS(luiVal + lo12, 32)) opc = 'addiw';
+      }
+      out.push([opc, lo12, hi20 ? 10 : 0]);
+    }
+    return;
+  }
+  const lo12 = sext(val, 12);
+  if (fitsS(val - lo12, 32)) {
+    out.push(['lui', Number((u64(val - lo12) >> 12n) & 0xfffffn)]);
+    out.push(['addi', lo12, 10]);
+    return;
+  }
+  let hi52 = u64(val + 0x800n) >> 12n;
+  let shift = 12 + ctz(hi52);
+  hi52 = sext(hi52 >> BigInt(shift - 12), 64 - shift);
+  if (shift > 12 && !fitsS(hi52, 12)) {
+    if (fitsS(s64(hi52 << 12n), 32)) { shift -= 12; hi52 = s64(hi52 << 12n); }
+  }
+  rvImpl(hi52, out);
+  out.push(['slli', shift]);
+  if (lo12 !== 0n) out.push(['addi', lo12, 10]);
+}
+function rvSeq(val) {
+  val = s64(val);
+  let res = rvSeqBase(val);
+  if (res.length > 2) {
+    const tmp = rvSeqBase(~val); tmp.push(['not']);
+    if (tmp.length < res.length) res = tmp;
+  }
+  return res;
+}
+function rvSeqBase(val) {
+  let res = []; rvImpl(val, res);
+  if ((val & 0xfffn) !== 0n && (val & 1n) === 0n && res.length >= 2) {
+    const tz = ctz(val);
+    const shifted = val >> BigInt(tz);
+    const tmp = []; rvImpl(shifted, tmp); tmp.push(['slli', tz]);
+    const compressible = fitsS(shifted, 6);
+    if (tmp.length < res.length || compressible) res = tmp;
+  }
+  if (res.length <= 2) return res;
+  const lz = clz(val);
+  if (val > 0n && lz > 0) {
+    let shifted = s64((val << BigInt(lz)) | ((1n << BigInt(lz)) - 1n));
+    let tmp = []; rvImpl(shifted, tmp); tmp.push(['srli', lz]);
+    if (tmp.length < res.length) res = tmp;
+    shifted = s64(val << BigInt(lz));
+    tmp = []; rvImpl(shifted, tmp); tmp.push(['srli', lz]);
+    if (tmp.length < res.length) res = tmp;
+  }
+  return res;
+}
+const RVNOTE = {
+  lui: 'LUI：把 20 bits 放進 bit 31 到 12，低 12 bits 清零，結果符號擴展到 64 位元。',
+  addi: 'ADDI：加上 12 bits 有號立即值。因為是有號的，低 12 bits 若大於 2047，上面的 LUI 要先多加 1 來補償。',
+  addiw: 'ADDIW：同 ADDI 但以 32 位元做加法再符號擴展，避免 LUI 的結果跨過 32 位元邊界時算錯。',
+  slli: 'SLLI：把已經拼好的上半段左移，騰出位置給下一段 12 bits。',
+  srli: 'SRLI：先造一個「高位全 1」的值再邏輯右移，把上面的 1 移成 0。',
+  li: 'LI 是 ADDI a0, x0, imm：12 bits 有號立即值加上零暫存器。',
+  not: 'NOT 是 XORI a0, a0, -1：目標值的反相比較好做，先做反相再整個翻回來。',
+};
+function rv(v) {
+  const seq = rvSeq(v);
+  const uv = u64(BigInt(v));
+  const out = seq.map(([op, imm, rs1]) => {
+    const r = rvEnc(op, 10, rs1 ?? 10, BigInt(imm ?? 0));
+    r.note = (op === 'addi' && (rs1 ?? 10) === 0) ? RVNOTE.li : RVNOTE[op];
+    if (r.c) r.note += ' 壓縮成 2 bytes。';
+    return r;
+  });
+  out.pool = seq.length > 2;
+  out.unmodelled = seq.length > 2 && (uv & 0xffffffffn) === (uv >> 32n);
+  return out;
+}
+const CLANG = {"1":{"x86":[["b8","01","00","00","00"]],"arm":[["20","00","80","52"]],"rvchain":[["05","45"]],"rv":[{"mn":"li","ops":"a0, 0x1","bytes":["05","45"]}],"rv_pool":false},"-1":{"x86":[["48","c7","c0","ff","ff","ff","ff"]],"arm":[["00","00","80","92"]],"rvchain":[["7d","55"]],"rv":[{"mn":"li","ops":"a0, -0x1","bytes":["7d","55"]}],"rv_pool":false},"100":{"x86":[["b8","64","00","00","00"]],"arm":[["80","0c","80","52"]],"rvchain":[["13","05","40","06"]],"rv":[{"mn":"li","ops":"a0, 0x64","bytes":["13","05","40","06"]}],"rv_pool":false},"1000":{"x86":[["b8","e8","03","00","00"]],"arm":[["00","7d","80","52"]],"rvchain":[["13","05","80","3e"]],"rv":[{"mn":"li","ops":"a0, 0x3e8","bytes":["13","05","80","3e"]}],"rv_pool":false},"4095":{"x86":[["b8","ff","0f","00","00"]],"arm":[["e0","ff","81","52"]],"rvchain":[["05","65"],["7d","15"]],"rv":[{"mn":"lui","ops":"a0, 0x1","bytes":["05","65"]},{"mn":"addi","ops":"a0, a0, -0x1","bytes":["7d","15"]}],"rv_pool":false},"4096":{"x86":[["b8","00","10","00","00"]],"arm":[["00","00","82","52"]],"rvchain":[["05","65"]],"rv":[{"mn":"lui","ops":"a0, 0x1","bytes":["05","65"]}],"rv_pool":false},"65535":{"x86":[["b8","ff","ff","00","00"]],"arm":[["e0","ff","9f","52"]],"rvchain":[["41","65"],["7d","15"]],"rv":[{"mn":"lui","ops":"a0, 0x10","bytes":["41","65"]},{"mn":"addi","ops":"a0, a0, -0x1","bytes":["7d","15"]}],"rv_pool":false},"65536":{"x86":[["b8","00","00","01","00"]],"arm":[["20","00","a0","52"]],"rvchain":[["41","65"]],"rv":[{"mn":"lui","ops":"a0, 0x10","bytes":["41","65"]}],"rv_pool":false},"305419896":{"x86":[["b8","78","56","34","12"]],"arm":[["00","cf","8a","52"],["80","46","a2","72"]],"rvchain":[["37","55","34","12"],["13","05","85","67"]],"rv":[{"mn":"lui","ops":"a0, 0x12345","bytes":["37","55","34","12"]},{"mn":"addi","ops":"a0, a0, 0x678","bytes":["13","05","85","67"]}],"rv_pool":false},"4294967295":{"x86":[["b8","ff","ff","ff","ff"]],"arm":[["00","00","80","12"]],"rvchain":[["7d","55"],["01","91"]],"rv":[{"mn":"li","ops":"a0, -0x1","bytes":["7d","55"]},{"mn":"srli","ops":"a0, a0, 0x20","bytes":["01","91"]}],"rv_pool":false},"20015998343868":{"x86":[["48","b8","bc","9a","78","56","34","12","00","00"]],"arm":[["80","57","93","d2"],["00","cf","aa","f2"],["80","46","c2","f2"]],"rvchain":[["37","b5","68","24"],["13","05","15","cf"],["36","05"],["13","05","f5","6a"],["0a","05"]],"rv":[{"mn":"lui","ops":"a0, 0x0","bytes":["37","05","00","00"]},{"mn":"ld","ops":"a0, 0x0(a0)","bytes":["03","35","05","00"]}],"rv_pool":true},"-9223372036854775808":{"x86":[["48","b8","00","00","00","00","00","00","00","80"]],"arm":[["00","00","f0","d2"]],"rvchain":[["7d","55"],["7e","15"]],"rv":[{"mn":"li","ops":"a0, -0x1","bytes":["7d","55"]},{"mn":"slli","ops":"a0, a0, 0x3f","bytes":["7e","15"]}],"rv_pool":false}};
+const PRESETS = ['1', '-1', '100', '1000', '4095', '4096', '65535', '65536', '305419896', '4294967295', '20015998343868', '-9223372036854775808'];
+const PRESET_LABEL = { '305419896': '0x12345678', '4294967295': '0xffffffff', '20015998343868': '0x123456789abc', '-9223372036854775808': '0x8000000000000000' };
+const $ = id => document.getElementById(id);
+
+function parseVal(s) {
+  s = s.trim().replace(/_/g, '');
+  if (!s) return null;
+  let neg = false;
+  if (s[0] === '-') { neg = true; s = s.slice(1); } else if (s[0] === '+') s = s.slice(1);
+  let v;
+  try {
+    if (/^0x[0-9a-f]+$/i.test(s)) v = BigInt(s);
+    else if (/^0b[01]+$/i.test(s)) v = BigInt(s);
+    else if (/^[0-9]+$/.test(s)) v = BigInt(s);
+    else return null;
+  } catch { return null; }
+  if (neg) v = -v;
+  if (v > (1n << 64n) - 1n || v < -(1n << 63n)) return null;
+  return s64(v);
+}
+
+const state = { v: 1000n, preset: '1000' };
+
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach(k => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = PRESET_LABEL[k] || k; b.dataset.k = k;
+    b.addEventListener('click', () => { state.v = BigInt(k); state.preset = k; $('val').value = PRESET_LABEL[k] || k; $('val').classList.remove('bad'); renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderChunks(v) {
+  const u = u64(v);
+  const host = $('chunks');
+  host.innerHTML = '';
+  let one = 0, zero = 0;
+  for (let i = 3; i >= 0; i--) {
+    const c = Number((u >> BigInt(i * 16)) & 0xffffn);
+    const el = document.createElement('div');
+    el.className = 'chunk' + (c === 0 ? ' z' : c === 0xffff ? ' o' : '');
+    if (c === 0) zero++; if (c === 0xffff) one++;
+    el.innerHTML = `<div class="k">bit ${i * 16 + 15}–${i * 16}</div><div class="h">0x${c.toString(16).padStart(4, '0')}</div><div class="b">${c.toString(2).padStart(16, '0')}</div>`;
+    host.appendChild(el);
+  }
+  const bits = fitsU(v, 32) ? 32 : 64;
+  $('chunk-hint').textContent = bits === 32
+    ? '放得進 32 位元無號數：AArch64 只看低兩格，用 32 位元的 w0 寫入會自動把高位清零。'
+    : `全 0 的格子 ${zero} 個、全 1 的格子 ${one} 個。movz 從 0 開始填、movn 從全 1 開始填，所以哪種多就用哪種當起手。`;
+}
+
+function laneSpec(v, isPreset) {
+  const ref = isPreset ? CLANG[String(v)] : null;
+  const mk = (id, name, sub, insns, refBytes, extra) => {
+    const mine = insns.map(i => i.bytes.join('')).join(' ');
+    const theirs = refBytes ? refBytes.map(b => b.join('')).join(' ') : null;
+    return { id, name, sub, insns, match: theirs === null ? null : mine === theirs, extra };
+  };
+  const x = x86(v), a = arm(v), r = rv(v);
+  const rvExtra = {};
+  if (r.pool) {
+    rvExtra.pool = 'lui a0, %hi(.LCPI0_0) ; ld a0, %lo(.LCPI0_0)(a0)';
+  }
+  if (r.unmodelled) rvExtra.note = '上下 32 位元相同：clang 會改用第二個暫存器做 slli + add，比這裡少一到兩條。';
+  const armExtra = {};
+  if (!isPreset && a.length >= 3 && !fitsU(v, 32)) armExtra.note = 'LLVM 還有「兩個邏輯立即值做 AND 或 EOR」等組合，對某些樣式能少一條，這裡沒模擬。';
+  return [
+    mk('x86', 'x86-64', '1–15 bytes', x, ref && ref.x86, {}),
+    mk('arm', 'AArch64', '固定 4 bytes', a, ref && ref.arm, armExtra),
+    mk('rv', 'RV64GC', '2 或 4 bytes', r, ref && ref.rvchain, rvExtra),
+  ];
+}
+
+function renderLanes(v, isPreset) {
+  const host = $('lanes');
+  host.innerHTML = '';
+  for (const l of laneSpec(v, isPreset)) {
+    const bytes = l.insns.reduce((s, i) => s + i.bytes.length, 0);
+    const el = document.createElement('div');
+    el.className = 'lane';
+    const tag = l.match === null ? `<span class="tag idle">模擬</span>` : l.match ? `<span class="tag hit">和 clang 一致</span>` : `<span class="tag miss">和 clang 不同</span>`;
+    const insHtml = l.insns.map(i => `
+      <div class="ins">
+        <code class="asm">${i.asm}</code>
+        <div class="bytes">${i.bytes.map(b => `<span class="byte">${b}</span>`).join('')}</div>
+        <div class="fields">${i.fields.map(f => `<span class="field" style="--w:${f.w}"><span class="k">${f.k || '&nbsp;'}</span><span class="v">${f.v}</span><span class="n">${f.n || '&nbsp;'}</span></span>`).join('')}</div>
+        <p class="say">${i.note || ''}</p>
+      </div>`).join('');
+    const foot = [`<span class="sum">${l.insns.length} 條指令，${bytes} bytes</span>`];
+    if (l.extra.pool) foot.push(`超過兩條，clang 預設改從常數池載入：<span class="alt">${l.extra.pool}</span>（2 條 + 1 次記憶體讀取）`);
+    if (l.extra.note) foot.push(l.extra.note);
+    el.innerHTML = `
+      <div class="lane-head"><span class="lane-name">${l.name}<span class="lane-sub">${l.sub}</span></span>${tag}</div>
+      <div class="lane-body">${insHtml}</div>
+      <div class="lane-foot">${foot.map(f => `<span>${f}</span>`).join('')}</div>`;
+    host.appendChild(el);
+  }
+}
+
+function renderResult() {
+  const tb = $('result').querySelector('tbody');
+  tb.innerHTML = PRESETS.map(k => {
+    const v = BigInt(k);
+    const x = x86(v), a = arm(v), r = rv(v);
+    const B = s => s.reduce((n, i) => n + i.bytes.length, 0);
+    const ref = CLANG[k];
+    const pool = ref && ref.rv_pool ? `（常數池 ${ref.rv.length} / ${ref.rv.reduce((n, i) => n + i.bytes.length, 0)}）` : '';
+    return `<tr><td class="name mono">${PRESET_LABEL[k] || k}</td><td class="num">${x.length} / ${B(x)}</td><td class="num">${a.length} / ${B(a)}</td><td class="num">${r.length} / ${B(r)}${pool}</td></tr>`;
+  }).join('');
+}
+
+function renderAll() {
+  const v = state.v;
+  const isPreset = state.preset !== null && BigInt(state.preset) === v;
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', isPreset && b.dataset.k === state.preset));
+  $('parsed').textContent = `= ${v.toString()} = ${hex(v)}${v < 0n ? '（補數：0x' + u64(v).toString(16) + '）' : ''}`;
+  renderChunks(v);
+  renderLanes(v, isPreset);
+}
+
+$('val').addEventListener('input', e => {
+  const v = parseVal(e.target.value);
+  if (v === null) { e.target.classList.add('bad'); $('parsed').textContent = '看不懂這個數字：請用十進位、0x 十六進位或 0b 二進位，範圍 −2⁶³ 到 2⁶⁴−1。'; return; }
+  e.target.classList.remove('bad');
+  state.v = v;
+  state.preset = PRESETS.find(k => BigInt(k) === v) ?? null;
+  renderAll();
+});
+
+renderPresets();
+renderResult();
+$('val').value = '1000';
+renderAll();
+</script>
+</body>
+</html>

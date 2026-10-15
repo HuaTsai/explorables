@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>指令編碼：定長與變長</title>
+<meta name="description" content="同一段 C 在 x86-64、AArch64、RISC-V 上編成的機器碼，一個 byte 一個 byte 餵給解碼器，看哪一個 ISA 什麼時候才知道「這條指令有多長」。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the workbench has the C source and global controls on top,
+   then three lanes (one per ISA) each with its listing + byte cells, the bit-field strip of
+   the current instruction, and one sentence. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 長度已知 */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* 長度未知 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;         /* 目前這一條 */
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+i.hit, i.miss { font-style: normal; font-weight: 700; }
+i.hit { color: var(--hit); }
+i.miss { color: var(--miss); }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.foot { color: var(--muted); font-size: 0.85rem; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* tables */
+.table-wrap { overflow-x: auto; }
+table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; min-width: 34rem; width: 100%; }
+.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.cmp td.name { font-weight: 700; white-space: nowrap; }
+.cmp td.num { font-family: var(--font-mono); font-size: 0.85rem; white-space: nowrap; }
+.cmp tr.total td { font-weight: 700; border-bottom: none; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.88rem; }
+.presets .sp { flex: 1 1 1rem; }
+.toggle { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.88rem; cursor: pointer; }
+.toggle input { accent-color: var(--hit); }
+
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
+@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.75; background: var(--bg); border-radius: 4px; overflow-x: auto; white-space: pre; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+
+/* lanes */
+.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
+.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
+.lane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
+.lane-name { font-weight: 700; font-size: 0.95rem; }
+.lane-sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
+.tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; white-space: nowrap; }
+.tag.hit { background: var(--hit); color: var(--surface); }
+.tag.miss { background: var(--miss); color: var(--surface); }
+.tag.idle { border: 1px solid var(--line); color: var(--muted); }
+
+.listing { padding: 0.5rem 0.75rem; display: flex; flex-direction: column; gap: 0.3rem; background: var(--bg); overflow-x: auto; }
+.ins { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.3rem 0.5rem; border-radius: 4px; border: 1px solid transparent; }
+.ins.on { background: var(--mark); border-color: var(--line); }
+.ins.done { color: var(--muted); }
+.ins .asm { font-family: var(--font-mono); font-size: 0.8rem; white-space: nowrap; }
+.ins .asm small { color: var(--muted); font-size: 0.72rem; margin-left: 0.6rem; }
+.bytes { display: flex; gap: 0.2rem; flex-wrap: nowrap; }
+.byte { display: flex; flex-direction: column; align-items: center; min-width: 2rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.3; padding: 0.1rem 0.15rem 0; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); background: var(--surface); }
+.byte small { font-size: 0.58rem; font-weight: 700; line-height: 1.1; min-height: 0.75rem; letter-spacing: 0.02em; color: var(--muted); }
+.ins.on .byte.got { color: var(--ink); border-color: var(--ink); }
+.ins.on .byte.got small { color: var(--ink); }
+.ins.on .byte.peek { border-color: var(--miss); color: var(--ink); }
+.ins.on .byte.peek small { color: var(--miss); }
+.ins.done .byte { border-color: var(--line); }
+.ins.done .byte small { color: var(--muted); }
+
+.fieldbox { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); min-height: 5.6rem; }
+.fields { display: flex; gap: 0.2rem; flex-wrap: wrap; }
+.field { display: flex; flex-direction: column; min-width: 0; padding: 0.2rem 0.35rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); flex: var(--w) 0 auto; }
+.field .k { font-size: 0.62rem; font-weight: 700; color: var(--muted); white-space: nowrap; letter-spacing: 0.02em; }
+.field .v { font-family: var(--font-mono); font-size: 0.78rem; white-space: nowrap; }
+.field .n { font-size: 0.66rem; color: var(--muted); white-space: nowrap; }
+.field.ext { background: var(--hit-soft); }
+.field.pend { background: var(--miss-soft); }
+.fields .empty { align-self: center; }
+.say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 5.2em; }
+.say .mono { font-size: 0.85em; }
+
+/* takeaway list */
+.three li strong { font-weight: 700; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← ISA 比較</a>
+    <h1><span class="mono">指令編碼</span> 定長與變長</h1>
+    <p class="lead">CPU 從記憶體拿到的只是一串 byte。解碼器的第一個問題不是「這條做什麼」，而是「這條到哪裡結束」。按「下一步」把同一段 C 編出來的機器碼一次一個 byte 餵給三個 ISA 的解碼器，看誰什麼時候才知道長度。</p>
+  </header>
+
+  <section class="prose">
+    <h2>解碼器先要知道這條有多長</h2>
+    <p>CPU 執行指令前要先找到它的邊界：這條從哪個 byte 開始、到哪個 byte 結束，下一條才知道從哪裡接。對三個 ISA 來說，這件事的難度完全不同：</p>
+    <ul>
+      <li><strong>x86-64</strong>：一條指令 1 到 15 bytes。要讀 prefix、opcode，有時還要讀 ModRM 和 SIB，才知道後面還有沒有位移和立即值。長度是一邊讀一邊發現的。</li>
+      <li><strong>AArch64</strong>（64 位元 ARM）：每條固定 4 bytes。不用讀內容就知道邊界，一次抓 32 bytes 就是 8 條指令，可以同時解碼。</li>
+      <li><strong>RISC-V</strong>（RV64GC）：基本指令 4 bytes，加上 C 擴充後常用指令可以壓成 2 bytes。看第一個 byte 的最低 2 bits 就知道是哪一種。</li>
+    </ul>
+    <p>下面四個案例都是一兩行 C，用 clang 23 以 <code>-O2</code> 編成三種目標的機器碼，byte 是 <code>llvm-objdump</code> 印出來的，不是手寫的。x86 以 Intel 語法顯示（目的在左）。三條帶子各有自己的節拍：x86 一步讀 1 byte，AArch64 一步讀 4 bytes，RISC-V 先偷看 2 bits 再讀整條。步數本身就是故事的一部分。</p>
+  </section>
+
+  <section class="bench" aria-label="逐步解碼">
+    <div class="row presets" id="presets"><span class="lbl">案例</span><span class="sp"></span>
+      <label class="toggle"><input type="checkbox" id="rvc" checked> RISC-V 開 C 擴充（RV64GC）</label>
+    </div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">C 原始碼</p>
+        <pre class="code" id="csrc"></pre>
+        <p class="hint" id="hint"></p>
+      </div>
+      <div>
+        <p class="panel-title">解碼器</p>
+        <div class="controls">
+          <button id="btn-reset" type="button">重來</button>
+          <button id="btn-prev" type="button">上一步</button>
+          <button id="btn-next" type="button" class="primary">下一步</button>
+          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count" id="count"></span>
+        </div>
+        <p class="hint">每一步，三個解碼器各自往前走一格。某個 ISA 先解完就停下來等。右上角的標籤是那個解碼器「現在知不知道這條指令有多長」。</p>
+      </div>
+    </div>
+
+    <div class="row lanes" id="lanes"></div>
+  </section>
+
+  <section class="prose">
+    <h2>四個案例跑完的結果</h2>
+    <p>同樣的 C，三邊編出來的 byte 數和指令數。x86 和 AArch64 固定不變，RISC-V 這欄跟著上面的 C 擴充開關走。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp" id="result">
+      <thead><tr><th>案例</th><th>x86-64</th><th>AArch64</th><th id="rv-col">RV64GC</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="foot">格式：bytes / 指令數。這四個函式太小，數字只能看趨勢；真實程式的 code density 統計大約是 x86-64 和 RV64GC 相近，AArch64 大 10% 到 20%，而 RV64G（關掉 C）會再大 25% 到 30%。</p>
+
+  <section class="prose three">
+    <h2>看完可以帶走的三句話</h2>
+    <ol>
+      <li><strong>變長編碼換的是密度。</strong>x86 的 <code>ret</code> 1 byte、小指令 2 到 3 bytes，常用的短、少用的長，像霍夫曼編碼。代價是解碼器讀到 ModRM 之前都不知道這條有多長，想同時解碼多條就得猜邊界、猜錯重來。現代 x86 核心靠 µop cache 把解過的結果存起來，才繞過這個瓶頸。</li>
+      <li><strong>定長編碼換的是解碼平行度。</strong>AArch64 的解碼器拿到 32 bytes 就知道有 8 條，每條的暫存器欄位都在固定位置，可以同時切。代價是 <code>ret</code> 也要 4 bytes，程式會胖一些，對快取和記憶體頻寬是壓力。</li>
+      <li><strong>RISC-V 用兩種長度折衷。</strong>只看 2 bits 就知道長度，解碼器依然簡單；常用指令壓到 2 bytes，密度和 x86 差不多。但 16 位元放不下三個 5 bit 暫存器編號，所以壓縮指令只能用 8 個熱門暫存器、或讓目的和來源共用同一個。</li>
+    </ol>
+  </section>
+
+  <section class="prose">
+    <h2>這個模型省略了什麼</h2>
+    <ul>
+      <li><strong>x86 的前綴遠不止 REX。</strong>這裡只碰到 REX（64 位元運算）。還有 operand-size、segment、LOCK、REP 等舊前綴，以及 SIMD 用的 VEX（2 到 3 bytes）和 EVEX（4 bytes）前綴。一條 AVX-512 指令輕易超過 10 bytes。</li>
+      <li><strong>真實解碼器不是一次一個 byte。</strong>x86 核心一個 cycle 抓 16 或 32 bytes，用平行的長度預測器同時猜好幾個起點，再丟掉猜錯的。這裡一步一 byte 是為了讓「什麼時候才知道長度」看得見。</li>
+      <li><strong>AArch64 有個變長的親戚。</strong>32 位元 ARM 的 Thumb-2 混用 2 和 4 bytes，想法和 RISC-V C 擴充接近。AArch64 設計時刻意拿掉它，換取解碼簡單。</li>
+      <li><strong>RISC-V 預留了更長的編碼。</strong>最低 5 bits 是 <code>11111</code> 的話是 48 位元或更長的指令，目前沒有標準擴充使用。這裡只處理 2 和 4 bytes。</li>
+      <li><strong>對齊與 fetch 邊界。</strong>變長指令會跨越快取行和 fetch 區塊，第二半要等下一次抓取。RISC-V 開 C 擴充後 4 byte 指令也可能落在 2 byte 對齊的位置，有同樣問題。這裡假設每條都抓得完整。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+// ---- helpers ------------------------------------------------------------
+// F(name, value, note, width) → one bit-field box. width defaults to value length (binary strings).
+const F = (k, v, n = '', w = null) => ({ k, v, n, w: w ?? v.length });
+// x86: one step per byte. tag shows under the byte cell. len = total length if known after this byte.
+const X = (b, tag, fields, say, len = null) => ({ b, tag, fields, say, len });
+
+// ---- x86-64 (Intel syntax) -----------------------------------------------
+const REXW = X('48', 'REX', [F('0100', '0100', 'REX 固定'), F('W', '1', '64 位元'), F('R', '0'), F('X', '0'), F('B', '0')],
+  '0x48 是 REX 前綴，W=1 表示 64 位元運算。前綴可以有好幾個，所以讀完它對長度一無所知。');
+const RET86 = { asm: 'ret', bytes: [X('c3', 'op', [F('opcode', 'c3', 'RET', 8)], '0xc3 是 RET。單一 byte 的指令，讀到它就結束了。這是變長編碼最省的時候。', 1)] };
+
+const X86 = {
+  add: [
+    { asm: 'lea rax, [rdi + rsi]', bytes: [
+      REXW,
+      X('8d', 'op', [F('opcode', '8d', 'LEA', 8)], '0x8d 是 LEA。查表知道後面一定跟一個 ModRM，但 ModRM 的內容決定還有沒有 SIB 和位移，所以長度仍然未知。'),
+      X('04', 'ModRM', [F('mod', '00', '無位移'), F('reg', '000', 'rax'), F('rm', '100', '→ SIB')], 'ModRM：mod=00 表示沒有位移；rm=100 是特殊值，代表後面還有一個 SIB byte。讀到第 3 個 byte 才確定總長是 4。', 4),
+      X('37', 'SIB', [F('scale', '00', '×1'), F('index', '110', 'rsi'), F('base', '111', 'rdi')], 'SIB：base=rdi、index=rsi、scale=1，位址是 rdi+rsi。clang 用 lea 做加法，因為它可以指定不同的目的暫存器又不碰 flags。', 4),
+    ]},
+    RET86,
+  ],
+  imm: [
+    { asm: 'lea rax, [rdi + 1000]', bytes: [
+      REXW,
+      X('8d', 'op', [F('opcode', '8d', 'LEA', 8)], '0x8d 是 LEA，後面跟 ModRM。長度未知。'),
+      X('87', 'ModRM', [F('mod', '10', 'disp32'), F('reg', '000', 'rax'), F('rm', '111', 'rdi')], 'ModRM：mod=10 表示後面跟 32 位元位移；rm=111 是 rdi，不需要 SIB。到這裡確定總長 7。', 7),
+      X('e8', 'disp', [F('disp32', 'e8', '最低 byte', 8)], '位移的第 1 個 byte。x86 是 little-endian，1000 = 0x000003e8，存成 e8 03 00 00。', 7),
+      X('03', 'disp', [F('', '03', '', 8)], '位移的第 2 個 byte。', 7),
+      X('00', 'disp', [F('', '00', '', 8)], '位移的第 3 個 byte，全零。', 7),
+      X('00', 'disp', [F('', '00', '', 8)], '位移的第 4 個 byte，也是零。1000 用 16 bits 就夠，但 x86 的位移只有 8 位元和 32 位元兩種，超過 127 就得花 4 bytes。', 7),
+    ]},
+    RET86,
+  ],
+  idx: [
+    { asm: 'mov rax, [rdi + rsi*8]', bytes: [
+      REXW,
+      X('8b', 'op', [F('opcode', '8b', 'MOV r64, r/m64', 8)], '0x8b 是「從記憶體或暫存器搬到暫存器」的 MOV，後面跟 ModRM。'),
+      X('04', 'ModRM', [F('mod', '00', '無位移'), F('reg', '000', 'rax'), F('rm', '100', '→ SIB')], 'ModRM 的 rm=100 又是 SIB 的信號。確定總長 4。', 4),
+      X('f7', 'SIB', [F('scale', '11', '×8'), F('index', '110', 'rsi'), F('base', '111', 'rdi')], 'SIB 的 scale=11 代表 ×8，正好是 long 的大小。整個 arr[i] 的位址計算塞進一條 4 byte 指令，第五篇會專門講定址模式。', 4),
+    ]},
+    RET86,
+  ],
+  br: [
+    { asm: 'cmp rdi, rsi', bytes: [
+      REXW,
+      X('39', 'op', [F('opcode', '39', 'CMP r/m64, r64', 8)], '0x39 是 CMP，後面跟 ModRM。'),
+      X('f7', 'ModRM', [F('mod', '11', '皆暫存器'), F('reg', '110', 'rsi'), F('rm', '111', 'rdi')], 'mod=11 表示 rm 也是暫存器，沒有記憶體操作數，不需要 SIB 和位移。總長 3。比較結果寫進 flags 暫存器。', 3),
+    ]},
+    { asm: 'jge +7', bytes: [
+      X('7d', 'op', [F('0111', '0111', 'Jcc short'), F('cc', '1101', 'GE')], '0x7d 是短跳轉 Jcc，低 4 bits 1101 是條件 GE。這組 opcode 固定帶 1 byte 位移，所以總長 2。', 2),
+      X('07', 'rel8', [F('rel8', '07', '+7', 8)], '相對位移 +7，剛好跳過接下來那條 7 bytes 的 mov。', 2),
+    ]},
+    { asm: 'mov qword ptr [rdx], 1', bytes: [
+      REXW,
+      X('c7', 'op', [F('opcode', 'c7', 'MOV r/m64, imm32', 8)], '0xc7 是「把立即值存進 r/m」。這組指令把 ModRM 的 reg 欄位拿來當 opcode 的延伸，所以非讀 ModRM 不可。'),
+      X('02', 'ModRM', [F('mod', '00', '無位移'), F('reg', '000', '/0 = MOV'), F('rm', '010', 'rdx')], 'mod=00、rm=010 表示位址就是 rdx。reg=000 是 opcode 延伸 /0。再加 4 bytes 立即值，總長 7。', 7),
+      X('01', 'imm', [F('imm32', '01', '最低 byte', 8)], '立即值 1 的最低 byte。', 7),
+      X('00', 'imm', [F('', '00', '', 8)], '第 2 個 byte。', 7),
+      X('00', 'imm', [F('', '00', '', 8)], '第 3 個 byte。', 7),
+      X('00', 'imm', [F('', '00', '', 8)], '第 4 個 byte。存一個 1 要花 4 bytes，因為這個形式只有 imm32（符號擴展到 64 位元），沒有 imm8 版本。', 7),
+    ]},
+    { asm: 'xor eax, eax', bytes: [
+      X('31', 'op', [F('opcode', '31', 'XOR r/m32, r32', 8)], '0x31 是 XOR。沒有 REX，所以是 32 位元運算；寫 eax 會順便把 rax 高 32 位元清零，這是 x86-64 歸零的慣用法，比 mov rax, 0 短。'),
+      X('c0', 'ModRM', [F('mod', '11', '皆暫存器'), F('reg', '000', 'eax'), F('rm', '000', 'eax')], 'mod=11，兩邊都是暫存器。總長 2。', 2),
+    ]},
+    RET86,
+  ],
+};
+
+// ---- AArch64 ---------------------------------------------------------------
+// One step per instruction. bytes are in memory order (little-endian); word is the 32-bit value.
+const A = (asm, bytes, word, fields, say, alias = '') => ({ asm, alias, bytes, word, fields, say });
+const RETA = A('ret', ['c0','03','5f','d6'], 'd65f03c0',
+  [F('fixed', '1101011000101111100000', 'RET 的固定樣式'), F('Rn', '11110', 'x30 (lr)'), F('op4', '00000')],
+  'RET 其實是「跳到 Rn」，Rn=11110 是 x30，也就是 link register。4 bytes 做一件 x86 一個 byte 就能做的事。');
+
+const ARM = {
+  add: [
+    A('add x0, x1, x0', ['20','00','00','8b'], '8b000020',
+      [F('sf', '1', '64 位元'), F('op', '0', '加'), F('S', '0', '不設 flags'), F('', '01011', 'add/sub reg'), F('shift', '00'), F('', '0'), F('Rm', '00000', 'x0'), F('imm6', '000000'), F('Rn', '00001', 'x1'), F('Rd', '00000', 'x0')],
+      '一次讀 4 bytes，長度從來不是問題。最高 bit sf=1 表示 64 位元；Rd、Rn、Rm 各佔 5 bits，位置固定，解碼器直接切。'),
+    RETA,
+  ],
+  imm: [
+    A('add x0, x0, #1000', ['00','a0','0f','91'], '910fa000',
+      [F('sf', '1', '64 位元'), F('op', '0', '加'), F('S', '0'), F('', '100010', 'add imm'), F('sh', '0', '不左移'), F('imm12', '001111101000', '= 1000'), F('Rn', '00000', 'x0'), F('Rd', '00000', 'x0')],
+      '立即值欄位固定 12 bits，1000 放得進去。超過 4095 就要換招，第六篇會講。注意整條指令還是 4 bytes，x86 卻用了 7。'),
+    RETA,
+  ],
+  idx: [
+    A('ldr x0, [x0, x1, lsl #3]', ['00','78','61','f8'], 'f8617800',
+      [F('size', '11', '64 位元'), F('', '111'), F('V', '0'), F('', '00'), F('opc', '01', 'load'), F('', '1'), F('Rm', '00001', 'x1'), F('option', '011', 'LSL'), F('S', '1', '×8'), F('', '10'), F('Rn', '00000', 'x0'), F('Rt', '00000', 'x0')],
+      'base + index×8 也塞進一條 4 byte 指令。但 S 只有 1 bit：要嘛不縮放、要嘛乘上存取大小，不像 x86 可以自選 1、2、4、8。'),
+    RETA,
+  ],
+  br: [
+    A('cmp x0, x1', ['1f','00','01','eb'], 'eb01001f',
+      [F('sf', '1'), F('op', '1', '減'), F('S', '1', '設 flags'), F('', '01011'), F('shift', '00'), F('', '0'), F('Rm', '00001', 'x1'), F('imm6', '000000'), F('Rn', '00000', 'x0'), F('Rd', '11111', 'xzr')],
+      'cmp 是 subs 的別名：做減法、設 flags、結果丟進 xzr（零暫存器）。Rd=11111 就是 xzr，沒有專門的 cmp 編碼。', 'subs xzr, x0, x1'),
+    A('b.ge +12', ['6a','00','00','54'], '5400006a',
+      [F('', '01010100', 'B.cond'), F('imm19', '0000000000000000011', '3 條 × 4 = +12'), F('', '0'), F('cond', '1010', 'GE')],
+      '位移以指令數計：3 條 × 4 bytes = 12。因為指令定長，位移不必存 byte 數，省下 2 bits 給更遠的跳轉。'),
+    A('mov w8, #1', ['28','00','80','52'], '52800028',
+      [F('sf', '0', '32 位元'), F('opc', '10', 'MOVZ'), F('', '100101'), F('hw', '00'), F('imm16', '0000000000000001', '= 1'), F('Rd', '01000', 'w8')],
+      'mov 立即值是 MOVZ：把 16 bits 放進暫存器、其餘清零。用 32 位元的 w8 就夠，高位本來就會被清掉。', 'movz w8, #1'),
+    A('str x8, [x2]', ['48','00','00','f9'], 'f9000048',
+      [F('size', '11'), F('', '111'), F('V', '0'), F('', '01'), F('opc', '00', 'store'), F('imm12', '000000000000', '位移 0'), F('Rn', '00010', 'x2'), F('Rt', '01000', 'x8')],
+      'ARM 不能把立即值直接存進記憶體，要先放進暫存器再 store。x86 一條 mov [rdx], 1 在這裡是兩條，8 bytes 對 7 bytes。'),
+    A('mov x0, xzr', ['e0','03','1f','aa'], 'aa1f03e0',
+      [F('sf', '1'), F('opc', '01', 'ORR'), F('', '01010'), F('shift', '00'), F('N', '0'), F('Rm', '11111', 'xzr'), F('imm6', '000000'), F('Rn', '11111', 'xzr'), F('Rd', '00000', 'x0')],
+      '歸零是 ORR x0, xzr, xzr：零暫存器 OR 零暫存器。沒有特殊指令，用通用指令加零暫存器組出來。', 'orr x0, xzr, xzr'),
+    RETA,
+  ],
+};
+
+// ---- RISC-V ----------------------------------------------------------------
+// Two steps per instruction: peek the low 2 bits of the first byte, then read the whole thing.
+const R = (asm, bytes, word, fields, say, alias = '') => ({ asm, alias, bytes, word, fields, say });
+const RET_C = R('c.jr ra', ['82','80'], '8082',
+  [F('funct4', '1000', 'C.JR'), F('rs1', '00001', 'ra'), F('rs2', '00000'), F('op', '10')],
+  'ret 其實是 c.jr ra：跳到 ra 存的位址。2 bytes，和 x86 的 ret 只差 1 byte。', 'ret');
+const RET_N = R('jalr x0, 0(ra)', ['67','80','00','00'], '00008067',
+  [F('imm', '000000000000', '位移 0'), F('rs1', '00001', 'ra'), F('funct3', '000'), F('rd', '00000', 'x0 丟掉'), F('opcode', '1100111', 'JALR')],
+  'ret 是 jalr x0, 0(ra)：跳到 ra，回傳位址寫進 x0 等於丟掉。沒有壓縮時要 4 bytes。', 'ret');
+
+const RVC = {
+  add: [
+    R('c.add a0, a1', ['2e','95'], '952e',
+      [F('funct4', '1001', 'C.ADD'), F('rd/rs1', '01010', 'a0'), F('rs2', '01011', 'a1'), F('op', '10')],
+      'CR 格式：rd 同時是來源一和目的，所以 16 bits 放得下兩個完整的 5 bit 暫存器編號。a0 = a0 + a1，2 bytes。'),
+    RET_C,
+  ],
+  imm: [
+    R('addi a0, a0, 1000', ['13','05','85','3e'], '3e850513',
+      [F('imm[11:0]', '001111101000', '= 1000'), F('rs1', '01010', 'a0'), F('funct3', '000'), F('rd', '01010', 'a0'), F('opcode', '0010011', 'OP-IMM')],
+      'I 格式，立即值 12 bits，1000 放得進去。壓縮版 c.addi 的立即值只有 6 bits（−32 到 31），所以這條退回 4 bytes。'),
+    RET_C,
+  ],
+  idx: [
+    R('c.slli a1, 3', ['8e','05'], '058e',
+      [F('funct3', '000', 'C.SLLI'), F('sh[5]', '0'), F('rd/rs1', '01011', 'a1'), F('sh[4:0]', '00011', '= 3'), F('op', '10')],
+      'RISC-V 沒有縮放定址，i×8 要自己左移 3 位。這是 x86 和 ARM 在一條指令裡順手做掉的事。'),
+    R('c.add a0, a1', ['2e','95'], '952e',
+      [F('funct4', '1001', 'C.ADD'), F('rd/rs1', '01010', 'a0'), F('rs2', '01011', 'a1'), F('op', '10')],
+      '再把 base 和位移相加。到這裡 RISC-V 用了兩條、4 bytes，x86 和 ARM 一條都還沒開始算。'),
+    R('c.ld a0, 0(a0)', ['08','61'], '6108',
+      [F('funct3', '011', 'C.LD'), F('uimm[5:3]', '000'), F("rs1'", '010', 'a0 = x10'), F('uimm[7:6]', '00'), F("rd'", '010', 'a0 = x10'), F('op', '00')],
+      "CL 格式只有 3 bits 放暫存器，只能用 x8 到 x15 這 8 個。a0 是 x10，剛好在範圍內；用到 x16 以上就得退回 4 bytes。三條共 6 bytes，對上 x86 和 ARM 各 4 bytes 一條。"),
+    RET_C,
+  ],
+  br: [
+    R('bge a0, a1, +8', ['63','54','b5','00'], '00b55463',
+      [F('imm[12]', '0'), F('imm[10:5]', '000000'), F('rs2', '01011', 'a1'), F('rs1', '01010', 'a0'), F('funct3', '101', 'BGE'), F('imm[4:1]', '0100', '→ +8'), F('imm[11]', '0'), F('opcode', '1100011', 'BRANCH')],
+      'B 格式：比較和跳轉是同一條指令，沒有 flags。立即值被拆成四段放在兩頭，是為了讓 rs1、rs2 和其他格式對齊，解碼器少幾個多工器。第四篇專門講這個。'),
+    R('c.li a0, 1', ['05','45'], '4505',
+      [F('funct3', '010', 'C.LI'), F('imm[5]', '0'), F('rd', '01010', 'a0'), F('imm[4:0]', '00001', '= 1'), F('op', '01')],
+      '載入小常數 1，6 bits 立即值放得下，2 bytes。'),
+    R('c.sd a0, 0(a2)', ['08','e2'], 'e208',
+      [F('funct3', '111', 'C.SD'), F('uimm[5:3]', '000'), F("rs1'", '100', 'a2 = x12'), F('uimm[7:6]', '00'), F("rs2'", '010', 'a0 = x10'), F('op', '00')],
+      '和 ARM 一樣，要先把 1 放進暫存器再 store。但兩條各 2 bytes，加起來 4，比 ARM 的 8 和 x86 的 7 都短。'),
+    R('c.li a0, 0', ['01','45'], '4501',
+      [F('funct3', '010', 'C.LI'), F('imm[5]', '0'), F('rd', '01010', 'a0'), F('imm[4:0]', '00000', '= 0'), F('op', '01')],
+      '回傳值歸零，2 bytes。'),
+    RET_C,
+  ],
+};
+
+const RVN = {
+  add: [
+    R('add a0, a1, a0', ['33','85','a5','00'], '00a58533',
+      [F('funct7', '0000000'), F('rs2', '01010', 'a0'), F('rs1', '01011', 'a1'), F('funct3', '000', 'ADD'), F('rd', '01010', 'a0'), F('opcode', '0110011', 'OP')],
+      'R 格式：三個暫存器欄位各 5 bits，位置和其他格式完全對齊。關掉 C 擴充，加法要 4 bytes。'),
+    RET_N,
+  ],
+  imm: [
+    R('addi a0, a0, 1000', ['13','05','85','3e'], '3e850513',
+      [F('imm[11:0]', '001111101000', '= 1000'), F('rs1', '01010', 'a0'), F('funct3', '000'), F('rd', '01010', 'a0'), F('opcode', '0010011', 'OP-IMM')],
+      'I 格式，立即值 12 bits。這條本來就沒有壓縮版，開不開 C 擴充都一樣。'),
+    RET_N,
+  ],
+  idx: [
+    R('slli a1, a1, 3', ['93','95','35','00'], '00359593',
+      [F('', '000000'), F('shamt', '000011', '= 3'), F('rs1', '01011', 'a1'), F('funct3', '001', 'SLLI'), F('rd', '01011', 'a1'), F('opcode', '0010011', 'OP-IMM')],
+      'RISC-V 沒有縮放定址，i×8 要自己左移 3 位。'),
+    R('add a0, a0, a1', ['33','05','b5','00'], '00b50533',
+      [F('funct7', '0000000'), F('rs2', '01011', 'a1'), F('rs1', '01010', 'a0'), F('funct3', '000', 'ADD'), F('rd', '01010', 'a0'), F('opcode', '0110011', 'OP')],
+      '再把 base 和位移相加。'),
+    R('ld a0, 0(a0)', ['03','35','05','00'], '00053503',
+      [F('imm[11:0]', '000000000000', '位移 0'), F('rs1', '01010', 'a0'), F('funct3', '011', 'LD'), F('rd', '01010', 'a0'), F('opcode', '0000011', 'LOAD')],
+      '三條各 4 bytes 共 12，是 x86 和 ARM 的三倍。沒有 C 擴充的 RISC-V 密度確實吃虧。'),
+    RET_N,
+  ],
+  br: [
+    R('bge a0, a1, +12', ['63','56','b5','00'], '00b55663',
+      [F('imm[12]', '0'), F('imm[10:5]', '000000'), F('rs2', '01011', 'a1'), F('rs1', '01010', 'a0'), F('funct3', '101', 'BGE'), F('imm[4:1]', '0110', '→ +12'), F('imm[11]', '0'), F('opcode', '1100011', 'BRANCH')],
+      'B 格式：比較和跳轉是同一條，沒有 flags。位移變成 +12，因為要跳過的兩條指令現在各 4 bytes。'),
+    R('addi a0, x0, 1', ['13','05','10','00'], '00100513',
+      [F('imm[11:0]', '000000000001', '= 1'), F('rs1', '00000', 'x0'), F('funct3', '000'), F('rd', '01010', 'a0'), F('opcode', '0010011', 'OP-IMM')],
+      'li 是 addi a0, x0, 1：x0 永遠是零，零加 1 就是 1。沒有專門的「載入常數」指令。', 'li a0, 1'),
+    R('sd a0, 0(a2)', ['23','30','a6','00'], '00a63023',
+      [F('imm[11:5]', '0000000'), F('rs2', '01010', 'a0'), F('rs1', '01100', 'a2'), F('funct3', '011', 'SD'), F('imm[4:0]', '00000'), F('opcode', '0100011', 'STORE')],
+      'S 格式：位移拆成兩段，讓 rs1、rs2 留在和 R 格式相同的位置。'),
+    R('addi a0, x0, 0', ['13','05','00','00'], '00000513',
+      [F('imm[11:0]', '000000000000', '= 0'), F('rs1', '00000', 'x0'), F('funct3', '000'), F('rd', '01010', 'a0'), F('opcode', '0010011', 'OP-IMM')],
+      '回傳值歸零：x0 加 0。', 'li a0, 0'),
+    RET_N,
+  ],
+};
+
+// ---- cases -----------------------------------------------------------------
+const CASES = [
+  { id: 'add', title: 'a + b', c: 'long add(long a, long b) {\n  return a + b;\n}',
+    hint: '最小的案例：一個加法、一個 return。看三邊各用幾個 byte 做完這兩件事。' },
+  { id: 'imm', title: 'a + 1000', c: 'long add1000(long a) {\n  return a + 1000;\n}',
+    hint: '常數 1000 要寫進指令裡。看三邊各給立即值留了幾個 bit，用不完的怎麼辦。' },
+  { id: 'idx', title: 'arr[i]', c: 'long load(long *arr, long i) {\n  return arr[i];\n}',
+    hint: '位址是 arr + i×8。x86 和 ARM 在一條指令裡算完，RISC-V 要三條。' },
+  { id: 'br', title: 'if (a < b)', c: 'long f(long a, long b, long *p) {\n  if (a < b) *p = 1;\n  return 0;\n}',
+    hint: '一個比較、一個跳轉、一個 store、一個歸零。x86 最長的一條在這裡。' },
+];
+
+// ---- flatten each lane into steps --------------------------------------------
+function x86Steps(insns) {
+  const out = [];
+  insns.forEach((ins, ii) => {
+    ins.bytes.forEach((st, bi) => {
+      out.push({ ii, upto: bi + 1, tag: st.tag, len: st.len, say: st.say,
+        fields: ins.bytes.slice(0, bi + 1).flatMap(s => s.fields) });
+    });
+  });
+  return out;
+}
+function armSteps(insns) {
+  return insns.map((ins, ii) => ({ ii, upto: 4, tag: '', len: 4, say: ins.say, fields: ins.fields }));
+}
+function rvSteps(insns) {
+  const out = [];
+  insns.forEach((ins, ii) => {
+    const n = ins.bytes.length;
+    const lo = parseInt(ins.bytes[0], 16) & 3;
+    const lo2 = lo.toString(2).padStart(2, '0');
+    const peekSay = n === 2
+      ? `先看第 1 個 byte 的最低 2 bits：${lo2}，不是 11，所以這是 16 位元的壓縮指令。只讀 1 個 byte 就知道長度是 2。`
+      : `先看第 1 個 byte 的最低 2 bits：11，所以是 32 位元指令（bits[4:2] 不是 111，不是更長的保留編碼）。長度 4。`;
+    out.push({ ii, upto: 1, peek: true, tag: 'op', len: n, say: peekSay, fields: [F('op[1:0]', lo2, n === 2 ? '≠ 11 → 2 bytes' : '= 11 → 4 bytes')] });
+    out.push({ ii, upto: n, tag: '', len: n, say: ins.say, fields: ins.fields });
+  });
+  return out;
+}
+
+// ---- state + render --------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const state = { ci: 0, rvc: true, k: 0 };
+let lanes = [];
+
+function buildLanes() {
+  const c = CASES[state.ci];
+  lanes = [
+    { id: 'x86', name: 'x86-64', sub: '1–15 bytes', insns: X86[c.id], steps: x86Steps(X86[c.id]) },
+    { id: 'arm', name: 'AArch64', sub: '固定 4 bytes', insns: ARM[c.id], steps: armSteps(ARM[c.id]) },
+    { id: 'rv', name: state.rvc ? 'RV64GC' : 'RV64G', sub: state.rvc ? '2 或 4 bytes' : '固定 4 bytes', insns: (state.rvc ? RVC : RVN)[c.id], steps: rvSteps((state.rvc ? RVC : RVN)[c.id]) },
+  ];
+}
+const total = () => Math.max(...lanes.map(l => l.steps.length));
+
+function renderPresets() {
+  const p = $('presets');
+  CASES.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.ci = i; state.k = 0; buildLanes(); renderAll(); });
+    p.insertBefore(b, p.querySelector('.sp'));
+  });
+}
+
+function renderLaneShell() {
+  const host = $('lanes');
+  host.innerHTML = '';
+  lanes.forEach(l => {
+    const el = document.createElement('div');
+    el.className = 'lane'; el.id = 'lane-' + l.id;
+    el.innerHTML = `
+      <div class="lane-head"><span class="lane-name">${l.name}<span class="lane-sub">${l.sub}</span></span><span class="tag idle" data-r="tag"></span></div>
+      <div class="listing" data-r="listing"></div>
+      <div class="fieldbox"><p class="panel-title">目前這條的欄位</p><div class="fields" data-r="fields"></div></div>
+      <p class="say" data-r="say" aria-live="polite"></p>`;
+    host.appendChild(el);
+  });
+}
+
+function renderLane(l) {
+  const el = $('lane-' + l.id);
+  const p = Math.min(state.k, l.steps.length);
+  const cur = p > 0 ? l.steps[p - 1] : null;
+  const finished = p === l.steps.length && state.k > 0;
+
+  // tag
+  const tag = el.querySelector('[data-r=tag]');
+  if (!cur) { tag.className = 'tag idle'; tag.textContent = '尚未讀取'; }
+  else if (cur.len == null) { tag.className = 'tag miss'; tag.textContent = '長度未知'; }
+  else { tag.className = 'tag hit'; tag.textContent = `長度 ${cur.len} bytes`; }
+
+  // listing
+  const listing = el.querySelector('[data-r=listing]');
+  listing.innerHTML = '';
+  l.insns.forEach((ins, ii) => {
+    const row = document.createElement('div');
+    const isOn = cur && cur.ii === ii;
+    const isDone = cur && cur.ii > ii;
+    row.className = 'ins' + (isOn && !isDone ? ' on' : '') + (isDone ? ' done' : '');
+    const bytes = l.id === 'x86' ? ins.bytes.map(b => b.b) : ins.bytes;
+    const cells = bytes.map((b, bi) => {
+      let cls = 'byte', label = '';
+      if (isDone) {
+        cls += ' got';
+        label = l.id === 'x86' ? ins.bytes[bi].tag : '';
+      } else if (isOn) {
+        if (bi < cur.upto) {
+          if (cur.peek && bi === 0) { cls += ' peek'; label = 'op'; }
+          else { cls += ' got'; label = l.id === 'x86' ? ins.bytes[bi].tag : ''; }
+        }
+      }
+      return `<span class="${cls}">${b}<small>${label}</small></span>`;
+    }).join('');
+    const alias = ins.alias ? `<small>; ${ins.alias}</small>` : '';
+    row.innerHTML = `<code class="asm">${ins.asm}${alias}</code><div class="bytes">${cells}</div>`;
+    listing.appendChild(row);
+  });
+
+  // fields
+  const fb = el.querySelector('[data-r=fields]');
+  if (!cur) { fb.innerHTML = '<span class="empty">還沒讀任何 byte。</span>'; }
+  else {
+    fb.innerHTML = cur.fields.map(f => `<span class="field" style="--w:${f.w}"><span class="k">${f.k || '&nbsp;'}</span><span class="v">${f.v}</span><span class="n">${f.n || '&nbsp;'}</span></span>`).join('');
+    if (cur.len == null) fb.innerHTML += `<span class="field pend" style="--w:4"><span class="k">之後</span><span class="v">?</span><span class="n">長度未定</span></span>`;
+  }
+
+  // say
+  const say = el.querySelector('[data-r=say]');
+  if (!cur) say.textContent = '按「下一步」開始餵 byte。';
+  else say.textContent = cur.say + (finished && state.k > l.steps.length ? ' 這邊解完了，等其他兩個。' : '');
+}
+
+function renderAll() {
+  const c = CASES[state.ci];
+  $('csrc').textContent = c.c;
+  $('hint').textContent = c.hint;
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.ci));
+  const T = total();
+  $('step-range').max = T; $('step-range').value = state.k;
+  $('count').textContent = `第 ${state.k} / ${T} 步`;
+  $('btn-prev').disabled = state.k === 0;
+  $('btn-next').disabled = state.k >= T;
+  renderLaneShell();
+  lanes.forEach(renderLane);
+  renderResult();
+}
+
+function renderResult() {
+  const tb = $('result').querySelector('tbody');
+  const rv = state.rvc ? RVC : RVN;
+  $('rv-col').textContent = state.rvc ? 'RV64GC' : 'RV64G';
+  const sum = { x: [0, 0], a: [0, 0], r: [0, 0] };
+  const row = (insns, lane) => {
+    const bytes = insns.reduce((s, i) => s + i.bytes.length, 0);
+    const n = insns.length;
+    sum[lane][0] += bytes; sum[lane][1] += n;
+    return `<td class="num">${bytes} / ${n}</td>`;
+  };
+  tb.innerHTML = CASES.map(c =>
+    `<tr><td class="name">${c.title}</td>${row(X86[c.id], 'x')}${row(ARM[c.id], 'a')}${row(rv[c.id], 'r')}</tr>`
+  ).join('') + `<tr class="total"><td class="name">合計</td><td class="num">${sum.x[0]} / ${sum.x[1]}</td><td class="num">${sum.a[0]} / ${sum.a[1]}</td><td class="num">${sum.r[0]} / ${sum.r[1]}</td></tr>`;
+}
+
+$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
+$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
+$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
+$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
+$('rvc').addEventListener('change', e => { state.rvc = e.target.checked; state.k = Math.min(state.k, 0); buildLanes(); renderAll(); });
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+  if (e.key === 'ArrowRight') $('btn-next').click();
+  if (e.key === 'ArrowLeft') $('btn-prev').click();
+});
+
+renderPresets();
+buildLanes();
+renderAll();
+</script>
+</body>
+</html>

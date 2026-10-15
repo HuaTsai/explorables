@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>micro-op：複雜指令進了核心變成什麼</title>
+<meta name="description" content="同一段 C 在 x86-64、AArch64、RISC-V 上的指令，逐條餵進前端，看每條被拆成幾個 micro-op。可切換 Skylake、Zen 4、Apple M1、Neoverse V2 的模型。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the workbench has the C source and global controls on top,
+   then three lanes (one per ISA) each with a CPU-model switch, the listing, the µop queue
+   that fills as instructions are decoded, and one sentence per step. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 讀取 */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* 寫入 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;         /* 目前這一條 / 跳轉 */
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.foot { color: var(--muted); font-size: 0.85rem; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* tables */
+.table-wrap { overflow-x: auto; }
+table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; min-width: 40rem; width: 100%; }
+.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.cmp th small { display: block; font-weight: 400; }
+.cmp td.name { font-weight: 700; white-space: nowrap; }
+.cmp td.num { font-family: var(--font-mono); font-size: 0.85rem; white-space: nowrap; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.88rem; }
+
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
+@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.75; background: var(--bg); border-radius: 4px; overflow-x: auto; white-space: pre; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+
+/* lanes */
+.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
+.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
+.lane-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.4rem 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
+.lane-name { font-weight: 700; font-size: 0.95rem; }
+.cpus { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.cpus button { font-size: 0.75rem; padding: 0.1rem 0.5rem; }
+.cpus .one { font-size: 0.75rem; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0.1rem 0.5rem; }
+
+.listing { padding: 0.5rem 0.75rem; display: flex; flex-direction: column; gap: 0.2rem; background: var(--bg); overflow-x: auto; }
+.ins { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.2rem 0.5rem; border-radius: 4px; border: 1px solid transparent; }
+.ins.on { background: var(--mark); border-color: var(--line); }
+.ins.done { color: var(--muted); }
+.ins .asm { font-family: var(--font-mono); font-size: 0.8rem; white-space: nowrap; }
+.ins .n { font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); white-space: nowrap; min-width: 3.5em; text-align: right; }
+.ins.on .n, .ins.done .n { color: var(--ink); }
+.ins.done .n { color: var(--muted); }
+
+.qbox { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); min-height: 6.2rem; }
+.qhead { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+.qhead .stat { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+.queue { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.uop { font-family: var(--font-mono); font-size: 0.68rem; font-weight: 600; line-height: 1.3; padding: 0.25rem 0.4rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); white-space: nowrap; }
+.uop.load { background: var(--hit-soft); border-color: var(--hit); }
+.uop.store, .uop.sa, .uop.sd { background: var(--miss-soft); border-color: var(--miss); }
+.uop.br { background: var(--mark); }
+.uop.mop { border-color: var(--ink); border-style: dashed; }
+.uop.new { outline: 2px solid var(--ink); outline-offset: 1px; }
+.queue .empty { color: var(--muted); font-size: 0.85rem; }
+.say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 6.4em; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; align-items: center; font-size: 0.8rem; color: var(--muted); }
+.legend .uop { font-size: 0.65rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← ISA 比較</a>
+    <h1><span class="mono">micro-op</span> 複雜指令進了核心變成什麼</h1>
+    <p class="lead">現代 CPU 核心不直接執行你看到的指令。前端把每一條翻成一到數個 micro-op，後端只看 micro-op。按「下一步」把同一段 C 的三種機器碼一條一條送進前端，看每條被拆成幾個、拆成什麼。</p>
+  </header>
+
+  <section class="prose">
+    <h2>指令是契約，µop 是實作</h2>
+    <p>x86 的 <code>inc qword ptr [rdi + rsi*8]</code> 一條指令要讀記憶體、加一、再寫回去。核心裡沒有一個單元能一口氣做完這三件事，所以前端的解碼器把它拆成幾個簡單操作：讀取、ALU、寫入。這些簡單操作就是 <strong>micro-op</strong>（µop），長得很像 RISC 指令。後端的排程器、執行單元、重排序緩衝只認得 µop，不知道原本的指令長什麼樣。</p>
+    <p>AArch64 和 RISC-V 的指令本來就接近 µop，但也不是一對一。AArch64 的 <code>stp x30, x19, [sp, #-16]!</code> 存兩個暫存器還順便更新 sp，在 Apple M1 上拆成 3 個 µop。反過來，x86 和 ARM 的核心都會把「比較 + 條件跳轉」兩條指令<strong>合併</strong>成一個 µop（macro-fusion）。拆和合在三邊都會發生。</p>
+    <p>重點是：µop 數是<strong>微架構</strong>的屬性，不是 ISA 的屬性。同一條 x86 指令在 Intel Skylake 和 AMD Zen 4 上拆法不同，同一條 AArch64 指令在 Apple M1 和 ARM Neoverse V2 上也不同。所以下面每條帶子都標明 CPU 模型，可以切換。數字來自 <code>llvm-mca</code>（LLVM 23）的排程模型，它是 LLVM 為了做指令排程而維護的近似，不是晶片廠的官方數據；RISC-V 用 SiFive P550 的模型，因為它是 llvm-mca 裡少數有亂序核心模型的 RISC-V 核心。</p>
+  </section>
+
+  <section class="bench" aria-label="逐步解碼">
+    <div class="row presets" id="presets"><span class="lbl">案例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">C 原始碼</p>
+        <pre class="code" id="csrc"></pre>
+        <p class="hint" id="hint"></p>
+      </div>
+      <div>
+        <p class="panel-title">前端</p>
+        <div class="controls">
+          <button id="btn-reset" type="button">重來</button>
+          <button id="btn-prev" type="button">上一步</button>
+          <button id="btn-next" type="button" class="primary">下一步</button>
+          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count" id="count"></span>
+        </div>
+        <p class="hint">每一步，三個前端各解碼一條指令，把它展開的 µop 推進右下方的佇列。指令數少的 ISA 先解完就停下來等。</p>
+        <div class="legend" style="margin-top:0.6rem">
+          <span class="uop load">LOAD</span><span class="uop store">STORE</span><span class="uop sa">ST-ADDR</span><span class="uop sd">ST-DATA</span><span class="uop">ALU</span><span class="uop br">BR</span><span class="uop mop">M-OP</span>
+          <span>M-OP 是 AMD 的 macro-op：一個就能帶著讀寫一路走到執行階段。</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="row lanes" id="lanes"></div>
+  </section>
+
+  <section class="prose">
+    <h2>三個案例跑完的結果</h2>
+    <p>格式：指令數 → µop 數。同一欄從上往下比是 ISA 的差異，同一列左右比是微架構的差異。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp" id="result">
+      <thead><tr><th>案例</th><th>x86-64<small>Skylake</small></th><th>x86-64<small>Zen 4</small></th><th>AArch64<small>Apple M1</small></th><th>AArch64<small>Neoverse V2</small></th><th>RV64GC<small>SiFive P550</small></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="foot">Zen 4 那欄全部等於指令數，因為 AMD 的計數單位是 macro-op，一個 macro-op 可以包含讀取、運算、寫入，到了執行階段才分給不同單元。Intel 的 Skylake 模型數的是拆開後的 µop。兩家的數字不能直接相減。</p>
+
+  <section class="prose">
+    <h2>看完可以帶走的三句話</h2>
+    <ol>
+      <li><strong>ISA 是契約，µop 是實作，CISC 的複雜度被前端吸收掉了。</strong>x86 一條讀改寫指令進了核心，後端看到的和 RISC-V 的四條指令幾乎一樣。這是「x86 跑得慢」這個直覺不成立的原因：執行階段大家做的事差不多。</li>
+      <li><strong>吸收不是免費的。</strong>x86 的解碼器要處理變長指令、前綴、ModRM，面積和功耗明顯大於 ARM 的解碼器，這是 ARM 陣營最常用的論點。Intel 和 AMD 的回答是 µop cache：解過一次的 µop 存起來，迴圈裡的指令不再經過解碼器。Apple 和 ARM 的核心也有類似的結構，但解碼器本身簡單得多。</li>
+      <li><strong>RISC 也會拆、也會合。</strong>AArch64 的 stp 帶 pre-index 拆成 3 個，Apple M1 把帶縮放的定址拆成 2 個，而 cmp + 分支在 x86 和 ARM 上都會合併成 1 個。RISC-V 的 bge 一條就是 1 個 µop，不需要合併，但 call 偽指令本來就是兩條。「指令數等於 µop 數」在三邊都不成立。</li>
+    </ol>
+  </section>
+
+  <section class="prose">
+    <h2>這個模型省略了什麼</h2>
+    <ul>
+      <li><strong>µop 的類型是我依指令語意標的。</strong>llvm-mca 只給每條指令的 µop 數量，不說哪個是讀、哪個是寫。頁面上 LOAD、ST-ADDR、ALU 這些標籤是依指令做什麼推斷出來的合理拆法，不是晶片廠公布的。</li>
+      <li><strong>macro-fusion 沒有反映在數字裡。</strong>Intel 從 Core 2、AMD 從 Zen、Apple 從 A 系列起都會把 cmp + 條件跳轉合成 1 個 µop，llvm-mca 的 instruction info 不計算這件事，所以「if (a &lt; b)」案例裡 x86 和 ARM 的 µop 數各多算了 1。</li>
+      <li><strong>Intel 的融合域與未融合域。</strong>Skylake 的 inc [mem] 實際是 4 個未融合 µop（load、ALU、store-address、store-data），前端把 load+ALU、store-address+store-data 各融合成一個，在 µop cache 和重排序緩衝裡算 2 個。llvm-mca 的 Skylake 模型給 3，介於兩者之間。要精確數字請查 uops.info 的實測。</li>
+      <li><strong>µop cache 與 loop stream detector。</strong>這裡每條指令都經過解碼器。真實核心在迴圈裡大部分時間從 µop cache 取指，解碼器閒置，x86 的解碼劣勢在那時候不存在。</li>
+      <li><strong>排程 port 與延遲。</strong>µop 進了佇列之後要分配到哪個執行單元、等多少 cycle，這一頁不講。llvm-mca 的 timeline view 可以看。</li>
+      <li><strong>RISC-V 高效能核心的公開資料很少。</strong>P550 模型裡每條指令都是 1 個 µop、store 不拆，這反映的是 SiFive 沒有公開細節，不代表硬體真的這樣做。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+// ---- helpers ------------------------------------------------------------
+// U(ops, say): one instruction's decode result on one CPU model. ops are µop type keys.
+const U = (ops, say) => ({ ops, say });
+const L = 'load', S = 'store', SA = 'sa', SD = 'sd', A = 'alu', B = 'br', M = 'mop';
+const LABEL = { load: 'LOAD', store: 'STORE', sa: 'ST-ADDR', sd: 'ST-DATA', alu: 'ALU', br: 'BR', mop: 'M-OP' };
+
+// Each instruction: { asm, m: { <cpu>: U } }. CPU keys: skl, zen (x86); m1, v2 (arm); p550 (rv).
+const I = (asm, m) => ({ asm, m });
+const both = (a, b, u) => ({ [a]: u, [b]: u });
+
+// x86 shared instructions
+const RET86 = I('ret', { skl: U([L, B, A], 'ret 要從堆疊讀回傳位址再跳。Skylake 模型給 3 個 µop：讀取、跳轉、堆疊指標更新。'), zen: U([M], 'Zen 4 模型：1 個 macro-op，讀取和跳轉包在一起。') });
+
+// ---- presets -----------------------------------------------------------------
+const PRESETS = [
+  { id: 'rmw', title: 'p[i] += 1', c: 'void f(long *p, long i) {\n  p[i] += 1;\n}',
+    hint: '讀改寫。x86 一條指令做完，進了核心會變成什麼。',
+    x86: [
+      I('inc qword ptr [rdi + rsi*8]', {
+        skl: U([L, A, S], '一條指令包了讀、加、寫三件事。Skylake 模型拆成 3 個 µop：讀取、ALU、寫入。Intel 實際是 4 個未融合 µop，前端融合成 2 個，模型的 3 介於其間。'),
+        zen: U([M], 'Zen 4 模型給 1。AMD 的計數單位是 macro-op，一個 macro-op 可以帶著讀和寫一路走到執行階段才分開。同一條指令，兩家的數字不能直接比。') }),
+      RET86,
+    ],
+    arm: [
+      I('ldr x8, [x0, x1, lsl #3]', {
+        m1: U([A, L], 'M1 模型：帶縮放的定址拆成 2 個 µop，先算位址再讀。簡單的 [x0, #8] 定址只要 1 個。'),
+        v2: U([L], 'Neoverse V2 模型：1 個 µop，位址計算在 load 單元裡做完。同一條指令，兩家拆法不同。') }),
+      I('add x8, x8, #1', both('m1', 'v2', U([A], '1 個 ALU µop。RISC 指令最單純的樣子。'))),
+      I('str x8, [x0, x1, lsl #3]', {
+        m1: U([SA, SD], 'M1 模型：store 是 2 個，算位址和送資料分開。x86 核心也是這樣拆 store。'),
+        v2: U([SA, SD], 'V2 模型：2 個，store-address 和 store-data。這點 ARM 核心和 x86 核心做法一致。') }),
+      I('ret', both('m1', 'v2', U([B], 'AArch64 的 ret 不碰記憶體，回傳位址在 x30 裡，1 個 µop。x86 的 ret 要先從堆疊讀。'))),
+    ],
+    rv: [
+      I('slli a1, a1, 3', { p550: U([A], '1 個 µop。RISC-V 沒有縮放定址，位移要自己算。') }),
+      I('add a0, a0, a1', { p550: U([A], '1 個 µop。到這裡 RISC-V 用了兩條指令做 x86 用 SIB byte 一個 byte 表達的事，但 x86 進了核心也是要算這個位址。') }),
+      I('ld a1, 0(a0)', { p550: U([L], '1 個 µop，讀取。') }),
+      I('addi a1, a1, 1', { p550: U([A], '1 個 µop，加一。') }),
+      I('sd a1, 0(a0)', { p550: U([S], 'P550 模型給 1 個，沒有拆成 store-address 和 store-data。這是模型粗細的差別，SiFive 沒有公開那麼細的資料。') }),
+      I('ret', { p550: U([B], '1 個 µop。六條指令，六個 µop，RISC-V 的指令和 µop 在這個模型裡就是同一件事。') }),
+    ],
+  },
+  { id: 'br', title: 'if (a < b)', c: 'long f(long a, long b, long *p) {\n  if (a < b) *p = 1;\n  return 0;\n}',
+    hint: '比較加分支。看 x86 和 ARM 兩條指令的事，RISC-V 一條做掉，以及 macro-fusion 的缺席。',
+    x86: [
+      I('cmp rdi, rsi', both('skl', 'zen', U([A], 'cmp 是 1 個 ALU µop，結果寫進 flags。'))),
+      I('jge .L2', both('skl', 'zen', U([B], 'jge 1 個 branch µop。實際上 Intel 從 Core 2、AMD 從 Zen 起都會把 cmp + jcc 融合成 1 個（macro-fusion），llvm-mca 的 instruction info 沒反映，所以這裡算成 2。'))),
+      I('mov qword ptr [rdx], 1', {
+        skl: U([S], 'Skylake 模型給 1 個（融合域）。實際是 store-address 和 store-data 兩個未融合 µop。'),
+        zen: U([M], 'Zen 4：1 個 macro-op。') }),
+      I('xor eax, eax', both('skl', 'zen', U([A], 'xor eax, eax 是歸零慣用法。模型算 1 個 µop，但重新命名階段會直接把它消掉，不佔執行單元，延遲是 0。'))),
+      RET86,
+    ],
+    arm: [
+      I('cmp x0, x1', both('m1', 'v2', U([A], 'cmp 是 subs 寫進 xzr，1 個 µop，結果進 NZCV flags。'))),
+      I('b.ge .L2', both('m1', 'v2', U([B], 'b.ge 1 個。Apple 核心和 Neoverse 都會把 cmp + b.cond 融合成 1 個，和 x86 一樣，llvm-mca 這裡也沒反映。'))),
+      I('mov w8, #1', both('m1', 'v2', U([A], '1 個 ALU µop，載入常數。'))),
+      I('str x8, [x2]', {
+        m1: U([S], 'M1 模型：簡單定址的 store 算 1 個，上一個案例帶縮放的 store 才拆成 2 個。'),
+        v2: U([SA, SD], 'V2 模型：store 固定 2 個，不管定址簡不簡單。') }),
+      I('mov x0, xzr', {
+        m1: U([A], '歸零。M1 模型 1 個 µop。'),
+        v2: U([A], 'V2 模型延遲 0：mov 由重新命名階段消掉，和 x86 的 xor eax, eax 同一招。') }),
+      I('ret', both('m1', 'v2', U([B], '1 個 µop。'))),
+    ],
+    rv: [
+      I('bge a0, a1, .L2', { p550: U([B], 'bge 一條就是比較加跳轉，1 個 µop。x86 和 ARM 要靠 macro-fusion 才能達到同樣的 1 個，RISC-V 從 ISA 層就是 1 個。') }),
+      I('li a0, 1', { p550: U([A], '1 個 µop。') }),
+      I('sd a0, 0(a2)', { p550: U([S], '1 個 µop。') }),
+      I('li a0, 0', { p550: U([A], '1 個 µop。') }),
+      I('ret', { p550: U([B], '1 個 µop。五條指令，五個 µop。') }),
+    ],
+  },
+  { id: 'call', title: '跨 call 保住 x', c: 'void g(void);\nlong f(long x) {\n  g();\n  return x;\n}',
+    hint: '要跨過一次 call 保住 x，三邊各自怎麼存堆疊。x86 的 push/call/pop 和 AArch64 的 stp/ldp 都是「一條指令、多個 µop」。',
+    x86: [
+      I('push rbx', {
+        skl: U([SA, SD, A], '要跨 call 保住 x，先把 rbx 存進堆疊。push 一條做三件事：算位址、存資料、sp 減 8，模型給 3 個 µop。Intel 實際有 stack engine 把 sp 更新吸掉，融合域算 1。'),
+        zen: U([M], 'Zen 4：1 個 macro-op。') }),
+      I('mov rbx, rdi', both('skl', 'zen', U([A], '1 個 µop，x 搬進 rbx。'))),
+      I('call g', {
+        skl: U([SA, SD, A, B], 'call 把回傳位址推進堆疊再跳：存位址、存資料、sp 更新、跳轉，模型給 4 個。這是 x86 單條指令 µop 數最多的一條。'),
+        zen: U([M], 'Zen 4：1 個 macro-op。') }),
+      I('mov rax, rbx', both('skl', 'zen', U([A], '1 個 µop，x 搬回 rax 當回傳值。'))),
+      I('pop rbx', {
+        skl: U([L, A], '讀回 rbx、sp 加 8，2 個。'),
+        zen: U([M], 'Zen 4：1 個 macro-op。') }),
+      RET86,
+    ],
+    arm: [
+      I('stp x30, x19, [sp, #-16]!', {
+        m1: U([SA, SD, A], '一條 stp 存兩個暫存器，還順便把 sp 減 16（pre-index 寫回）。M1 模型 3 個 µop：store-address、store-data、sp 寫回。這是 RISC 指令被拆開的典型例子。'),
+        v2: U([SA, SD, A], 'V2 模型也是 3 個：store-address、store-data、sp 寫回。') }),
+      I('mov x19, x0', both('m1', 'v2', U([A], '1 個 µop，x 搬進 callee-saved 的 x19。'))),
+      I('bl g', {
+        m1: U([B], 'bl 把回傳位址寫進 x30 再跳。M1 模型 1 個 µop，不碰記憶體。'),
+        v2: U([B, A], 'V2 模型 2 個：跳轉和寫 x30 分開。同一條指令，兩家又不同。') }),
+      I('mov x0, x19', both('m1', 'v2', U([A], '1 個 µop。'))),
+      I('ldp x30, x19, [sp], #16', both('m1', 'v2', U([L, L, A], 'ldp 讀兩個暫存器再把 sp 加 16（post-index），3 個 µop。'))),
+      I('ret', both('m1', 'v2', U([B], '1 個 µop。六條指令，M1 上 10 個、V2 上 11 個 µop。'))),
+    ],
+    rv: [
+      I('addi sp, sp, -16', { p550: U([A], '沒有 push，自己把 sp 減 16。1 個 µop。') }),
+      I('sd ra, 8(sp)', { p550: U([S], '回傳位址在 ra 裡，要跨 call 就得自己存進堆疊。1 個 µop。') }),
+      I('sd s0, 0(sp)', { p550: U([S], '存 callee-saved 的 s0。1 個 µop。') }),
+      I('mv s0, a0', { p550: U([A], 'x 搬進 s0。1 個 µop。') }),
+      I('call g', { p550: U([A, B], 'call 是偽指令，展開成 auipc + jalr 兩條真實指令，所以這裡的 2 不是拆解，本來就是兩條。連結器放鬆後可縮成一條 jal。') }),
+      I('mv a0, s0', { p550: U([A], '1 個 µop。') }),
+      I('ld ra, 8(sp)', { p550: U([L], '讀回 ra。1 個 µop。') }),
+      I('ld s0, 0(sp)', { p550: U([L], '讀回 s0。1 個 µop。') }),
+      I('addi sp, sp, 16', { p550: U([A], '把 sp 加回去。1 個 µop。') }),
+      I('ret', { p550: U([B], '1 個 µop。十條指令、11 個 µop。x86 六條、AArch64 六條做同一件事，進了核心大家都是十個上下。') }),
+    ],
+  },
+];
+
+const LANES = [
+  { id: 'x86', name: 'x86-64', cpus: [['skl', 'Skylake'], ['zen', 'Zen 4']] },
+  { id: 'arm', name: 'AArch64', cpus: [['m1', 'Apple M1'], ['v2', 'Neoverse V2']] },
+  { id: 'rv', name: 'RV64GC', cpus: [['p550', 'SiFive P550']] },
+];
+
+// ---- state + render --------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const state = { pi: 0, k: 0, cpu: { x86: 'skl', arm: 'm1', rv: 'p550' } };
+const preset = () => PRESETS[state.pi];
+const insns = lane => preset()[lane.id];
+const total = () => Math.max(...LANES.map(l => insns(l).length));
+const countUops = (list, cpu) => list.reduce((s, i) => s + i.m[cpu].ops.length, 0);
+
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.pi = i; state.k = 0; renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderLaneShell() {
+  const host = $('lanes');
+  host.innerHTML = '';
+  LANES.forEach(l => {
+    const el = document.createElement('div');
+    el.className = 'lane'; el.id = 'lane-' + l.id;
+    const cpuBtns = l.cpus.length > 1
+      ? l.cpus.map(([k, name]) => `<button type="button" data-cpu="${k}" class="${state.cpu[l.id] === k ? 'chosen' : ''}">${name}</button>`).join('')
+      : `<span class="one">${l.cpus[0][1]}</span>`;
+    el.innerHTML = `
+      <div class="lane-head"><span class="lane-name">${l.name}</span><span class="cpus">${cpuBtns}</span></div>
+      <div class="listing" data-r="listing"></div>
+      <div class="qbox"><div class="qhead"><p class="panel-title">µop 佇列</p><span class="stat" data-r="stat"></span></div><div class="queue" data-r="queue"></div></div>
+      <p class="say" data-r="say" aria-live="polite"></p>`;
+    el.querySelectorAll('button[data-cpu]').forEach(b => b.addEventListener('click', () => { state.cpu[l.id] = b.dataset.cpu; renderAll(); }));
+    host.appendChild(el);
+  });
+}
+
+function renderLane(l) {
+  const el = $('lane-' + l.id);
+  const cpu = state.cpu[l.id];
+  const list = insns(l);
+  const p = Math.min(state.k, list.length);
+  const cur = p > 0 ? list[p - 1] : null;
+  const waiting = state.k > list.length;
+
+  // listing
+  const listing = el.querySelector('[data-r=listing]');
+  listing.innerHTML = list.map((ins, ii) => {
+    const on = ii === p - 1, done = ii < p - 1;
+    const n = ii < p ? `${ins.m[cpu].ops.length} µop` : '';
+    return `<div class="ins${on ? ' on' : ''}${done ? ' done' : ''}"><code class="asm">${ins.asm}</code><span class="n">${n}</span></div>`;
+  }).join('');
+
+  // queue
+  const q = el.querySelector('[data-r=queue]');
+  if (p === 0) q.innerHTML = '<span class="empty">還沒解碼任何指令。</span>';
+  else q.innerHTML = list.slice(0, p).flatMap((ins, ii) =>
+    ins.m[cpu].ops.map(o => `<span class="uop ${o}${ii === p - 1 ? ' new' : ''}">${LABEL[o]}</span>`)).join('');
+
+  // stat
+  const stat = el.querySelector('[data-r=stat]');
+  const u = countUops(list.slice(0, p), cpu);
+  stat.textContent = p === 0 ? '' : `${p} 條 → ${u} µop${p === list.length ? `，${(u / p).toFixed(2)} µop/條` : ''}`;
+
+  // say
+  const say = el.querySelector('[data-r=say]');
+  if (!cur) say.textContent = '按「下一步」送第一條指令進解碼器。';
+  else say.textContent = cur.m[cpu].say + (waiting ? ' 這邊解完了，等其他兩個。' : '');
+}
+
+function renderAll() {
+  const c = preset();
+  $('csrc').textContent = c.c;
+  $('hint').textContent = c.hint;
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi));
+  const T = total();
+  $('step-range').max = T; $('step-range').value = state.k;
+  $('count').textContent = `第 ${state.k} / ${T} 步`;
+  $('btn-prev').disabled = state.k === 0;
+  $('btn-next').disabled = state.k >= T;
+  renderLaneShell();
+  LANES.forEach(renderLane);
+}
+
+function renderResult() {
+  const tb = $('result').querySelector('tbody');
+  const cell = (list, cpu) => `<td class="num">${list.length} → ${countUops(list, cpu)}</td>`;
+  tb.innerHTML = PRESETS.map(c =>
+    `<tr><td class="name">${c.title}</td>${cell(c.x86, 'skl')}${cell(c.x86, 'zen')}${cell(c.arm, 'm1')}${cell(c.arm, 'v2')}${cell(c.rv, 'p550')}</tr>`
+  ).join('');
+}
+
+$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
+$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
+$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
+$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+  if (e.key === 'ArrowRight') $('btn-next').click();
+  if (e.key === 'ArrowLeft') $('btn-prev').click();
+});
+
+renderPresets();
+renderAll();
+renderResult();
+</script>
+</body>
+</html>

@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>函式呼叫：參數、回傳位址與堆疊</title>
+<meta name="description" content="同一個 C 函式在 x86-64、AArch64、RISC-V 上一次呼叫的每一條指令：參數放哪、回傳位址存哪、堆疊長什麼樣。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the workbench has the C source and global controls on top,
+   then three lanes (one per ISA) each with its listing, a register table, a stack drawing
+   and one sentence. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 這一步改到的東西 */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* 不可信、被覆寫 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;         /* 目前這一條 */
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.foot { color: var(--muted); font-size: 0.85rem; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* tables */
+.table-wrap { overflow-x: auto; }
+table.cmp { border-collapse: collapse; font-size: 0.9rem; min-width: 40rem; width: 100%; }
+.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.cmp td.name { font-weight: 700; white-space: nowrap; }
+.cmp td code { white-space: nowrap; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.88rem; }
+
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
+@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.75; background: var(--bg); border-radius: 4px; overflow-x: auto; white-space: pre; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+
+/* lanes */
+.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
+.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
+.lane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
+.lane-name { font-weight: 700; font-size: 0.95rem; }
+.lane-sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
+.tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; white-space: nowrap; }
+.tag.hit { background: var(--hit); color: var(--surface); }
+.tag.idle { border: 1px solid var(--line); color: var(--muted); }
+
+.listing { padding: 0.5rem 0.75rem; background: var(--bg); overflow-x: auto; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.7; }
+.listing .ln { display: block; white-space: pre; padding: 0 0.5rem; border-radius: 3px; }
+.listing .ln.lbl { color: var(--muted); }
+.listing .ln.on { background: var(--mark); }
+.listing .ln.done { color: var(--muted); }
+
+.state { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 0.75rem; padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); }
+.regs { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.15rem 0.5rem; font-size: 0.78rem; align-content: start; }
+.regs .r { font-family: var(--font-mono); font-weight: 600; white-space: nowrap; }
+.regs .v { font-family: var(--font-mono); min-width: 0; overflow-wrap: anywhere; padding: 0 0.3rem; border-radius: 3px; border: 1px solid transparent; }
+.regs .v.chg { background: var(--hit-soft); border-color: var(--hit); }
+.regs .v.bad { color: var(--miss); }
+.regs .v.none { color: var(--muted); }
+
+.stack { display: flex; flex-direction: column; align-items: stretch; font-size: 0.74rem; font-family: var(--font-mono); }
+.stack .cap { font-family: var(--font-body); font-size: 0.7rem; color: var(--muted); text-align: center; margin-bottom: 0.15rem; }
+.stack .slot { border: 1px solid var(--line); border-top: none; padding: 0.1rem 0.4rem; min-height: 1.5rem; display: flex; align-items: center; justify-content: space-between; gap: 0.3rem; background: var(--surface); }
+.stack .slot:first-of-type { border-top: 1px solid var(--line); border-radius: 3px 3px 0 0; }
+.stack .slot:last-of-type { border-radius: 0 0 3px 3px; }
+.stack .slot.theirs { color: var(--muted); background: var(--bg); border-style: dashed; }
+.stack .slot.empty { color: var(--muted); }
+.stack .slot.chg { background: var(--hit-soft); border-color: var(--hit); }
+.stack .slot .off { color: var(--muted); font-size: 0.66rem; }
+.stack .sp { font-family: var(--font-body); font-size: 0.7rem; color: var(--hit); font-weight: 700; text-align: right; margin-top: 0.1rem; }
+
+.say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 6.4em; }
+.say .mono { font-size: 0.85em; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← ISA 比較</a>
+    <h1><span class="mono">函式呼叫</span> 參數、回傳位址與堆疊</h1>
+    <p class="lead">C 裡一行 <code>inner(a, b)</code>，到了機器碼是一串搬運：參數放進哪個暫存器、回傳位址存在哪裡、哪些暫存器得先備份。按「下一步」看同一個函式在三個 ISA 上每一條指令對暫存器和堆疊做了什麼。</p>
+  </header>
+
+  <section class="prose">
+    <h2>慣例是契約，不是指令集</h2>
+    <p>呼叫慣例（calling convention）規定呼叫者和被呼叫者怎麼交接：參數放哪、回傳值放哪、哪些暫存器被呼叫者可以隨便改（caller-saved）、哪些改了要還原（callee-saved）。這是 ABI（應用程式二進位介面）的一部分，由作業系統和工具鏈決定，不是 ISA 規格的一部分。同一個 x86-64，Linux 和 Windows 就用不同的慣例。</p>
+    <p>但 ISA 的設計決定了慣例能長什麼樣。最大的分水嶺是<strong>呼叫指令怎麼處理回傳位址</strong>：x86 的 <code>call</code> 直接把回傳位址壓進堆疊；AArch64 的 <code>bl</code> 和 RISC-V 的 <code>jal</code> 把它寫進一個暫存器（link register），不碰記憶體。葉函式（不再呼叫別人的函式）因此可以完全不碰堆疊；但只要再往下呼叫，這個暫存器就會被覆寫，得先自己存起來。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th></th><th>x86-64（System V）</th><th>AArch64（AAPCS64）</th><th>RISC-V（LP64）</th></tr></thead>
+      <tbody>
+        <tr><td class="name">整數參數</td><td><code>rdi rsi rdx rcx r8 r9</code>，共 6 個</td><td><code>x0</code>–<code>x7</code>，共 8 個</td><td><code>a0</code>–<code>a7</code>，共 8 個</td></tr>
+        <tr><td class="name">放不下的參數</td><td>從第 7 個起壓堆疊，呼叫者清</td><td>從第 9 個起放堆疊，呼叫者清</td><td>從第 9 個起放堆疊，呼叫者清</td></tr>
+        <tr><td class="name">回傳值</td><td><code>rax</code>（第二個 <code>rdx</code>）</td><td><code>x0</code>（第二個 <code>x1</code>）</td><td><code>a0</code>（第二個 <code>a1</code>）</td></tr>
+        <tr><td class="name">回傳位址</td><td><code>call</code> 壓進堆疊，<code>ret</code> 彈出</td><td><code>bl</code> 寫進 <code>x30</code>（lr），<code>ret</code> 跳過去</td><td><code>jal</code> 寫進 <code>ra</code>（x1），<code>ret</code> 跳過去</td></tr>
+        <tr><td class="name">callee-saved</td><td><code>rbx rbp r12</code>–<code>r15</code>，共 6 個</td><td><code>x19</code>–<code>x28</code>，共 10 個（加 <code>x29</code> fp）</td><td><code>s0</code>–<code>s11</code>，共 12 個</td></tr>
+        <tr><td class="name">堆疊對齊</td><td>call 前 16 bytes</td><td>永遠 16 bytes</td><td>永遠 16 bytes</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>下面三個案例是用 clang 23 以 <code>-O2</code> 編出來的真實輸出（x86 用 Intel 語法，Linux System V ABI）。被呼叫的 <code>inner</code>、<code>sum10</code> 是外部函式，不展開；步進走到 call 時當作它立刻回來。堆疊圖高位址在上、低位址在下，最下面那格就是 sp 指的地方，虛線格是呼叫者留下的。</p>
+  </section>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">案例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">C 原始碼</p>
+        <pre class="code" id="csrc"></pre>
+        <p class="hint" id="hint"></p>
+      </div>
+      <div>
+        <p class="panel-title">執行</p>
+        <div class="controls">
+          <button id="btn-reset" type="button">重來</button>
+          <button id="btn-prev" type="button">上一步</button>
+          <button id="btn-next" type="button" class="primary">下一步</button>
+          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count" id="count"></span>
+        </div>
+        <p class="hint">每一步三個 ISA 各執行一條指令，先跑完的等其他兩個。綠色框是這一步改到的暫存器或堆疊格；紅字表示那個暫存器的值已經不可信（被呼叫者可能改過）。</p>
+      </div>
+    </div>
+
+    <div class="row lanes" id="lanes"></div>
+  </section>
+
+  <section class="prose">
+    <h2>三個案例跑完的結果</h2>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp" id="result">
+      <thead><tr><th>案例</th><th>x86-64</th><th>AArch64</th><th>RV64GC</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="foot">格式：執行的指令數 / 其中碰記憶體的指令數（x86 算 push、pop、call、ret；AArch64 和 RISC-V 算 load、store，因為 bl、jal、ret 不碰記憶體）。第二個數字才是重點：它反映了慣例讓多少東西非走堆疊不可。</p>
+
+  <section class="prose three">
+    <h2>看完可以帶走的三句話</h2>
+    <ol>
+      <li><strong>Link register 省下的是記憶體存取，但只有葉函式享受得到。</strong>AArch64 和 RISC-V 的 <code>bl</code>／<code>jal</code> 不碰堆疊，所以不再往下呼叫的函式連 sp 都不用動。但一旦要往下呼叫，x30／ra 得先存進堆疊，這一來一回和 x86 的 call／ret 隱含的壓彈其實是一樣的量。</li>
+      <li><strong>參數暫存器多，就少碰堆疊。</strong>x86-64 只給 6 個整數參數暫存器，AArch64 和 RISC-V 給 8 個。多出來的那兩個，正好是「10 個參數」案例裡 x86 要多 push 兩次的原因。callee-saved 暫存器的數量（6 對 10 對 12）也是同一回事：跨呼叫要存活的值越多，x86 越早開始把東西擠到堆疊上。</li>
+      <li><strong>慣例是軟體契約，同一個 ISA 換作業系統就可能換一套。</strong>Windows x64 的參數暫存器是 <code>rcx rdx r8 r9</code> 只有 4 個，而且呼叫者要在堆疊上多留 32 bytes 的 shadow space。同樣的 x86 機器、同樣的指令集，Linux 編的函式和 Windows 編的函式不能直接互相呼叫。</li>
+    </ol>
+  </section>
+
+  <section class="prose">
+    <h2>這個模型省略了什麼</h2>
+    <ul>
+      <li><strong>浮點參數另有一組暫存器。</strong>x86-64 用 <code>xmm0</code>–<code>xmm7</code>，AArch64 用 <code>v0</code>–<code>v7</code>，RISC-V 用 <code>fa0</code>–<code>fa7</code>。整數和浮點各算各的，混用時規則更細。</li>
+      <li><strong>struct 怎麼傳。</strong>小的 struct 拆進暫存器，大的用記憶體傳；回傳大 struct 時呼叫者先配好空間、把指標當隱藏參數傳進去（sret）。三邊的門檻和拆法都不同。</li>
+      <li><strong>可變參數函式（varargs）</strong>有額外規則，例如 x86-64 要在 <code>al</code> 放浮點參數的個數，RISC-V 的 varargs 一律照 8 bytes 對齊。</li>
+      <li><strong>x86-64 的 red zone。</strong>葉函式可以直接用 rsp 以下 128 bytes 而不調 rsp，所以某些葉函式看起來「沒開框架卻用了堆疊」。</li>
+      <li><strong>AArch64 的保留暫存器。</strong><code>x8</code> 是間接結果位址，<code>x16</code>／<code>x17</code> 給連結器 veneer 用，<code>x18</code> 平台保留，<code>x29</code> 慣例上是 frame pointer。這裡的範例用 <code>-fomit-frame-pointer</code>，所以沒看到 x29。</li>
+      <li><strong>RISC-V 有好幾套 ABI。</strong>這裡是 LP64（整數 64 位元）加 D 擴充的 lp64d；32 位元的 ilp32 系列、沒有浮點硬體的 lp64 變體，傳浮點參數的方式各不相同。</li>
+      <li><strong>Windows x64</strong> 整套不同，這裡只在三句話裡提了一句。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+// ---- data model ---------------------------------------------------------------
+// A lane: regs = [[name, initial value]], stack0 = incoming slots (high address first),
+// code = assembly lines (labels included), steps = [{i: code index, say, set: {reg: val}, ops: [...]}]
+// stack ops: ['alloc', n] ['free', n] ['fill', k, label] (k = slots above sp, 0 = [sp]) ['push', label] ['pop', n]
+// register values starting with '!' render as untrusted; '–' renders as none.
+
+const CASES = [
+  {
+    id: 'outer', title: 'inner(a, b) + a',
+    c: 'long inner(long a, long b);\n\nlong outer(long a, long b) {\n  return inner(a, b) + a;\n}',
+    hint: 'a 要活過 inner 這次呼叫，所以得找個 callee-saved 暫存器放。AArch64 和 RISC-V 還得先把回傳位址存起來，x86 不用。',
+    lanes: {
+      x86: {
+        regs: [['rdi', 'a'], ['rsi', 'b'], ['rax', '–'], ['rbx', '呼叫者的值'], ['rsp', '框架頂']],
+        stack0: ['回傳位址（回呼叫者）'],
+        code: ['outer:', '  push rbx', '  mov  rbx, rdi', '  call inner', '  add  rax, rbx', '  pop  rbx', '  ret'],
+        steps: [
+          { i: 1, say: 'rbx 是 callee-saved：outer 想用它，就得先把呼叫者的值存起來。堆疊多一格，rsp 減 8。', ops: [['push', 'rbx（呼叫者的）']] },
+          { i: 2, say: 'a 搬進 rbx。call 之後 rdi 會被 inner 隨意改，只有 callee-saved 暫存器能保證活過這次呼叫。', set: { rbx: 'a' } },
+          { i: 3, say: 'call 做兩件事：把回傳位址壓進堆疊，然後跳去 inner。inner 的參數就是 rdi、rsi，正好是 a、b，一條都不用搬。', ops: [['push', '回傳位址（回 outer）']] },
+          { i: 4, say: 'inner 回來了：它的 ret 彈掉回傳位址，結果留在 rax。rdi、rsi 已經不可信，但 rbx 還是 a。相加之後 rax 就是 outer 的回傳值。', set: { rdi: '!被改過？', rsi: '!被改過？', rax: 'inner(a,b) + a' }, ops: [['pop', 1]] },
+          { i: 5, say: '把呼叫者的 rbx 還回去，堆疊回到進來時的樣子。', set: { rbx: '呼叫者的值' }, ops: [['pop', 1]] },
+          { i: 6, say: 'ret 彈出回傳位址並跳回去。結果在 rax。整個 outer 碰了 4 次堆疊：push、call、pop、ret。', ops: [['pop', 1]] },
+        ],
+      },
+      arm: {
+        regs: [['x0', 'a'], ['x1', 'b'], ['x19', '呼叫者的值'], ['x30', '回傳位址（回呼叫者）'], ['sp', '框架頂']],
+        stack0: [],
+        code: ['outer:', '  stp x30, x19, [sp, #-16]!', '  mov x19, x0', '  bl  inner', '  add x0, x0, x19', '  ldp x30, x19, [sp], #16', '  ret'],
+        steps: [
+          { i: 1, say: '一條指令做三件事：sp 減 16、把 x30（回傳位址）和 x19 存進去。x30 非存不可，因為等一下 bl 會把它覆寫。', ops: [['alloc', 2], ['fill', 0, 'x30（回傳位址）'], ['fill', 1, 'x19（呼叫者的）']] },
+          { i: 2, say: 'a 搬進 callee-saved 的 x19，和 x86 的 rbx 同樣理由。', set: { x19: 'a' } },
+          { i: 3, say: 'bl 把回傳位址寫進 x30，然後跳走。沒有碰堆疊。x0、x1 就是 a、b，直接當參數。', set: { x30: '回傳位址（回 outer）' } },
+          { i: 4, say: 'inner 回來了，結果在 x0。x1 不可信，x30 是剛才那個已經用過的值。加上 x19 裡的 a。', set: { x0: 'inner(a,b) + a', x1: '!被改過？' } },
+          { i: 5, say: '一條指令還原兩個暫存器並把 sp 加回 16。x30 重新變成 outer 自己的回傳位址。', set: { x30: '回傳位址（回呼叫者）', x19: '呼叫者的值' }, ops: [['free', 2]] },
+          { i: 6, say: 'ret 跳到 x30，不碰堆疊。整個 outer 碰了 2 次堆疊：stp 和 ldp，各做兩件事。', ops: [] },
+        ],
+      },
+      rv: {
+        regs: [['a0', 'a'], ['a1', 'b'], ['s0', '呼叫者的值'], ['ra', '回傳位址（回呼叫者）'], ['sp', '框架頂']],
+        stack0: [],
+        code: ['outer:', '  addi sp, sp, -16', '  sd   ra, 8(sp)', '  sd   s0, 0(sp)', '  mv   s0, a0', '  call inner', '  add  a0, a0, s0', '  ld   ra, 8(sp)', '  ld   s0, 0(sp)', '  addi sp, sp, 16', '  ret'],
+        steps: [
+          { i: 1, say: '先開 16 bytes 的框架。RISC-V 沒有一條指令能同時減 sp 又存兩個暫存器，要拆開做。', ops: [['alloc', 2]] },
+          { i: 2, say: '把回傳位址存進去，因為 call 會覆寫 ra。', ops: [['fill', 1, 'ra（回傳位址）']] },
+          { i: 3, say: 's0 是 callee-saved，先把呼叫者的值存好。', ops: [['fill', 0, 's0（呼叫者的）']] },
+          { i: 4, say: 'a 搬進 s0。', set: { s0: 'a' } },
+          { i: 5, say: 'call 是偽指令，組譯成 auipc + jalr（連結器常再縮成一條 jal）：把回傳位址寫進 ra，然後跳。a0、a1 就是參數。', set: { ra: '回傳位址（回 outer）' } },
+          { i: 6, say: 'inner 回來了，結果在 a0，a1 不可信。加上 s0 裡的 a。', set: { a0: 'inner(a,b) + a', a1: '!被改過？' } },
+          { i: 7, say: '還原回傳位址。', set: { ra: '回傳位址（回呼叫者）' } },
+          { i: 8, say: '還原 s0。', set: { s0: '呼叫者的值' } },
+          { i: 9, say: '收框架。', ops: [['free', 2]] },
+          { i: 10, say: 'ret 是 jalr x0, 0(ra)：跳到 ra。沒有合併指令，所以 RISC-V 用了 4 條記憶體指令做 AArch64 2 條的事，但每條都是最簡單的那種。', ops: [] },
+        ],
+      },
+    },
+  },
+  {
+    id: 'many', title: '10 個參數',
+    c: 'long sum10(long a, long b, long c, long d, long e,\n           long f, long g, long h, long i, long j);\n\nlong many(long a, long b, long c, long d, long e,\n          long f, long g, long h, long i, long j) {\n  return sum10(a, b, c, d, e, f,\n               h, g, j, i) + 1;\n}',
+    hint: '參數暫存器 x86 有 6 個、AArch64 和 RISC-V 有 8 個，剩下的走堆疊。這裡故意把第 7、8 和第 9、10 個對調，才看得出誰在搬什麼。',
+    lanes: {
+      x86: {
+        regs: [['rdi…r9', 'a b c d e f'], ['rax', '–'], ['rsp', '框架頂']],
+        stack0: ['j（第 10 個參數）', 'i（第 9 個）', 'h（第 8 個）', 'g（第 7 個）', '回傳位址（回呼叫者）'],
+        code: ['many:', '  push rax', '  push qword ptr [rsp + 32]', '  push qword ptr [rsp + 48]', '  push qword ptr [rsp + 32]', '  push qword ptr [rsp + 48]', '  call sum10', '  add  rsp, 32', '  inc  rax', '  pop  rcx', '  ret'],
+        steps: [
+          { i: 1, say: '這一下不是為了保存 rax，是為了對齊：進來時 rsp 對 16 餘 8（call 壓了 8 bytes），等一下要再壓 4 個參數共 32 bytes，多墊 8 bytes 才能讓 call 前的 rsp 對齊 16。', ops: [['push', '對齊填充']] },
+          { i: 2, say: 'x86 可以直接 push 記憶體裡的值。[rsp+32] 現在是呼叫者放的 i，它要變成 sum10 的第 10 個參數。堆疊參數反著壓，最後一個先。', ops: [['push', 'i → 第 10 個參數']] },
+          { i: 3, say: '壓 j，變成第 9 個參數。每 push 一次 rsp 就動 8，同一個來源的偏移量也跟著變，所以是 +48 而不是 +32。', ops: [['push', 'j → 第 9 個']] },
+          { i: 4, say: '壓 g，變成第 8 個。', ops: [['push', 'g → 第 8 個']] },
+          { i: 5, say: '壓 h，變成第 7 個，在堆疊最頂端。前 6 個參數 a 到 f 在 rdi 到 r9，順序沒變，一條都不用搬。', ops: [['push', 'h → 第 7 個']] },
+          { i: 6, say: 'call 壓回傳位址並跳走。sum10 從 [rsp+8] 開始往上找它的第 7、8、9、10 個參數。', ops: [['push', '回傳位址（回 many）']] },
+          { i: 7, say: 'sum10 回來了，它的 ret 彈掉回傳位址，結果在 rax。呼叫者負責清掉自己壓的 4 個參數：rsp 加 32。', set: { rax: 'sum10(…)', 'rdi…r9': '!被改過？' }, ops: [['pop', 1], ['free', 4]] },
+          { i: 8, say: '結果加 1。', set: { rax: 'sum10(…) + 1' } },
+          { i: 9, say: '彈掉對齊填充。值丟進 rcx 不會用到；pop 比 add rsp, 8 短 2 bytes。', ops: [['pop', 1]] },
+          { i: 10, say: 'ret。整個 many 碰了 8 次堆疊，其中 4 次是真的在搬參數。', ops: [['pop', 1]] },
+        ],
+      },
+      arm: {
+        regs: [['x0', 'a'], ['x1…x5', 'b c d e f'], ['x6', 'g'], ['x7', 'h'], ['x8', '–'], ['x9', '–'], ['x10', '–'], ['x30', '回傳位址（回呼叫者）'], ['sp', '框架頂']],
+        stack0: ['j（第 10 個參數）', 'i（第 9 個）'],
+        code: ['many:', '  sub sp, sp, #32', '  ldp x10, x9, [sp, #32]', '  mov x8, x6', '  mov x6, x7', '  mov x7, x8', '  stp x10, x30, [sp, #8]', '  str x9, [sp]', '  bl  sum10', '  ldr x30, [sp, #16]', '  add x0, x0, #1', '  add sp, sp, #32', '  ret'],
+        steps: [
+          { i: 1, say: '一次開 32 bytes：2 格給 sum10 的堆疊參數，1 格存 x30，1 格對齊。不用一格一格 push。', ops: [['alloc', 4]] },
+          { i: 2, say: '一條 ldp 讀兩個相鄰的值：呼叫者放在堆疊上的 i 進 x10、j 進 x9。', set: { x10: 'i', x9: 'j' } },
+          { i: 3, say: '第 7、8 個參數 g、h 都在暫存器裡，對調只需要三條 mov，不碰堆疊。先把 g 放到 x8。', set: { x8: 'g' } },
+          { i: 4, say: 'h 搬到 x6，成為第 7 個參數。', set: { x6: 'h' } },
+          { i: 5, say: 'g 搬回 x7，成為第 8 個。交換完成。', set: { x7: 'g' } },
+          { i: 6, say: '一條 stp 做兩件不相干的事：[sp+8] 放 i 當第 10 個參數，[sp+16] 順便存 x30。編譯器看到兩個相鄰的 store 就合併了。', ops: [['fill', 1, 'i → 第 10 個參數'], ['fill', 2, 'x30（回傳位址）']] },
+          { i: 7, say: '[sp] 放 j 當第 9 個參數。被呼叫者從 [sp] 開始找第 9 個參數起，不像 x86 要跳過回傳位址。', ops: [['fill', 0, 'j → 第 9 個']] },
+          { i: 8, say: 'bl 把回傳位址寫進 x30 然後跳走。堆疊頂端兩格就是第 9、10 個參數。', set: { x30: '回傳位址（回 many）' } },
+          { i: 9, say: 'sum10 回來了，結果在 x0。先把自己的回傳位址讀回 x30。', set: { x0: 'sum10(…)', x30: '回傳位址（回呼叫者）', 'x1…x5': '!被改過？', x6: '!被改過？', x7: '!被改過？' } },
+          { i: 10, say: '結果加 1。', set: { x0: 'sum10(…) + 1' } },
+          { i: 11, say: '收 32 bytes。堆疊參數不用另外清，整個框架一起收。', ops: [['free', 4]] },
+          { i: 12, say: 'ret。整個 many 碰了 4 次堆疊，其中 3 次在搬參數。', ops: [] },
+        ],
+      },
+      rv: {
+        regs: [['a0', 'a'], ['a1…a5', 'b c d e f'], ['a6', 'g'], ['a7', 'h'], ['t0', '–'], ['t1', '–'], ['t2', '–'], ['ra', '回傳位址（回呼叫者）'], ['sp', '框架頂']],
+        stack0: ['j（第 10 個參數）', 'i（第 9 個）'],
+        code: ['many:', '  addi sp, sp, -32', '  sd   ra, 24(sp)', '  mv   t0, a6', '  ld   t1, 40(sp)', '  ld   t2, 32(sp)', '  mv   a6, a7', '  mv   a7, t0', '  sd   t1, 0(sp)', '  sd   t2, 8(sp)', '  call sum10', '  addi a0, a0, 1', '  ld   ra, 24(sp)', '  addi sp, sp, 32', '  ret'],
+        steps: [
+          { i: 1, say: '開 32 bytes：2 格給堆疊參數，1 格存 ra，1 格對齊。', ops: [['alloc', 4]] },
+          { i: 2, say: '存回傳位址，因為 call 會覆寫 ra。', ops: [['fill', 3, 'ra（回傳位址）']] },
+          { i: 3, say: '交換 g、h 的第一步，借用暫時暫存器 t0。', set: { t0: 'g' } },
+          { i: 4, say: '讀呼叫者放在堆疊上的 j。沒有 ldp，一次只能讀一個。', set: { t1: 'j' } },
+          { i: 5, say: '讀 i。', set: { t2: 'i' } },
+          { i: 6, say: 'h 搬到 a6，成為第 7 個參數。', set: { a6: 'h' } },
+          { i: 7, say: 'g 搬回 a7，成為第 8 個。', set: { a7: 'g' } },
+          { i: 8, say: '[sp] 放 j 當第 9 個參數。', ops: [['fill', 0, 'j → 第 9 個參數']] },
+          { i: 9, say: '[sp+8] 放 i 當第 10 個。', ops: [['fill', 1, 'i → 第 10 個']] },
+          { i: 10, say: 'call 把回傳位址寫進 ra 然後跳走。', set: { ra: '回傳位址（回 many）' } },
+          { i: 11, say: 'sum10 回來了，結果在 a0，加 1。', set: { a0: 'sum10(…) + 1', 'a1…a5': '!被改過？', a6: '!被改過？', a7: '!被改過？' } },
+          { i: 12, say: '還原回傳位址。', set: { ra: '回傳位址（回呼叫者）' } },
+          { i: 13, say: '收框架。', ops: [['free', 4]] },
+          { i: 14, say: 'ret。整個 many 碰了 6 次堆疊，和 AArch64 做同樣的事但沒有 ldp／stp 可以合併。', ops: [] },
+        ],
+      },
+    },
+  },
+  {
+    id: 'fact', title: '遞迴',
+    c: 'long fact(long n) {\n  if (n <= 1) return 1;\n  return (n * fact(n - 1)) ^ n;\n}',
+    hint: '每一層遞迴都要保住 n 和回傳位址。這裡走 n > 1 那條路，遞迴呼叫當作立刻回來。乘完再 xor 是為了不讓 clang 把遞迴改寫成迴圈。',
+    lanes: {
+      x86: {
+        regs: [['rdi', 'n'], ['rax', '–'], ['rbx', '呼叫者的值'], ['rsp', '框架頂']],
+        stack0: ['回傳位址（回呼叫者）'],
+        code: ['fact:', '  mov  eax, 1', '  cmp  rdi, 1', '  jle  .done', '  push rbx', '  lea  rax, [rdi - 1]', '  mov  rbx, rdi', '  mov  rdi, rax', '  call fact', '  imul rax, rbx', '  xor  rax, rbx', '  pop  rbx', '.done:', '  ret'],
+        steps: [
+          { i: 1, say: '先把 1 放進回傳暫存器，萬一 n ≤ 1 就直接走人。寫 eax 會順便把 rax 高 32 位元清零，比 mov rax, 1 短。', set: { rax: '1' } },
+          { i: 2, say: '比較 n 和 1，結果進 flags。' },
+          { i: 3, say: 'n ≤ 1 就跳到結尾的 ret，整個函式不碰堆疊。我們假設 n > 1，不跳。' },
+          { i: 4, say: '要遞迴呼叫，所以需要一個 callee-saved 暫存器保住 n。這是這一層框架的第一格。', ops: [['push', 'rbx（上一層的 n）']] },
+          { i: 5, say: '用 lea 算 n − 1，暫放 rax。', set: { rax: 'n − 1' } },
+          { i: 6, say: 'n 存進 rbx。', set: { rbx: 'n' } },
+          { i: 7, say: 'n − 1 放進第一個參數暫存器。', set: { rdi: 'n − 1' } },
+          { i: 8, say: 'call 壓回傳位址並跳到 fact 自己。每一層遞迴在堆疊上留 16 bytes：一個 rbx、一個回傳位址。', ops: [['push', '回傳位址（回 fact）']] },
+          { i: 9, say: 'fact(n − 1) 回來了，結果在 rax。乘上 rbx 裡的 n。', set: { rax: 'n · fact(n−1)', rdi: '!被改過？' }, ops: [['pop', 1]] },
+          { i: 10, say: '再 xor n。', set: { rax: '結果' } },
+          { i: 11, say: '還原上一層的 rbx。', set: { rbx: '呼叫者的值' }, ops: [['pop', 1]] },
+          { i: 13, say: 'ret。遞迴路徑碰了 4 次堆疊。', ops: [['pop', 1]] },
+        ],
+      },
+      arm: {
+        regs: [['x0', 'n'], ['x8', '–'], ['x19', '呼叫者的值'], ['x30', '回傳位址（回呼叫者）'], ['sp', '框架頂']],
+        stack0: [],
+        code: ['fact:', '  stp  x30, x19, [sp, #-16]!', '  mov  x19, x0', '  subs x0, x0, #1', '  b.gt .rec', '  mov  w0, #1', '  ldp  x30, x19, [sp], #16', '  ret', '.rec:', '  bl   fact', '  mul  x8, x0, x19', '  eor  x0, x8, x19', '  ldp  x30, x19, [sp], #16', '  ret'],
+        steps: [
+          { i: 1, say: '還沒判斷 n 就先開框架、存 x30 和 x19。clang 把 prologue 放最前面，所以 n ≤ 1 那條路也得付這個代價。', ops: [['alloc', 2], ['fill', 0, 'x30（回傳位址）'], ['fill', 1, 'x19（上一層的 n）']] },
+          { i: 2, say: 'n 存進 callee-saved 的 x19。', set: { x19: 'n' } },
+          { i: 3, say: 'x0 = n − 1 並設 flags：一條指令同時準備好參數和做比較。', set: { x0: 'n − 1' } },
+          { i: 4, say: 'n − 1 > 0 就跳去遞迴。假設 n > 1，跳。' },
+          { i: 9, say: 'bl 把回傳位址寫進 x30，跳到 fact 自己。每層遞迴在堆疊留 16 bytes。', set: { x30: '回傳位址（回 fact）' } },
+          { i: 10, say: 'fact(n − 1) 回來了，結果在 x0。乘上 x19 裡的 n。', set: { x8: 'n · fact(n−1)' } },
+          { i: 11, say: 'xor n，直接寫進回傳暫存器 x0。', set: { x0: '結果' } },
+          { i: 12, say: '一條 ldp 還原 x30、x19 並收框架。', set: { x30: '回傳位址（回呼叫者）', x19: '呼叫者的值' }, ops: [['free', 2]] },
+          { i: 13, say: 'ret。遞迴路徑碰了 2 次堆疊。', ops: [] },
+        ],
+      },
+      rv: {
+        regs: [['a0', 'n'], ['a1', '–'], ['s0', '呼叫者的值'], ['ra', '回傳位址（回呼叫者）'], ['sp', '框架頂']],
+        stack0: [],
+        code: ['fact:', '  mv   a1, a0', '  li   a0, 1', '  bge  a0, a1, .done', '  addi sp, sp, -16', '  sd   ra, 8(sp)', '  sd   s0, 0(sp)', '  addi a0, a1, -1', '  mv   s0, a1', '  call fact', '  mul  a0, a0, s0', '  xor  a0, a0, s0', '  ld   ra, 8(sp)', '  ld   s0, 0(sp)', '  addi sp, sp, 16', '.done:', '  ret'],
+        steps: [
+          { i: 1, say: 'n 先搬到 a1，把 a0 空出來放回傳值。', set: { a1: 'n' } },
+          { i: 2, say: '1 放進回傳暫存器。', set: { a0: '1' } },
+          { i: 3, say: '1 ≥ n 就直接去 ret。這條在 prologue 之前：葉函式路徑完全不碰堆疊，和 AArch64 的排法相反。假設 n > 1，不跳。' },
+          { i: 4, say: '開 16 bytes 框架。', ops: [['alloc', 2]] },
+          { i: 5, say: '存回傳位址。', ops: [['fill', 1, 'ra（回傳位址）']] },
+          { i: 6, say: '存 s0。', ops: [['fill', 0, 's0（上一層的 n）']] },
+          { i: 7, say: 'a0 = n − 1，參數準備好。', set: { a0: 'n − 1' } },
+          { i: 8, say: 'n 存進 callee-saved 的 s0。', set: { s0: 'n' } },
+          { i: 9, say: 'call 把回傳位址寫進 ra，跳到 fact 自己。每層遞迴在堆疊留 16 bytes。', set: { ra: '回傳位址（回 fact）' } },
+          { i: 10, say: 'fact(n − 1) 回來了，結果在 a0。乘上 s0 裡的 n。', set: { a0: 'n · fact(n−1)', a1: '!被改過？' } },
+          { i: 11, say: 'xor n。', set: { a0: '結果' } },
+          { i: 12, say: '還原回傳位址。', set: { ra: '回傳位址（回呼叫者）' } },
+          { i: 13, say: '還原 s0。', set: { s0: '呼叫者的值' } },
+          { i: 14, say: '收框架。', ops: [['free', 2]] },
+          { i: 16, say: 'ret。遞迴路徑碰了 4 次堆疊，和 x86 一樣多，但葉路徑是 0 次。', ops: [] },
+        ],
+      },
+    },
+  },
+];
+
+const LANE_META = [
+  { id: 'x86', name: 'x86-64', sub: 'System V', mem: /^\s*(push|pop|call|ret)\b/ },
+  { id: 'arm', name: 'AArch64', sub: 'AAPCS64', mem: /^\s*(stp|ldp|str|ldr)\b/ },
+  { id: 'rv', name: 'RV64GC', sub: 'LP64', mem: /^\s*(sd|ld)\b/ },
+];
+
+// ---- state ---------------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const state = { ci: 0, k: 0 };
+const cur = () => CASES[state.ci];
+const total = () => Math.max(...LANE_META.map(m => cur().lanes[m.id].steps.length));
+
+// Replay a lane's steps up to p and return {regs, stack, changedRegs, changedSlots}.
+function replay(lane, p) {
+  const regs = Object.fromEntries(lane.regs.map(([n, v]) => [n, v]));
+  let stack = lane.stack0.map(l => ({ label: l, theirs: true }));
+  const n0 = stack.length;
+  let changedRegs = new Set(), changedSlots = new Set();
+  for (let s = 0; s < p; s++) {
+    const st = lane.steps[s];
+    changedRegs = new Set(); changedSlots = new Set();
+    for (const [r, v] of Object.entries(st.set || {})) { if (regs[r] !== v) { regs[r] = v; changedRegs.add(r); } }
+    for (const op of st.ops || []) {
+      const [kind, a, b] = op;
+      if (kind === 'alloc') { for (let j = 0; j < a; j++) stack.push({ label: '', theirs: false }); changedRegs.add('sp'); changedRegs.add('rsp'); }
+      else if (kind === 'free' || kind === 'pop') { stack.splice(stack.length - a, a); changedRegs.add('sp'); changedRegs.add('rsp'); }
+      else if (kind === 'fill') { const idx = stack.length - 1 - a; stack[idx] = { label: b, theirs: false }; changedSlots.add(idx); }
+      else if (kind === 'push') { stack.push({ label: a, theirs: false }); changedSlots.add(stack.length - 1); changedRegs.add('sp'); changedRegs.add('rsp'); }
+    }
+  }
+  return { regs, stack, changedRegs, changedSlots, n0 };
+}
+
+function renderPresets() {
+  const p = $('presets');
+  CASES.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.ci = i; state.k = 0; renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderLaneShell() {
+  const host = $('lanes');
+  host.innerHTML = '';
+  LANE_META.forEach(m => {
+    const el = document.createElement('div');
+    el.className = 'lane'; el.id = 'lane-' + m.id;
+    el.innerHTML = `
+      <div class="lane-head"><span class="lane-name">${m.name}<span class="lane-sub">${m.sub}</span></span><span class="tag idle" data-r="tag"></span></div>
+      <div class="listing" data-r="listing"></div>
+      <div class="state">
+        <div><p class="panel-title">暫存器</p><div class="regs" data-r="regs"></div></div>
+        <div><p class="panel-title">堆疊</p><div class="stack" data-r="stack"></div></div>
+      </div>
+      <p class="say" data-r="say" aria-live="polite"></p>`;
+    host.appendChild(el);
+  });
+}
+
+function renderLane(m) {
+  const lane = cur().lanes[m.id];
+  const el = $('lane-' + m.id);
+  const p = Math.min(state.k, lane.steps.length);
+  const st = p > 0 ? lane.steps[p - 1] : null;
+  const waiting = p === lane.steps.length && state.k > lane.steps.length;
+  const { regs, stack, changedRegs, changedSlots, n0 } = replay(lane, p);
+
+  const tag = el.querySelector('[data-r=tag]');
+  if (!st) { tag.className = 'tag idle'; tag.textContent = '尚未開始'; }
+  else if (waiting) { tag.className = 'tag idle'; tag.textContent = '已回傳'; }
+  else { tag.className = 'tag hit'; tag.textContent = `第 ${p} 條`; }
+
+  // listing: lines executed so far are 'done', current is 'on'
+  const executed = new Set(lane.steps.slice(0, Math.max(0, p - 1)).map(s => s.i));
+  el.querySelector('[data-r=listing]').innerHTML = lane.code.map((line, i) => {
+    const isLabel = /^\S.*:$/.test(line);
+    let cls = 'ln' + (isLabel ? ' lbl' : '');
+    if (st && st.i === i && !waiting) cls += ' on';
+    else if (executed.has(i) || (waiting && st.i === i)) cls += ' done';
+    return `<span class="${cls}">${line}</span>`;
+  }).join('');
+
+  el.querySelector('[data-r=regs]').innerHTML = lane.regs.map(([r]) => {
+    const v = regs[r];
+    const bad = v.startsWith('!');
+    const none = v === '–';
+    const cls = 'v' + (changedRegs.has(r) && !waiting ? ' chg' : '') + (bad ? ' bad' : '') + (none ? ' none' : '');
+    return `<span class="r">${r}</span><span class="${cls}">${bad ? v.slice(1) : v}</span>`;
+  }).join('');
+
+  const sk = el.querySelector('[data-r=stack]');
+  const slots = stack.map((s, i) => {
+    const off = stack.length - 1 - i;
+    const cls = 'slot' + (s.theirs ? ' theirs' : '') + (s.label ? '' : ' empty') + (changedSlots.has(i) && !waiting ? ' chg' : '');
+    const offTxt = off === 0 ? '[sp]' : `[sp+${off * 8}]`;
+    return `<div class="${cls}"><span>${s.label || '（未用）'}</span><span class="off">${offTxt}</span></div>`;
+  }).join('');
+  sk.innerHTML = `<div class="cap">高位址 ↑ 呼叫者的框架</div>${slots}<div class="sp">← sp</div>`;
+
+  const say = el.querySelector('[data-r=say]');
+  if (!st) say.textContent = '按「下一步」開始執行第一條指令。';
+  else say.textContent = st.say + (waiting ? ' 這邊已經回傳，等其他兩個。' : '');
+}
+
+function renderResult() {
+  const tb = $('result').querySelector('tbody');
+  tb.innerHTML = CASES.map(c => {
+    const cells = LANE_META.map(m => {
+      const lane = c.lanes[m.id];
+      const n = lane.steps.length;
+      const mem = lane.steps.filter(s => m.mem.test(lane.code[s.i])).length;
+      return `<td class="num mono">${n} / ${mem}</td>`;
+    }).join('');
+    return `<tr><td class="name">${c.title}</td>${cells}</tr>`;
+  }).join('');
+}
+
+function renderAll() {
+  const c = cur();
+  $('csrc').textContent = c.c;
+  $('hint').textContent = c.hint;
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.ci));
+  const T = total();
+  $('step-range').max = T; $('step-range').value = state.k;
+  $('count').textContent = `第 ${state.k} / ${T} 步`;
+  $('btn-prev').disabled = state.k === 0;
+  $('btn-next').disabled = state.k >= T;
+  renderLaneShell();
+  LANE_META.forEach(renderLane);
+}
+
+$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
+$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
+$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
+$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+  if (e.key === 'ArrowRight') $('btn-next').click();
+  if (e.key === 'ArrowLeft') $('btn-prev').click();
+});
+
+renderPresets();
+renderResult();
+renderAll();
+</script>
+</body>
+</html>

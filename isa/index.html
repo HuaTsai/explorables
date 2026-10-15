@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISA 比較：x86、ARM、RISC-V</title>
+<meta name="description" content="一個系列，比較 x86-64、AArch64、RISC-V 三個指令集在每一個設計決定上各自選了什麼、換到了什麼。每篇一個主題，可以獨立閱讀。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --right: #0a6f6a;
+  --left: #9b2f6b;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --right: #56c9c0; --left: #ea86b8; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 46rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; font-size: 0.9rem; min-width: 30rem; width: 100%; }
+th, td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+td.name { font-weight: 700; white-space: nowrap; font-family: var(--font-mono); }
+
+.entries { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); counter-reset: n; }
+.entries li { border-bottom: 1px solid var(--line); counter-increment: n; }
+.entry { display: flex; align-items: baseline; gap: 1rem; padding: 1.1rem 0; color: inherit; text-decoration: none; }
+.entry::before { content: counter(n, decimal-leading-zero); font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); flex: 0 0 2rem; }
+.entry:focus-visible { outline: 2px solid var(--right); outline-offset: 4px; }
+.entry h2 { font-size: 1.1rem; line-height: 1.35; margin: 0; }
+a.entry:hover h2 { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.entry p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.95rem; }
+.entry .text { flex: 1 1 16rem; min-width: 0; }
+.entry.todo h2 { color: var(--muted); font-weight: 400; }
+.entry .soon { flex: 0 0 auto; font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 0.45rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">ISA</span> 比較：x86、ARM、RISC-V</h1>
+    <p class="lead">三個指令集架構，在每一個設計決定上各自選了什麼、換到了什麼。每篇挑一個決定，獨立成文，不用照順序讀。</p>
+  </header>
+
+  <section class="prose">
+    <h2>三個 ISA 是誰</h2>
+    <p>指令集架構（ISA）是硬體和軟體之間的契約：有哪些指令、幾個暫存器、怎麼編碼、記憶體怎麼存取。編譯器照契約產出機器碼，CPU 照契約執行。目前通用 CPU 市場的三大宗，各自代表一種設計路線：</p>
+  </section>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>系列中用的版本</th><th>路線</th><th>誰在用</th><th>來歷</th></tr></thead>
+      <tbody>
+        <tr><td class="name">x86-64</td><td>CISC，變長編碼，向下相容 1978 年的 8086</td><td>桌機、筆電、伺服器（Intel、AMD）</td><td>AMD 2003 年把 32 位元 x86 擴成 64 位元</td></tr>
+        <tr><td class="name">AArch64</td><td>RISC，定長 4 bytes，2011 年重新設計的 64 位元 ARM</td><td>手機、Apple Silicon、嵌入式、雲端伺服器</td><td>ARM 授權設計給晶片廠，自己不做晶片</td></tr>
+        <tr><td class="name">RV64GC</td><td>RISC，開放規格，模組化擴充，4 或 2 bytes</td><td>MCU、嵌入式、AI 加速器的控制核心，高效能通用市場起步中</td><td>2010 年 Berkeley 的研究計畫，現由 RISC-V International 維護</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>全系列固定比較這三個版本：x86 只看 64 位元，ARM 只看 AArch64（不含 32 位元和 Thumb），RISC-V 用 64 位元加上最常見的 G 和 C 擴充。範例都是幾行 C，用 clang 編成三邊的機器碼。</p>
+  </section>
+
+  <ul class="entries">
+    <li>
+      <a class="entry" href="encoding/">
+        <div class="text">
+          <h2>指令編碼：定長與變長</h2>
+          <p>把同一段 C 編出來的機器碼一次一個 byte 餵給三個解碼器，看誰什麼時候才知道「這條指令有多長」，以及這個差別換到了什麼。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="registers/">
+        <div class="text">
+          <h2>暫存器：16、31、32 個</h2>
+          <p>一段 C 的變數一個個分配進暫存器，看 x86 什麼時候開始把東西擠到堆疊上。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="calling-convention/">
+        <div class="text">
+          <h2>函式呼叫慣例</h2>
+          <p>一次 call 的每一步：參數放哪、哪些暫存器要先存、回傳位址在堆疊還是 link register。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="branches/">
+        <div class="text">
+          <h2>條件分支：flags 與比較跳轉合一</h2>
+          <p>一個 <code>if (a &lt; b)</code> 逐指令執行，看 flags 暫存器怎麼被設又被讀，RISC-V 為什麼省掉這一步。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="addressing/">
+        <div class="text">
+          <h2>記憶體定址模式</h2>
+          <p>一個 <code>a[i].y</code> 的存取，x86 一條 base + index×scale + disp 做完，RISC-V 要幾條。位址算式隨每條指令逐步折疊。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="immediates/">
+        <div class="text">
+          <h2>大常數與立即值</h2>
+          <p>輸入任何一個 64 位元常數，看三邊各要幾條指令才能把它放進暫存器、每條的立即值欄位塞了什麼。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="micro-ops/">
+        <div class="text">
+          <h2>CISC 的 micro-op 解碼</h2>
+          <p>x86 一條複雜指令進前端，看它被拆成幾個 µop，對照 RISC-V 本來就是那幾條。</p>
+        </div>
+      </a>
+    </li>
+  </ul>
+</main>
+</body>
+</html>

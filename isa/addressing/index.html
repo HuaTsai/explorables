@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>定址模式：一條指令能算多複雜的位址</title>
+<meta name="description" content="同一個 C 的記憶體存取，x86-64、AArch64、RISC-V 各用幾條指令算出位址。逐步看位址算式被每條指令折疊掉哪一部分。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the workbench has the C source and global controls on top,
+   then three lanes (one per ISA): the address formula being folded, the asm listing, one sentence. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 位址算完了 */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* 還在算 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;         /* 目前這一條 */
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+i.hit, i.miss { font-style: normal; font-weight: 700; }
+i.hit { color: var(--hit); }
+i.miss { color: var(--miss); }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.foot { color: var(--muted); font-size: 0.85rem; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* tables */
+.table-wrap { overflow-x: auto; }
+table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; min-width: 36rem; width: 100%; }
+.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.cmp td.name { font-weight: 700; white-space: nowrap; }
+.cmp td.num { font-family: var(--font-mono); font-size: 0.85rem; white-space: nowrap; }
+.cmp td code { white-space: nowrap; }
+.cmp tr.total td { font-weight: 700; border-bottom: none; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.88rem; font-family: var(--font-mono); }
+
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
+@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.75; background: var(--bg); border-radius: 4px; overflow-x: auto; white-space: pre; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+.goal { margin-top: 0.75rem; font-family: var(--font-mono); font-size: 0.95rem; }
+.goal .lbl { font-family: var(--font-body); color: var(--muted); font-size: 0.85rem; margin-right: 0.4rem; }
+
+/* lanes */
+.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
+.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
+.lane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
+.lane-name { font-weight: 700; font-size: 0.95rem; }
+.lane-sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
+.tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; white-space: nowrap; }
+.tag.hit { background: var(--hit); color: var(--surface); }
+.tag.miss { background: var(--miss); color: var(--surface); }
+.tag.idle { border: 1px solid var(--line); color: var(--muted); }
+
+.formula { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--line); min-height: 4.4rem; }
+.formula .expr { font-family: var(--font-mono); font-size: 0.95rem; line-height: 1.5; overflow-x: auto; white-space: nowrap; }
+.formula .expr.done { color: var(--hit); }
+.formula .regs { font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem; }
+.formula .regs code { font-size: 0.75rem; }
+
+.listing { padding: 0.5rem 0.75rem; display: flex; flex-direction: column; gap: 0.2rem; background: var(--bg); overflow-x: auto; flex: 1 0 auto; }
+.ins { display: flex; align-items: baseline; gap: 0.6rem; padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid transparent; font-family: var(--font-mono); font-size: 0.82rem; white-space: nowrap; }
+.ins .n { color: var(--muted); font-size: 0.72rem; min-width: 1.1em; }
+.ins.on { background: var(--mark); border-color: var(--line); }
+.ins.done { color: var(--muted); }
+.ins.skip { color: var(--muted); opacity: 0.7; }
+.ins small { color: var(--muted); font-size: 0.72rem; margin-left: 0.4rem; }
+.say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 6.4em; }
+.say code { font-size: 0.85em; }
+
+.three li strong { font-weight: 700; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← ISA 比較</a>
+    <h1><span class="mono">定址模式</span> 一條指令能算多複雜的位址</h1>
+    <p class="lead">每一次記憶體存取都要先算位址：陣列是「起點加索引乘大小」，結構成員是「起點加偏移」。這段算術可以塞進 load 指令本身，也可以用一般算術指令算完再 load。三個 ISA 在這裡劃的線不一樣。按「下一步」看位址算式被每條指令折掉哪一塊。</p>
+  </header>
+
+  <section class="prose">
+    <h2>load 指令能接受的位址寫法</h2>
+    <p>所謂<strong>定址模式</strong>（addressing mode），就是 load/store 指令的位址欄位允許寫成什麼樣子。允許的形式越多，常見的位址算術就越能在一條指令裡做完；形式越少，就要靠前面的算術指令先把位址算進暫存器。下表是三個 ISA 的清單，<code>base</code>、<code>index</code> 都是暫存器，<code>disp</code>、<code>imm</code> 是寫死在指令裡的常數。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>ISA</th><th>位址可以寫成</th><th>縮放（index 乘的倍數）</th><th>常數位移</th><th>其他</th></tr></thead>
+      <tbody>
+        <tr><td class="name">x86-64</td><td><code>[base + index×scale + disp]</code>，四項都可省略</td><td>1、2、4、8 自選，和存取大小無關</td><td>8 或 32 位元有號</td><td><code>[rip + disp32]</code> 相對目前指令位址</td></tr>
+        <tr><td class="name">AArch64</td><td><code>[Rn, #imm]</code><br><code>[Rn, Rm, LSL #s]</code></td><td>只能是 0 或 log2(存取大小)：載入 8 bytes 只能乘 8 或不乘</td><td>12 位元無號且預先乘上存取大小，或 9 位元有號</td><td>pre-index <code>[Rn, #imm]!</code> 和 post-index <code>[Rn], #imm</code> 會順便更新 Rn；<code>adrp</code> 取 4 KB 頁位址</td></tr>
+        <tr><td class="name">RISC-V</td><td><code>imm(rs1)</code>，只有這一種</td><td>沒有，要自己 <code>slli</code></td><td>12 位元有號</td><td>沒有相對 PC 的 load，要先 <code>auipc</code> 或 <code>lui</code> 算進暫存器</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>下面四個案例都是一行 C，用 clang 23 以 <code>-O2</code> 編成三種目標的組語（x86 用 Intel 語法，目的在左）。每個 lane 上方的算式是「這一條 load 要的位址」，用放著 C 變數的暫存器寫出來；每走一步，被那條指令算掉的部分就收合成一個暫存器名，直到整個算式只剩 load 指令自己能吃的形狀。</p>
+  </section>
+
+  <section class="bench" aria-label="逐步折疊位址">
+    <div class="row presets" id="presets"><span class="lbl">案例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">C 原始碼</p>
+        <pre class="code" id="csrc"></pre>
+        <p class="goal"><span class="lbl">要算的位址</span><span id="goal"></span></p>
+        <p class="hint" id="hint"></p>
+      </div>
+      <div>
+        <p class="panel-title">逐步執行</p>
+        <div class="controls">
+          <button id="btn-reset" type="button">重來</button>
+          <button id="btn-prev" type="button">上一步</button>
+          <button id="btn-next" type="button" class="primary">下一步</button>
+          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count" id="count"></span>
+        </div>
+        <p class="hint">每一步，三邊各執行一條指令。先把位址算完的那邊就停下來等。<code>ret</code> 不算步驟。</p>
+      </div>
+    </div>
+
+    <div class="row lanes" id="lanes"></div>
+  </section>
+
+  <section class="prose">
+    <h2>四個案例跑完的結果</h2>
+    <p>算出位址並載入所需的指令數，不含 <code>ret</code>。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp" id="result">
+      <thead><tr><th>案例</th><th>要算的位址</th><th>x86-64</th><th>AArch64</th><th>RV64GC</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="foot">x86 和 AArch64 的縮放各有限制：x86 的 scale 最大 8，AArch64 的縮放只能等於存取大小。所以第三個案例的 ×16 兩邊都得先用一條算術指令處理，差距縮小。RISC-V 不管怎樣都要先算，但開了 C 擴充後這些算術指令多半是 2 bytes，bytes 總數和另外兩邊差距不大，差的是指令數。</p>
+
+  <section class="prose three">
+    <h2>看完可以帶走的三句話</h2>
+    <ol>
+      <li><strong>定址模式是把常見的位址算術塞進 load/store。</strong>陣列索引和結構成員是最常見的兩種，所以「base + index×大小 + 常數」這個形狀被 x86 直接內建成一條指令的位址欄位。</li>
+      <li><strong>x86 最寬，AArch64 中間，RISC-V 只留最小集合。</strong>x86 連縮放倍數都可以和存取大小無關；AArch64 給縮放和位移，但縮放綁死在存取大小；RISC-V 只留 base + 12 位元常數，其餘全部交給 <code>slli</code>、<code>add</code> 這類一般指令。三個 ISA 剛好是三種哲學。</li>
+      <li><strong>代價差在指令數，不在 bytes。</strong>RISC-V 多出來的算術指令壓縮後常是 2 bytes，程式大小和 x86 差不多。真正的差異是同一件事要發出更多條指令，前端要更寬、解碼和排程的工作更多。這就是為什麼 RISC-V 後來加了 Zba 擴充把縮放加法補回來（見下）。</li>
+    </ol>
+  </section>
+
+  <section class="prose">
+    <h2>這個模型省略了什麼</h2>
+    <ul>
+      <li><strong>pre/post-index 在迴圈裡的價值。</strong>AArch64 的 <code>ldr x0, [x1], #8</code> 載入之後順便把 x1 往前推 8，一條指令做完「讀目前元素、指標前進」，迴圈裡每輪省一條 <code>add</code>。x86 和 RISC-V 都沒有這種「會改 base 的 load」。本頁的案例沒有迴圈，看不到這個差別。</li>
+      <li><strong>x86 的 <code>lea</code> 把定址模式當算術用。</strong><code>lea rax, [rdi + rsi*8 + 16]</code> 只算位址、不碰記憶體，等於一條免費的三運算元乘加。第一篇的 <code>a + b</code> 就是用它編的。</li>
+      <li><strong>segment 暫存器。</strong>x86 的位址其實還可以加一個 segment base，64 位元下只剩 <code>fs</code> 和 <code>gs</code> 在用，拿來放 thread-local 資料的起點。這裡略過。</li>
+      <li><strong>RISC-V 的 Zba 擴充。</strong><code>sh1add</code>、<code>sh2add</code>、<code>sh3add</code> 一條做 <code>rd = rs1×2/4/8 + rs2</code>。用 <code>-march=rv64gc_zba</code> 重編第一個案例，<code>slli</code> + <code>add</code> 併成 <code>sh3add a0, a1, a0</code>，三條變兩條。但第三個案例的 ×16 不在 2、4、8 之內，還是三條。RVA22 以後的 profile 已把 Zba 列為必備。</li>
+      <li><strong>位置無關碼（-fPIC）下的全域變數。</strong>第四個案例假設連結時就知道 <code>g</code> 的位址。編成共享函式庫時，<code>g</code> 可能被別的函式庫定義，三邊都要多一次間接：x86 變 <code>mov rax, [rip + g@GOTPCREL]</code> 再 <code>mov rax, [rax]</code>，AArch64 的 <code>adrp</code> 改指向 GOT，RISC-V 用 <code>auipc</code> 配 <code>%got_pcrel_hi</code> 再多一條 <code>ld</code>。</li>
+      <li><strong>RISC-V 的 code model。</strong>本頁用預設的 medlow，<code>lui</code> 給絕對位址的高 20 位元，程式必須落在 ±2 GB 內。改用 <code>-mcmodel=medany</code> 會變成 <code>auipc</code> 相對 PC，和 AArch64 的 <code>adrp</code> 思路一樣。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+// Each lane: regs = which register holds which C variable; init = the address formula in those
+// registers; steps = one per instruction that does addressing work (ret is listed but skipped).
+// Each step: asm, expr (the formula AFTER this instruction), say. The last step's expr is the loaded value.
+const L = (asm, expr, say, note = '') => ({ asm, expr, say, note });
+
+const CASES = [
+  {
+    id: 'idx', title: 'p[i]', c: 'long f(long *p, long i) {\n  return p[i];\n}',
+    goal: 'p + i×8', hint: '最經典的陣列索引：起點加索引乘元素大小。看哪邊可以一條做完。',
+    x86: { regs: 'p 在 rdi，i 在 rsi', init: 'rdi + rsi×8', steps: [
+      L('mov rax, qword ptr [rdi + 8*rsi]', 'rax = mem[rdi + 8×rsi]', '一條做完。index×scale 直接寫在位址欄位裡，scale=8 由 SIB byte 的 2 bits 指定。'),
+    ]},
+    arm: { regs: 'p 在 x0，i 在 x1', init: 'x0 + x1×8', steps: [
+      L('ldr x0, [x0, x1, lsl #3]', 'x0 = mem[x0 + x1 << 3]', '也是一條。<code>lsl #3</code> 就是乘 8，這裡允許是因為剛好等於載入的大小（8 bytes）。'),
+    ]},
+    rv: { regs: 'p 在 a0，i 在 a1', init: 'a0 + a1×8', steps: [
+      L('slli a1, a1, 3', 'a0 + a1', 'load 不會乘法，先用左移 3 位把 i 變成 i×8，結果放回 a1。'),
+      L('add a0, a0, a1', 'a0', '再把起點和偏移加起來。現在位址整個在 a0 裡。'),
+      L('ld a0, 0(a0)', 'a0 = mem[a0 + 0]', 'load 只吃「暫存器加常數」，常數是 0。三條做完別人一條的事。'),
+    ]},
+  },
+  {
+    id: 'field', title: 's->y', c: 'struct S { long x, y; };\n\nlong f(struct S *s) {\n  return s->y;\n}',
+    goal: 's + 8', hint: '結構成員：起點加一個編譯期就知道的常數。這是三邊都有的最小公分母。',
+    x86: { regs: 's 在 rdi', init: 'rdi + 8', steps: [
+      L('mov rax, qword ptr [rdi + 8]', 'rax = mem[rdi + 8]', 'base + disp8。位移 8 放得進 8 位元，整條 4 bytes。'),
+    ]},
+    arm: { regs: 's 在 x0', init: 'x0 + 8', steps: [
+      L('ldr x0, [x0, #8]', 'x0 = mem[x0 + 8]', '無號 12 位元位移，而且是以存取大小為單位：欄位裡存的是 1，硬體乘回 8。所以 64 位元 load 的位移上限是 32 KB，不是 4 KB。'),
+    ]},
+    rv: { regs: 's 在 a0', init: 'a0 + 8', steps: [
+      L('ld a0, 8(a0)', 'a0 = mem[a0 + 8]', '這正是 RISC-V 唯一的定址模式：暫存器加 12 位元有號常數。這個案例三邊打平。'),
+    ]},
+  },
+  {
+    id: 'arr_field', title: 'a[i].y', c: 'struct S { long x, y; };\n\nlong f(struct S *a, long i) {\n  return a[i].y;\n}',
+    goal: 'a + i×16 + 8', hint: '結構陣列：索引乘 16（結構大小）再加成員偏移 8。16 超出了 x86 和 AArch64 的縮放能力，看它們怎麼辦。',
+    x86: { regs: 'a 在 rdi，i 在 rsi', init: 'rdi + rsi×16 + 8', steps: [
+      L('shl rsi, 4', 'rdi + rsi + 8', 'scale 只有 1、2、4、8，乘 16 做不到，得先用一條左移。'),
+      L('mov rax, qword ptr [rdi + rsi + 8]', 'rax = mem[rdi + rsi + 8]', '剩下的 base + index + disp 還是一條吃掉。整個案例兩條。'),
+    ]},
+    arm: { regs: 'a 在 x0，i 在 x1', init: 'x0 + x1×16 + 8', steps: [
+      L('add x8, x0, x1, lsl #4', 'x8 + 8', 'load 的縮放只能是 8，乘 16 不行，但 <code>add</code> 指令本身可以帶任意左移。先把 base + i×16 算進 x8。'),
+      L('ldr x0, [x8, #8]', 'x0 = mem[x8 + 8]', '再用 base + imm 形式載入。也是兩條，和 x86 一樣，只是分工方式不同。'),
+    ]},
+    rv: { regs: 'a 在 a0，i 在 a1', init: 'a0 + a1×16 + 8', steps: [
+      L('slli a1, a1, 4', 'a0 + a1 + 8', '左移 4 位。'),
+      L('add a0, a0, a1', 'a0 + 8', '起點加偏移。'),
+      L('ld a0, 8(a0)', 'a0 = mem[a0 + 8]', '最後 8 放進 load 的常數欄位。三條。這個案例三邊差距縮到 3 對 2，因為另外兩邊也被 16 卡住了。'),
+    ]},
+  },
+  {
+    id: 'glob', title: 'g', c: 'extern long g;\n\nlong f(void) {\n  return g;\n}',
+    goal: '&g（連結後才知道的 64 位元位址）', hint: '全域變數的位址是連結器填的，64 位元塞不進任何一條指令。三邊各自想辦法只放一部分。',
+    x86: { regs: '沒有暫存器參與', init: '&g', steps: [
+      L('mov rax, qword ptr [rip + g]', 'rax = mem[rip + disp32]', '不放絕對位址，放「相對於下一條指令」的 32 位元位移。程式碼和資料距離在 ±2 GB 內就夠用，而且搬到哪都不用改。'),
+    ]},
+    arm: { regs: '沒有暫存器參與', init: '&g', steps: [
+      L('adrp x8, g', 'x8 + g 的頁內偏移', '<code>adrp</code> 算出 g 所在的 4 KB 頁的起點（相對 PC，±4 GB），放進 x8。位址的高 52 位元解決了。', '取 4 KB 頁'),
+      L('ldr x0, [x8, :lo12:g]', 'x0 = mem[x8 + lo12(g)]', '剩下的頁內偏移最多 12 位元，剛好放進 load 的位移欄位。兩條指令拼出一個完整位址。', '低 12 位元'),
+    ]},
+    rv: { regs: '沒有暫存器參與', init: '&g', steps: [
+      L('lui a0, %hi(g)', 'a0 + g 的低 12 位元', '<code>lui</code> 把 20 位元常數放進高位。這裡是絕對位址（預設 medlow code model），所以整個程式要落在 ±2 GB。', '高 20 位元'),
+      L('ld a0, %lo(g)(a0)', 'a0 = mem[a0 + lo12(g)]', '低 12 位元放進 load 的常數欄位。和 AArch64 一樣是兩條、高低兩半，差別在一個相對 PC、一個絕對。', '低 12 位元'),
+    ]},
+  },
+];
+
+const LANES = [
+  { id: 'x86', name: 'x86-64', sub: '最寬' },
+  { id: 'arm', name: 'AArch64', sub: '中間' },
+  { id: 'rv', name: 'RV64GC', sub: '只有 imm(base)' },
+];
+
+const $ = id => document.getElementById(id);
+const state = { ci: 0, k: 0 };
+const cur = () => CASES[state.ci];
+const total = () => Math.max(...LANES.map(l => cur()[l.id].steps.length));
+
+function renderPresets() {
+  const p = $('presets');
+  CASES.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.ci = i; state.k = 0; renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderLaneShell() {
+  const host = $('lanes');
+  host.innerHTML = '';
+  LANES.forEach(l => {
+    const el = document.createElement('div');
+    el.className = 'lane'; el.id = 'lane-' + l.id;
+    el.innerHTML = `
+      <div class="lane-head"><span class="lane-name">${l.name}<span class="lane-sub">${l.sub}</span></span><span class="tag idle" data-r="tag"></span></div>
+      <div class="formula"><p class="panel-title">位址算式</p><div class="expr" data-r="expr"></div><p class="regs" data-r="regs"></p></div>
+      <div class="listing" data-r="listing"></div>
+      <p class="say" data-r="say" aria-live="polite"></p>`;
+    host.appendChild(el);
+  });
+}
+
+function renderLane(l) {
+  const el = $('lane-' + l.id);
+  const d = cur()[l.id];
+  const n = d.steps.length;
+  const p = Math.min(state.k, n);
+  const finished = p === n;
+
+  const tag = el.querySelector('[data-r=tag]');
+  if (p === 0) { tag.className = 'tag idle'; tag.textContent = `${n} 條`; }
+  else if (finished) { tag.className = 'tag hit'; tag.textContent = `載入完成，${n} 條`; }
+  else { tag.className = 'tag miss'; tag.textContent = `還在算，${p} / ${n}`; }
+
+  const expr = el.querySelector('[data-r=expr]');
+  expr.textContent = p === 0 ? d.init : d.steps[p - 1].expr;
+  expr.className = 'expr' + (finished && p > 0 ? ' done' : '');
+  el.querySelector('[data-r=regs]').textContent = d.regs;
+
+  const listing = el.querySelector('[data-r=listing]');
+  listing.innerHTML = d.steps.map((s, i) => {
+    const cls = i < p - 1 ? 'done' : (i === p - 1 ? 'on' : '');
+    const note = s.note ? `<small>${s.note}</small>` : '';
+    return `<div class="ins ${cls}"><span class="n">${i + 1}</span><span>${s.asm}${note}</span></div>`;
+  }).join('') + `<div class="ins skip"><span class="n"></span><span>ret</span></div>`;
+
+  const say = el.querySelector('[data-r=say]');
+  if (p === 0) say.innerHTML = '算式裡的暫存器放的是 C 的參數。按「下一步」執行第一條。';
+  else say.innerHTML = d.steps[p - 1].say + (finished && state.k > n ? ' 這邊算完了，等其他兩個。' : '');
+}
+
+function renderAll() {
+  const c = cur();
+  $('csrc').textContent = c.c;
+  $('goal').textContent = c.goal;
+  $('hint').textContent = c.hint;
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.ci));
+  const T = total();
+  $('step-range').max = T; $('step-range').value = state.k;
+  $('count').textContent = `第 ${state.k} / ${T} 步`;
+  $('btn-prev').disabled = state.k === 0;
+  $('btn-next').disabled = state.k >= T;
+  renderLaneShell();
+  LANES.forEach(renderLane);
+}
+
+function renderResult() {
+  const tb = $('result').querySelector('tbody');
+  const sum = { x86: 0, arm: 0, rv: 0 };
+  tb.innerHTML = CASES.map(c => {
+    const cells = LANES.map(l => { const n = c[l.id].steps.length; sum[l.id] += n; return `<td class="num">${n}</td>`; }).join('');
+    return `<tr><td class="name mono">${c.title}</td><td class="num">${c.goal}</td>${cells}</tr>`;
+  }).join('') + `<tr class="total"><td class="name">合計</td><td></td><td class="num">${sum.x86}</td><td class="num">${sum.arm}</td><td class="num">${sum.rv}</td></tr>`;
+}
+
+$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
+$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
+$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
+$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+  if (e.key === 'ArrowRight') $('btn-next').click();
+  if (e.key === 'ArrowLeft') $('btn-prev').click();
+});
+
+renderPresets();
+renderAll();
+renderResult();
+</script>
+</body>
+</html>
