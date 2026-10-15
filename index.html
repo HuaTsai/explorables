@@ -51,6 +51,11 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
 .mini-tree { margin: 0; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.35; }
 .mini-tree b { font-weight: 600; }
 .mini-tree .dim { color: var(--muted); }
+.mini-chip { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.18rem; width: 100%; padding: 0.15rem 0; }
+.mini-chip i { display: block; height: 0.55rem; background: var(--line); border-radius: 1px; }
+.mini-chip i.l2 { grid-column: 1 / -1; height: 0.7rem; background: var(--right); opacity: 0.7; }
+.mini-chip i.hbm { background: var(--left); opacity: 0.7; }
+.mini-chip i.on { background: var(--right); }
 </style>
 </head>
 <body>
@@ -88,6 +93,23 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         <div class="text">
           <h2>DNS 解析逐步圖解</h2>
           <p>逐步執行一次 DNS 查詢,看解析器怎麼從根伺服器一路問到權威伺服器,也可以改紀錄、讓快取過期。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="gpu-memory/">
+        <div class="glyph" aria-hidden="true">
+          <div class="mini-chip">
+            <i class="hbm"></i><i class="on"></i><i></i><i></i><i></i><i class="hbm"></i>
+            <i class="hbm"></i><i></i><i></i><i></i><i></i><i class="hbm"></i>
+            <i class="l2"></i>
+            <i class="hbm"></i><i></i><i></i><i></i><i></i><i class="hbm"></i>
+            <i class="hbm"></i><i></i><i></i><i></i><i></i><i class="hbm"></i>
+          </div>
+        </div>
+        <div class="text">
+          <h2>GPU 記憶體階層逐步圖解</h2>
+          <p>逐步執行一個 warp 的指令,看每次存取在 H100 晶片上走到 register、shared、L1、L2 還是 HBM,花了多少 cycle。可切換 H200,後面附 Blackwell 和 GB300 多了什麼。</p>
         </div>
       </a>
     </li>

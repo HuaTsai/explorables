@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU 記憶體階層逐步圖解</title>
+<meta name="description" content="逐步執行一個 warp 的幾條指令,看每一次存取在 H100 晶片上走到哪一層、花了多少 cycle。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the stepper is a single workbench — the kernel on top,
+   two chip drawings (package, one SM zoomed in) under it, then the log, caches and registers. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 命中:在這一層就拿到 */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* 未命中:還要往外走 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;         /* 目前這一步 */
+  --bad: #b3261e;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; --bad: #ff8a80; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+i.hit, i.miss { font-style: normal; font-weight: 700; }
+i.hit { color: var(--hit); }
+i.miss { color: var(--miss); }
+.empty { color: var(--muted); font-size: 0.9rem; }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* hierarchy table */
+.table-wrap { overflow-x: auto; }
+.tiers { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; min-width: 40rem; }
+.tiers th, .tiers td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tiers th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.tiers td.name { font-weight: 700; white-space: nowrap; }
+.tiers td.num { font-family: var(--font-mono); font-size: 0.85rem; white-space: nowrap; }
+.foot { color: var(--muted); font-size: 0.85rem; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row, .row + .panels, .panels + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.88rem; }
+
+/* kernel + current instruction */
+.kernel { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 1rem 1.5rem; }
+@media (max-width: 760px) { .kernel { grid-template-columns: minmax(0, 1fr); } }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+.code { margin: 0; padding: 0.6rem 0; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.75; background: var(--bg); border-radius: 4px; overflow-x: auto; counter-reset: ln; }
+.code .ln { display: block; padding: 0 0.75rem 0 2.6rem; position: relative; white-space: pre; }
+.code .ln::before { counter-increment: ln; content: counter(ln); position: absolute; left: 0.75rem; color: var(--muted); font-size: 0.75rem; }
+.code .ln.on { background: var(--mark); }
+.code .ln.done { color: var(--muted); }
+.msg { border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.msg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.45rem 0.75rem; font-size: 0.9rem; font-weight: 700; border-bottom: 1px solid var(--line); min-height: 2.4rem; }
+.tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; }
+.tag.hit { background: var(--hit); color: var(--surface); }
+.tag.miss { background: var(--miss); color: var(--surface); }
+.tag.think { background: var(--mark); color: var(--ink); }
+.msg-body { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; overflow-x: auto; min-height: 4.8em; background: var(--bg); }
+.say { max-width: none; min-height: 3.4em; margin-top: 0.75rem; }
+.path { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-top: 0.75rem; font-size: 0.8rem; font-family: var(--font-mono); }
+.path .hop { padding: 0.1rem 0.55rem; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); }
+.path .hop.hit { border-color: var(--hit); color: var(--hit); background: var(--hit-soft); }
+.path .hop.miss { border-color: var(--miss); color: var(--miss); background: var(--miss-soft); }
+.path .hop.pass { border-color: var(--ink); color: var(--ink); }
+.path .arrow { color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.9rem; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+
+/* chip drawings */
+.figs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
+.fig { min-width: 0; }
+.fig .cap { font-size: 0.8rem; color: var(--muted); margin: 0.35rem auto 0; max-width: 54rem; }
+.fig .presets { max-width: 54rem; margin: 0 auto 0.6rem; }
+.fig-wrap { overflow-x: auto; }
+svg.chip { display: block; width: 100%; max-width: 54rem; margin: 0 auto; height: auto; }
+#fig-pkg svg.chip, #fig-b300 svg.chip { min-width: 480px; }
+#fig-sm svg.chip { min-width: 600px; }
+.chip text { font-family: var(--font-body); fill: var(--ink); }
+.chip .t { font-size: 11px; font-weight: 700; }
+.chip .s { font-size: 9px; fill: var(--muted); }
+.chip .xs { font-size: 7.5px; fill: var(--muted); }
+.chip .mono { font-family: var(--font-mono); }
+.chip .board { fill: var(--bg); stroke: var(--line); }
+.chip .die { fill: var(--surface); stroke: var(--ink); stroke-width: 1.5; }
+.chip .blk { fill: var(--bg); stroke: var(--line); }
+.chip .blk.off { fill: none; stroke-dasharray: 2 2; }
+.chip text.off { fill: var(--muted); opacity: 0.6; }
+.chip .cell { fill: var(--line); stroke: none; }
+.chip .cell.off { fill: none; stroke: var(--line); stroke-dasharray: 1.5 1.5; }
+.chip .unit { fill: var(--surface); stroke: var(--line); }
+.chip .unit.fp32 { fill: var(--hit-soft); }
+.chip .unit.int32 { fill: var(--bg); }
+.chip .unit.fp64 { fill: var(--miss-soft); }
+.chip .unit.tc { fill: var(--mark); }
+.chip .unit.ldst { fill: var(--surface); stroke: var(--ink); }
+.chip .unit.sfu { fill: var(--surface); }
+.chip .mem { fill: var(--bg); stroke: var(--line); stroke-width: 1.2; }
+.chip .mem.off { fill: none; stroke-dasharray: 2 2; }
+.chip .wire { stroke: var(--line); stroke-width: 1.5; fill: none; }
+.chip .cluster { fill: none; stroke: var(--hit); stroke-width: 1.2; stroke-dasharray: 3 2; }
+.chip .nvhbi { fill: var(--mark); stroke: var(--ink); }
+/* live states */
+.chip rect.lit.hit { stroke: var(--hit); stroke-width: 2.5; fill: var(--hit-soft); }
+.chip rect.lit.miss { stroke: var(--miss); stroke-width: 2.5; fill: var(--miss-soft); }
+.chip rect.lit.pass { stroke: var(--ink); stroke-width: 2.5; }
+.chip rect.lit.think { stroke: var(--ink); stroke-width: 2; fill: var(--mark); }
+.chip .sm0 { stroke: var(--ink); stroke-width: 1.5; fill: var(--mark); }
+
+/* panels */
+.panels { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+.panel { padding: 1rem 1.25rem; min-width: 0; }
+.panel + .panel { border-left: 1px solid var(--line); }
+@media (max-width: 760px) {
+  .panels { grid-template-columns: minmax(0, 1fr); }
+  .panel + .panel { border-left: 0; border-top: 1px solid var(--line); }
+}
+.log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.1rem; counter-reset: step; }
+.log-row { counter-increment: step; display: grid; grid-template-columns: 1.5rem minmax(0, 1fr); column-gap: 0.5rem; width: 100%; text-align: left; border: 0; border-radius: 3px; padding: 0.25rem 0.4rem; font-size: 0.82rem; line-height: 1.45; }
+.log-row::before { content: counter(step); color: var(--muted); font-family: var(--font-mono); font-size: 0.75rem; text-align: right; line-height: 1.6; }
+.log-row .who { display: block; grid-column: 2; font-weight: 700; }
+.log-row.hit .who { color: var(--hit); }
+.log-row.miss .who { color: var(--miss); }
+.log-row .what { display: block; grid-column: 2; font-family: var(--font-mono); font-size: 0.76rem; color: var(--muted); overflow-wrap: anywhere; }
+.log-row.on { background: var(--mark); }
+.log-row.future { opacity: 0.45; }
+
+.stack { display: flex; flex-direction: column; gap: 1.1rem; }
+.mini { width: 100%; border-collapse: collapse; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.mini th { text-align: left; font-size: 0.74rem; color: var(--muted); font-weight: 700; padding: 0.2rem 0.5rem 0.2rem 0.3rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.mini td { font-family: var(--font-mono); padding: 0.25rem 0.5rem 0.25rem 0.3rem; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.mini tr.fresh td { background: var(--mark); }
+.mini td.wait { color: var(--miss); }
+.mini td.ok { color: var(--hit); }
+.lines { display: flex; flex-wrap: wrap; gap: 0.3rem; font-family: var(--font-mono); font-size: 0.76rem; }
+.lines span { border: 1px solid var(--line); border-radius: 3px; padding: 0.05rem 0.45rem; color: var(--muted); }
+.lines span.have { border-color: var(--hit); color: var(--hit); background: var(--hit-soft); }
+.lines span.fresh { border-color: var(--ink); color: var(--ink); background: var(--mark); }
+.bytes { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.8rem; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.bytes dt { color: var(--muted); }
+.bytes dd { margin: 0; font-family: var(--font-mono); }
+.bytes dd b { font-weight: 600; }
+
+/* result */
+.result { display: flex; flex-direction: column; gap: 0.75rem; }
+.compare { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.9rem; min-width: 34rem; }
+.compare th, .compare td { padding: 0.4rem 1rem 0.4rem 0; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.compare th { font-size: 0.8rem; color: var(--muted); font-weight: 700; }
+.compare td.num { font-family: var(--font-mono); font-size: 0.85rem; }
+.compare tr.now td { background: var(--mark); }
+.legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.8rem; color: var(--muted); }
+.legend i { display: inline-block; width: 0.8em; height: 0.8em; border: 1px solid var(--line); vertical-align: -0.1em; margin-right: 0.3em; }
+
+/* generations */
+.gen { display: flex; flex-direction: column; gap: 1rem; }
+.gen .fig-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 1rem 1.25rem; }
+.delta { border-collapse: collapse; font-size: 0.88rem; min-width: 44rem; }
+.delta th, .delta td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.delta th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.delta td.name { font-weight: 700; white-space: nowrap; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">GPU</span> 記憶體階層逐步圖解</h1>
+    <p class="lead">GPU 很快，但它的資料大多放在晶片外面。按「下一步」看一個 warp 的每一條指令往晶片哪裡跑、在哪一層拿到資料、停了多少 cycle。</p>
+  </header>
+
+  <section class="prose">
+    <h2>先認識這顆晶片</h2>
+    <p>下面兩張圖是 NVIDIA H100（SXM5 版）。第一張是整個封裝：中間那塊是 GPU 的 <strong>die</strong>（晶片本體），兩側的 <strong>HBM3</strong> 是記憶體，它們坐在同一片基板上，但是不同的晶片。你在 CUDA 裡 <code>cudaMalloc</code> 拿到的 <strong>global memory</strong> 就在 HBM 裡，也就是在 GPU 晶片之外。H200 用的是同一顆 die，只把記憶體換成六顆 HBM3e，圖上可以切換。</p>
+    <p>die 裡面排滿了小格子，每一格是一個 <strong>SM</strong>（Streaming Multiprocessor），H100 啟用了 132 個。中間那條是 <strong>L2 cache</strong>，所有 SM 共用，所有去 HBM 的存取都經過它。第二張圖把一個 SM 放大：它裡面有四個 <strong>Processing Block</strong>，每個有自己的 warp scheduler、register file 和一排運算單元；底部那塊 256 KB 的 SRAM 同時當 <strong>L1 cache</strong> 和 <strong>shared memory</strong>，比例可以設定。旁邊的 <strong>TMA</strong> 是 Hopper 新加的搬運單元，後面會提到。</p>
+    <p>程式這邊的名詞對過去是這樣：一個 <strong>thread</strong> 執行你寫的 kernel 函式；32 個 thread 綁成一個 <strong>warp</strong>，硬體一次對整個 warp 發一條指令；若干 warp 組成一個 <strong>block</strong>，整個 block 住在同一個 SM 上，所以 block 內的 thread 才能共用 shared memory。thread 自己的變數放在 Processing Block 的 register file；其他東西都在 HBM，靠 L2 和 L1 快取。</p>
+    <p>讀取資料的代價差距很大。下表的延遲來自 Hopper 的 microbenchmark 論文，是量級，實際值隨存取樣式和落在哪個 L2 partition 浮動，看倍數就好。</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="tiers">
+      <thead><tr><th>層級</th><th>實際位置</th><th>誰看得到</th><th>容量</th><th>延遲（約）</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Register</td><td>Processing Block 內的 register file</td><td>單一 thread</td><td class="num">64 KB / PB<br>256 KB / SM</td><td class="num">0（算術指令本身約 4 cycle）</td></tr>
+        <tr><td class="name">Shared memory</td><td>SM 內，與 L1 共用同一塊 256 KB SRAM，由程式自己搬</td><td>同一個 block；Hopper 起同一個 cluster 內的 block 也能讀</td><td class="num">最多 228 KB / SM</td><td class="num">≈ 30 cycle<br>跨 SM 讀 ≈ 180</td></tr>
+        <tr><td class="name">L1 data cache</td><td>同一塊 SRAM，硬體自動快取 global 讀取</td><td>同一個 SM</td><td class="num">256 KB 扣掉 shared</td><td class="num">≈ 40 cycle</td></tr>
+        <tr><td class="name">L2 cache</td><td>die 中央，兩個 partition</td><td>整顆 GPU</td><td class="num">50 MB</td><td class="num">≈ 260 cycle（近端）<br>≈ 410（遠端 partition）</td></tr>
+        <tr><td class="name">Global memory</td><td id="tier-hbm-where">HBM3，die 之外</td><td>整顆 GPU，host 也可搬進搬出</td><td class="num" id="tier-hbm-cap">80 GB,3.35 TB/s</td><td class="num">≈ 480 到 660 cycle</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">案例</span></div>
+
+    <div class="row kernel">
+      <div>
+        <p class="panel-title">一個 warp 要執行的 kernel（32 個 thread，i = 32 + threadIdx.x）</p>
+        <pre class="code" id="code"></pre>
+      </div>
+      <div>
+        <p class="panel-title">目前這一條指令</p>
+        <div class="msg">
+          <div class="msg-head" id="msg-head"></div>
+          <pre class="msg-body" id="msg-body"></pre>
+        </div>
+        <div class="path" id="path" aria-label="這次存取經過的層"></div>
+        <p class="say" id="say" aria-live="polite"></p>
+        <div class="controls">
+          <button id="btn-reset" type="button">重來</button>
+          <button id="btn-prev" type="button">上一步</button>
+          <button id="btn-next" type="button" class="primary">下一步</button>
+          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count" id="count"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="row figs">
+      <div class="fig" id="fig-pkg">
+        <div class="presets"><span class="lbl">封裝</span><button type="button" data-gpu="h100" class="chosen">H100 SXM5</button><button type="button" data-gpu="h200">H200 SXM</button></div>
+        <div class="fig-wrap"></div>
+        <p class="cap" id="cap-pkg"></p>
+      </div>
+      <div class="fig" id="fig-sm">
+        <div class="fig-wrap"></div>
+        <p class="cap">一個 SM 放大。四個 Processing Block 各自排程自己的 warp，共用底部的 L1 / shared memory；我們的 warp 住在 PB0。TMA 是 Hopper 新加的硬體搬運單元，一條指令就能把一塊多維 tile 從 global 搬進 shared。</p>
+      </div>
+    </div>
+    <div class="row legend">
+      <span><i style="background:var(--hit-soft)"></i>FP32 core ×32 / PB</span>
+      <span><i style="background:var(--bg)"></i>INT32 core ×16 / PB</span>
+      <span><i style="background:var(--miss-soft)"></i>FP64 core ×16 / PB</span>
+      <span><i style="background:var(--mark)"></i>Tensor Core ×1 / PB</span>
+      <span><i style="border-color:var(--ink)"></i>LD/ST ×8 / PB</span>
+      <span><i></i>SFU ×4 / PB</span>
+    </div>
+
+    <div class="panels">
+      <div class="panel">
+        <p class="panel-title">執行紀錄（點任一行可以跳過去）</p>
+        <ol class="log" id="log"></ol>
+      </div>
+      <div class="panel stack">
+        <div>
+          <p class="panel-title">Register（每個 thread 各有一份，這裡看 thread 0）</p>
+          <div id="regs"></div>
+        </div>
+        <div>
+          <p class="panel-title">Shared memory（這個 block 的 tile）</p>
+          <div id="shared"></div>
+        </div>
+        <div>
+          <p class="panel-title">L1 cache 裡有的 line（SM #0，每條 128 B = 32 個 float）</p>
+          <div class="lines" id="l1"></div>
+        </div>
+        <div>
+          <p class="panel-title">L2 cache 裡有的 line（整顆 GPU 共用）</p>
+          <div class="lines" id="l2"></div>
+        </div>
+        <div>
+          <p class="panel-title">搬了多少資料</p>
+          <dl class="bytes" id="bytes"></dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="result">
+    <h2>三個案例跑完的結果</h2>
+    <p>同樣是 32 個 thread 各算出一個值，寫法不同，代價差很多。cycle 是這個 warp 從第一條指令到最後一條寫出為止；HBM 流量是真的從記憶體晶片搬進 die 的 byte 數，有用的只有 128 B。</p>
+    <div class="table-wrap">
+      <table class="compare">
+        <thead><tr><th>案例</th><th>總 cycle</th><th>其中 stall</th><th>HBM → L2</th><th>L2 → L1</th><th>Shared 讀寫</th></tr></thead>
+        <tbody id="compare-body"></tbody>
+      </table>
+    </div>
+    <p id="verdict"></p>
+  </section>
+
+  <section class="prose">
+    <h2>對照：CUDA 裡的關鍵字各自住在哪裡</h2>
+    <p>上面的 kernel 只用到 register、shared 和 global。CUDA 還讓你指定其他幾種放法，下表對回兩張圖上的位置。「本體」是資料真正存放的地方，「路徑」是讀取時經過哪些快取。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="tiers">
+      <thead><tr><th>你在程式裡寫的</th><th>本體在哪</th><th>讀取路徑</th><th>誰看得到 / 活多久</th><th>你能控制什麼</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><code>int i; float s;</code><br><span class="foot">kernel 內的純量變數</span></td><td>Processing Block 的 register file</td><td>不經任何 cache</td><td>單一 thread，kernel 執行期間</td><td>compiler 決定用幾個。<code>__launch_bounds__</code> 或 <code>-maxrregcount</code> 設上限，超過就 spill 到 local memory</td></tr>
+        <tr><td class="name">Local memory<br><span class="foot">動態索引的陣列、register spill</span></td><td>HBM 裡每個 thread 自己的一小塊</td><td>L1 → L2 → HBM，與 global 相同</td><td>單一 thread，kernel 執行期間</td><td>看 <code>-Xptxas -v</code> 的 spill 數；改用常數索引或減少 register 壓力來避免</td></tr>
+        <tr><td class="name"><code>__shared__</code></td><td>SM 內那塊 256 KB SRAM</td><td>直接讀，不會 miss</td><td>同一個 block，block 結束就消失；Hopper 起可透過 cluster 讀鄰近 SM 的 shared（distributed shared memory）</td><td>靜態宣告大小，或 <code>extern __shared__</code> 加 launch 第三個參數；<code>cudaFuncSetAttribute</code> 的 carveout 調 L1 / shared 比例；<code>__cluster_dims__</code> 宣告 cluster</td></tr>
+        <tr><td class="name"><code>__constant__</code></td><td>HBM 裡一塊 64 KB 的區域</td><td>每個 SM 的 constant cache，miss 才到 L2 / HBM</td><td>整個 grid 可見，kernel 內唯讀；host 用 <code>cudaMemcpyToSymbol</code> 寫</td><td>warp 內所有 thread 讀<strong>同一個位址</strong>時一次廣播給 32 個 thread，最便宜；讀不同位址會被序列化。適合 filter 係數、查表這類大家都讀一樣的東西</td></tr>
+        <tr><td class="name"><code>__device__</code> 全域變數<br><code>cudaMalloc</code> 的指標</td><td>HBM（global memory）</td><td>L1 → L2 → HBM</td><td>整個 grid 和 host，活到 <code>cudaFree</code></td><td>存取樣式決定一切：相鄰 thread 讀相鄰位址才能合併成少數 cache line。<code>const __restrict__</code> 或 <code>__ldg()</code> 讓 compiler 走唯讀快取路徑；Hopper 起可用 TMA(<code>cuda::memcpy_async</code> 加 tensor map)整塊搬進 shared</td></tr>
+        <tr><td class="name">Texture / surface<br><span class="foot"><code>tex2D()</code>、<code>cudaTextureObject_t</code></span></td><td>HBM</td><td>Tex 單元 → L1（texture cache 已與 L1 合併）→ L2 → HBM</td><td>整個 grid 唯讀（surface 可寫）</td><td>硬體做邊界處理、插值、座標正規化，2D 局部性的快取方式比一般 load 友善</td></tr>
+        <tr><td class="name"><code>__managed__</code><br><code>cudaMallocManaged</code></td><td>page 在 host DRAM 和 HBM 之間按需搬</td><td>第一次碰到會 page fault，搬過 PCIe / NVLink 後同 global</td><td>host 和 device 都能直接用同一個指標</td><td><code>cudaMemPrefetchAsync</code> 先搬過去，<code>cudaMemAdvise</code> 給提示；否則第一輪很慢</td></tr>
+        <tr><td class="name">Pinned / mapped host memory<br><span class="foot"><code>cudaHostAlloc</code></span></td><td>host 的 DRAM</td><td>每次存取跨 PCIe，不留在 GPU 的 cache</td><td>host 和 device</td><td>只適合讀一次就丟的串流資料；大量重複讀要先 <code>cudaMemcpy</code> 進 HBM</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="foot">Register、shared、constant cache、L1、TMA 都在第二張圖的 SM 裡；L2 在第一張圖 die 中央；其餘本體都在第一張圖的 HBM，或根本在這張圖之外的主機記憶體。</p>
+
+  <section class="prose">
+    <h2>看完可以帶走的三句話</h2>
+    <ul>
+      <li>Shared memory 和 L1 是同一塊 SRAM，差別是誰管：L1 由硬體自動快取，shared 由你自己搬。它不是「比 L1 更快的一層」，而是「保證在這裡、不會被別人擠掉」的一層。只有一個 warp、每個值只用一次的時候，搬進 shared 只是多一跳。</li>
+      <li>一個 warp 發出 load 之後不會停下來，它會繼續發下一條指令，直到有指令要用那個還沒回來的 register 才 stall。所以連續發出幾個獨立的 load，等待時間會重疊，而不是相加。</li>
+      <li>記憶體是以 cache line 為單位搬的。32 個 thread 讀 32 個相鄰的 float 只動一條 line；讀 32 個相隔很遠的 float 要動 32 條 line，延遲一樣，但吃掉 32 倍的頻寬。HBM 頻寬被 132 個 SM 分，平均每個 SM 每 cycle 只有大約 13 B（H100）或 18 B（H200），浪費不起。</li>
+    </ul>
+  </section>
+
+  <section class="gen">
+    <div class="prose">
+      <h2>從 H100 到 GB300：又多了什麼</h2>
+      <p>H100 之後兩代是 Blackwell（B200）和 Blackwell Ultra（B300）；GB300 是把兩顆 B300 和一顆 Grace CPU 放在同一塊板上的 superchip。NVIDIA 沒有為這兩代出像 Hopper 那樣的架構 whitepaper，SM 內部的單元數沒有官方數字，所以下面只畫到封裝這一層，SM 內部用文字講。每一點後面標的是它改了這頁的哪一條規則。</p>
+    </div>
+    <div class="fig" id="fig-b300">
+      <div class="fig-wrap"></div>
+      <p class="cap">B300 封裝（示意，不按比例）。兩顆 reticle 大小的 die 用 NV-HBI 接成一顆 GPU，L2 各半，八顆 12-Hi HBM3e 全部啟用。B200 用同一對 die，開的 SM 較少、HBM 是 8-Hi。</p>
+    </div>
+    <div class="table-wrap">
+      <table class="delta">
+        <thead><tr><th>新東西</th><th>在哪裡</th><th>改了這頁的哪條規則</th></tr></thead>
+        <tbody>
+          <tr><td class="name">兩顆 die 一顆 GPU</td><td>B200 / B300 都是兩顆 die 用 NV-HBI（約 10 TB/s）接起來，軟體看到一顆 GPU。L2 共 126 MB，一半在各自的 die 上。</td><td>「L2 整顆共用、延遲一個值」不再成立。存取對面 die 那半 L2 的延遲和頻寬都比較差（B200 本地 21 TB/s，跨 die 16.8 TB/s）。Hopper 的 L2 已經有近端 / 遠端 partition 之分，雙 die 把這個差距拉大。</td></tr>
+          <tr><td class="name">Tensor Memory（TMEM）</td><td>每個 SM 多一塊 256 KB，128 lane × 512 column × 32-bit，只給 Tensor Core 用。矩陣乘的累加器放這裡，不再佔 register file。</td><td>階層表多一層。它像 shared memory 一樣由程式員配置和釋放(<code>tcgen05.alloc</code>)，但一般的 FP32 core 不能直接讀，要先搬回 register。</td></tr>
+          <tr><td class="name">HBM3e 八顆全開</td><td>B300 288 GB，約 8 TB/s；B200 180 GB。沒有關掉的 stack 或結構件。</td><td>「每個 SM 每 cycle 分到約 13 B」要重算：B300 約 8 TB/s 分給 148 到 160 個 SM，每 cycle 約 25 到 28 B。跨步讀浪費的絕對量變大，但相對比例一樣是 32 倍。</td></tr>
+          <tr><td class="name">GB300：CPU 和 GPU 記憶體合成一個 pool</td><td>兩顆 B300 加一顆 Grace CPU，之間用 NVLink-C2C（900 GB/s）。Grace 的 LPDDR5X（最多 480 GB）和 GPU 的 HBM 在同一個 cache coherent 位址空間。</td><td>對照表最後兩列變了：host memory 不再是「每次跨 PCIe、不快取」，GPU 可以直接讀 CPU 的記憶體並快取在 L2，只是頻寬比 HBM 低一個數量級。<code>cudaMallocManaged</code> 的 page fault 搬移也變成硬體 coherence。</td></tr>
+          <tr><td class="name">Cluster 變大、TMA 變強</td><td>cluster 最多 16 個 block（H100 也是 16，但 portable 上限 8）；Tensor Core 指令可以跨兩個 block 做一個矩陣乘（<code>cta_group::2</code>）。TMA 支援更多 layout。</td><td>「shared memory 只有同一個 block 看得到」的放寬從 Hopper 開始，Blackwell 讓它成為主要用法：兩個 SM 的 shared memory 合起來餵一個矩陣乘。</td></tr>
+          <tr><td class="name">取捨：FP64 砍、SFU 加</td><td>B300 把 FP64 吞吐砍到 B200 的約三十分之一（約 1.2 TFLOPS）；SFU 的指數運算加倍到每 SM 每 cycle 32 次。</td><td>不是記憶體層的變化，但說明 SM 圖右下那排 FP64 core 和 SFU 的比例會隨產品定位改變。B300 是為 attention 的 softmax 調的。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="foot">再往後的 Rubin（2026 年出貨）維持兩顆 die，224 個 SM，八顆 HBM4 共 288 GB、22 TB/s，NVLink-C2C 加到 1.8 TB/s。SM 內部同樣沒有公開圖。</p>
+  </section>
+
+  <section class="prose">
+    <h2>這個模型省略了什麼</h2>
+    <ul>
+      <li>這裡只有一個 warp。真正的 SM 上同時住著幾十個 warp（H100 最多 64 個），一個在等記憶體時 scheduler 會切去發別的 warp 的指令，這才是 GPU 藏住幾百個 cycle 的主要方法。那是另一篇的主題。</li>
+      <li>L1 和 L2 只記「這條 line 在不在」，沒有容量上限，也不會被驅逐。真的 L2 以 32 B sector 為單位搬，L1 的 line 是 128 B，這裡統一用 128 B。</li>
+      <li>延遲全部用固定值：shared 30、L1 40、L2 260、HBM 600 cycle。實際上 L2 分兩個 partition，近端命中約 260、遠端約 410；HBM 在 480 到 660 之間，看資料落在哪一邊。模擬器一律當近端。</li>
+      <li>Shared memory 的 bank conflict、L1 的寫入策略、TLB、常數記憶體、texture 路徑、TMA 和 distributed shared memory 都沒有進模擬器。store 在這裡視為寫穿到 L2 且不讓 warp 等待。</li>
+      <li>第二張圖的單元數是 H100 whitepaper 的配置；H800 是同一顆 die，主要差在 NVLink 頻寬被砍。GeForce 系列的 SM 另外有 RT Core，FP32 和 INT32 的比例也不同。</li>
+      <li>Processing Block 裡每個 scheduler 一個 cycle 只能發一條指令，這裡把發射成本當成 1 cycle，也假設每個 thread 的工作完全相同，沒有 branch。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+/* ---------- hardware constants ----------
+   H100 SXM5 / H200 SXM, GH100 die. Latencies: Luo et al. 2024 (arXiv 2402.13499) Table IV and
+   arXiv 2501.12084 Table 3-4, measured on H800 PCIe (same die): shared 29, L1 33-41, L2 near 258 / far 414,
+   global 479-656. Rounded for the simulator. */
+const LAT = { alu: 4, shared: 30, l1: 40, l2: 260, hbm: 600 };
+const LINE = 32;             // floats per 128 B cache line
+const WARP = 32;
+const BASE = 32;             // i = BASE + threadIdx.x, so i-1 is a valid neighbour
+const tid = Array.from({ length: WARP }, (_, t) => t);
+const GPUS = {
+  h100: { name: 'H100 SXM5', mem: 'HBM3', stackGB: 16, sixth: false, total: '80 GB', bw: '3.35 TB/s', mc: 10,
+    cap: 'H100 SXM5 封裝。GH100 完整 die 有 8 個 GPC、144 個 SM，產品啟用 132 個；六個 HBM 位置只裝五顆 HBM3，第六個是沒有功能的結構件，讓散熱蓋壓得平。虛線代表關掉或沒裝的部分。' },
+  h200: { name: 'H200 SXM', mem: 'HBM3e', stackGB: 24, sixth: true, total: '141 GB', bw: '4.8 TB/s', mc: 12,
+    cap: 'H200 SXM 封裝。和 H100 是同一顆 die、同樣 132 個 SM，只把記憶體換成六顆 24 GB 的 HBM3e 全部啟用：實體 144 GB，可用 141 GB，頻寬從 3.35 升到 4.8 TB/s。' },
+};
+
+/* ---------- the three kernels, one instruction per step ----------
+   op: imad | ldg | stg | sts | lds | bar | fadd
+   idx(t): global array index touched by thread t; addr(t): shared slot; pred(t): is thread active */
+const PRESETS = [
+  {
+    key: 'direct', label: '直接讀三次 global',
+    blurb: '每個 thread 讀自己和左右鄰居，然後相加。三個 load 彼此獨立，warp 連續發出去不等。',
+    src: [
+      '__global__ void stencil(const float* a, float* out) {',
+      '  int i = blockIdx.x * blockDim.x + threadIdx.x;',
+      '  float c = a[i];',
+      '  float l = a[i - 1];',
+      '  float r = a[i + 1];',
+      '  float s = l + c;',
+      '  s = s + r;',
+      '  out[i] = s;',
+      '}',
+    ],
+    steps: [
+      { line: 1, op: 'imad', dst: 'i', text: 'IMAD  i = bid*32 + tid', desc: t => `i = ${BASE + t}` },
+      { line: 2, op: 'ldg', dst: 'c', src: ['i'], idx: t => BASE + t, text: 'LDG.E  c, [a + 4*i]' },
+      { line: 3, op: 'ldg', dst: 'l', src: ['i'], idx: t => BASE + t - 1, text: 'LDG.E  l, [a + 4*(i-1)]' },
+      { line: 4, op: 'ldg', dst: 'r', src: ['i'], idx: t => BASE + t + 1, text: 'LDG.E  r, [a + 4*(i+1)]' },
+      { line: 5, op: 'fadd', dst: 's', src: ['l', 'c'], text: 'FADD  s = l + c' },
+      { line: 6, op: 'fadd', dst: 's', src: ['s', 'r'], text: 'FADD  s = s + r' },
+      { line: 7, op: 'stg', src: ['s', 'i'], idx: t => BASE + t, text: 'STG.E  [out + 4*i], s' },
+    ],
+  },
+  {
+    key: 'shared', label: '先搬進 shared memory',
+    blurb: '每個 thread 把自己那格搬進 shared memory，邊上兩個 thread 多搬一格 halo，同步後從 shared 讀三次。',
+    src: [
+      '__global__ void stencil(const float* a, float* out) {',
+      '  __shared__ float tile[34];',
+      '  int i = blockIdx.x * blockDim.x + threadIdx.x;',
+      '  int t = threadIdx.x;',
+      '  tile[t + 1] = a[i];',
+      '  if (t == 0)  tile[0]  = a[i - 1];',
+      '  if (t == 31) tile[33] = a[i + 1];',
+      '  __syncthreads();',
+      '  float s = tile[t] + tile[t + 1];',
+      '  s = s + tile[t + 2];',
+      '  out[i] = s;',
+      '}',
+    ],
+    steps: [
+      { line: 2, op: 'imad', dst: 'i', text: 'IMAD  i = bid*32 + tid', desc: t => `i = ${BASE + t}` },
+      { line: 4, op: 'ldg', dst: 'c', src: ['i'], idx: t => BASE + t, text: 'LDG.E  c, [a + 4*i]' },
+      { line: 5, op: 'ldg', dst: 'h', src: ['i'], idx: t => (t === 0 ? BASE - 1 : BASE + WARP), pred: t => t === 0 || t === 31, text: 'LDG.E  h, [a + 4*(i∓1)]   @P (tid 0, 31)' },
+      { line: 4, op: 'sts', src: ['c'], addr: t => t + 1, text: 'STS  [tile + 4*(t+1)], c' },
+      { line: 5, op: 'sts', src: ['h'], addr: t => (t === 0 ? 0 : 33), pred: t => t === 0 || t === 31, text: 'STS  [tile + 0 / 132], h   @P (tid 0, 31)' },
+      { line: 7, op: 'bar', text: 'BAR.SYNC' },
+      { line: 8, op: 'lds', dst: 'l', addr: t => t, text: 'LDS  l, [tile + 4*t]' },
+      { line: 8, op: 'lds', dst: 'c', addr: t => t + 1, text: 'LDS  c, [tile + 4*(t+1)]' },
+      { line: 9, op: 'lds', dst: 'r', addr: t => t + 2, text: 'LDS  r, [tile + 4*(t+2)]' },
+      { line: 8, op: 'fadd', dst: 's', src: ['l', 'c'], text: 'FADD  s = l + c' },
+      { line: 9, op: 'fadd', dst: 's', src: ['s', 'r'], text: 'FADD  s = s + r' },
+      { line: 10, op: 'stg', src: ['s', 'i'], idx: t => BASE + t, text: 'STG.E  [out + 4*i], s' },
+    ],
+  },
+  {
+    key: 'strided', label: '跨步讀 a[i*32]',
+    blurb: '一樣是 32 個 thread 各讀一個 float，但彼此相隔 32 個元素，也就是每個 thread 落在不同的 cache line。',
+    src: [
+      '__global__ void gather(const float* a, float* out) {',
+      '  int i = blockIdx.x * blockDim.x + threadIdx.x;',
+      '  float c = a[i * 32];',
+      '  float s = c * 2.0f;',
+      '  out[i] = s;',
+      '}',
+    ],
+    steps: [
+      { line: 1, op: 'imad', dst: 'i', text: 'IMAD  i = bid*32 + tid', desc: t => `i = ${BASE + t}` },
+      { line: 2, op: 'ldg', dst: 'c', src: ['i'], idx: t => (BASE + t) * LINE, text: 'LDG.E  c, [a + 4*(i*32)]' },
+      { line: 3, op: 'fadd', dst: 's', src: ['c'], text: 'FMUL  s = c * 2' },
+      { line: 4, op: 'stg', src: ['s', 'i'], idx: t => BASE + t, text: 'STG.E  [out + 4*i], s' },
+    ],
+  },
+];
+
+/* ---------- simulator: one warp, in-order issue, scoreboard on registers ---------- */
+const lineOf = i => Math.floor(i / LINE);
+const uniq = xs => [...new Set(xs)].sort((a, b) => a - b);
+const fmtB = n => (n >= 1024 ? (n / 1024).toFixed(n % 1024 ? 1 : 0) + ' KB' : n + ' B');
+
+function simulate(preset) {
+  const st = {
+    cycle: 0, stall: 0,
+    regs: {},                       // name -> { readyAt, desc }
+    l1: new Set(), l2: new Set(),   // line ids present
+    shared: new Map(),              // slot -> desc
+    sharedReadyAt: 0,
+    bytes: { hbm: 0, l2: 0, l1: 0, sh: 0 },
+  };
+  const snap = (extra) => ({
+    cycle: st.cycle, stall: st.stall,
+    regs: Object.fromEntries(Object.entries(st.regs).map(([k, v]) => [k, { ...v }])),
+    l1: [...st.l1], l2: [...st.l2], shared: new Map(st.shared), bytes: { ...st.bytes },
+    ...extra,
+  });
+  const frames = [snap({ title: '尚未開始', kind: 'think', say: '按「下一步」發出第一條指令。', path: [], hits: [], fresh: {} })];
+
+  preset.steps.forEach((s, k) => {
+    const active = tid.filter(t => !s.pred || s.pred(t));
+    const fresh = { regs: [], l1: [], l2: [], shared: [] };
+    let waited = 0;
+    // 1. scoreboard: wait for source registers
+    const need = (s.src || []).map(r => st.regs[r] ? st.regs[r].readyAt : 0);
+    const readyAt = need.length ? Math.max(...need) : 0;
+    if (readyAt > st.cycle) { waited = readyAt - st.cycle; st.cycle = readyAt; st.stall += waited; }
+    // 2. issue
+    const issued = st.cycle;
+    st.cycle += 1;
+
+    let kind = 'think', path = [], hits = [], say = '', title = '', body = '';
+    const waitNote = waited ? `先等了 ${waited} cycle，因為 ${s.src.filter(r => st.regs[r] && st.regs[r].readyAt === readyAt).join('、')} 還沒回來。` : '';
+
+    if (s.op === 'imad') {
+      st.regs[s.dst] = { readyAt: st.cycle + LAT.alu, desc: s.desc(0) };
+      fresh.regs.push(s.dst);
+      title = '整數乘加，只碰 register'; kind = 'think'; path = ['reg'];
+      say = `算出每個 thread 自己負責的索引。只動 register file，${LAT.alu} cycle 後就能用。register 在 Processing Block 裡面，是最近、最快的一層。`;
+      body = `thread 0:  i = ${BASE}\nthread 31: i = ${BASE + 31}`;
+    }
+    else if (s.op === 'ldg') {
+      const lines = uniq(active.map(s.idx).map(lineOf));
+      const where = lines.map(L => {
+        if (st.l1.has(L)) return { L, lvl: 'l1' };
+        if (st.l2.has(L)) { st.l1.add(L); fresh.l1.push(L); st.bytes.l2 += 128; return { L, lvl: 'l2' }; }
+        st.l2.add(L); st.l1.add(L); fresh.l1.push(L); fresh.l2.push(L); st.bytes.hbm += 128; st.bytes.l2 += 128;
+        return { L, lvl: 'hbm' };
+      });
+      st.bytes.l1 += active.length * 4;
+      const worst = where.some(w => w.lvl === 'hbm') ? 'hbm' : where.some(w => w.lvl === 'l2') ? 'l2' : 'l1';
+      const lat = LAT[worst];
+      const i0 = s.idx(active[0]);
+      st.regs[s.dst] = { readyAt: st.cycle + lat, desc: `a[${i0}]` }; fresh.regs.push(s.dst);
+      hits = where;
+      const n = { l1: 0, l2: 0, hbm: 0 }; where.forEach(w => n[w.lvl]++);
+      kind = worst === 'l1' ? 'hit' : 'miss';
+      path = worst === 'l1' ? ['reg', 'ldst', 'l1'] : worst === 'l2' ? ['reg', 'ldst', 'l1', 'l2'] : ['reg', 'ldst', 'l1', 'l2', 'hbm'];
+      const range = active.length === WARP ? `a[${s.idx(0)}] 到 a[${s.idx(31)}]` : active.map(t => `a[${s.idx(t)}]`).join(' 和 ');
+      title = `讀 global memory：${lines.length} 條 cache line，最遠到 ${worst === 'hbm' ? 'HBM' : worst === 'l2' ? 'L2' : 'L1'}`;
+      const parts = [];
+      if (n.l1) parts.push(`${n.l1} 條 L1 就有`);
+      if (n.l2) parts.push(`${n.l2} 條 L1 沒有、L2 有`);
+      if (n.hbm) parts.push(`${n.hbm} 條兩層都沒有，一路到 HBM`);
+      say = `${waitNote}${active.length} 個 thread 要讀 ${range}，落在 ${lines.length} 條 128 B 的 cache line 上：${parts.join('；')}。`
+        + (lines.length > 1 ? `這幾條 line 的請求是同時發出去的，所以等的時間取最慢的那條，約 ${lat} cycle。` : `約 ${lat} cycle 後資料回到 ${s.dst}。`)
+        + ` warp 不會在這裡停下來，下一條指令照發，直到有誰要用 ${s.dst}。`;
+      body = where.map(w => `line #${w.L}  a[${w.L * LINE}..${w.L * LINE + LINE - 1}]  →  ${w.lvl === 'l1' ? 'L1 hit' : w.lvl === 'l2' ? 'L1 miss, L2 hit' : 'L1 miss, L2 miss, HBM'}`).join('\n');
+      if (where.length > 6) body = where.slice(0, 5).map(w => `line #${w.L}  →  ${w.lvl.toUpperCase()}`).join('\n') + `\n… 共 ${where.length} 條 line，全部 ${worst.toUpperCase()}`;
+    }
+    else if (s.op === 'stg') {
+      const lines = uniq(active.map(s.idx).map(lineOf));
+      st.bytes.l2 += lines.length * 128;
+      lines.forEach(L => { if (!st.l2.has(L)) { st.l2.add(L); fresh.l2.push(L); } });
+      kind = 'think'; path = ['reg', 'ldst', 'l1', 'l2'];
+      title = '寫回 global memory';
+      say = `${waitNote}結果寫出去。store 不需要等資料回來，warp 把它交給 LD/ST 單元就可以繼續。寫入會穿過 L1 到 L2，之後由 L2 決定何時真正寫回 HBM。`;
+      body = lines.map(L => `line #${L}  out[${L * LINE}..${L * LINE + LINE - 1}]  →  寫入 L2`).join('\n');
+    }
+    else if (s.op === 'sts') {
+      active.forEach(t => st.shared.set(s.addr(t), `a[${s.src[0] === 'c' ? BASE + t : (t === 0 ? BASE - 1 : BASE + WARP)}]`));
+      fresh.shared.push(...active.map(s.addr));
+      st.sharedReadyAt = st.cycle + LAT.shared; st.bytes.sh += active.length * 4;
+      kind = 'hit'; path = ['reg', 'ldst', 'sh'];
+      title = '寫進 shared memory';
+      say = `${waitNote}把剛從 global 讀回來的值寫進這個 block 的 tile。shared memory 就在 SM 裡，約 ${LAT.shared} cycle。注意這一步沒有省掉任何 HBM 流量，資料還是先經過 register 才到 shared。Hopper 之後這段「global 讀進 register 再寫 shared」可以整塊交給 TMA 做，thread 不用自己搬。`;
+      body = active.length === WARP ? `tile[1..32] ← a[${BASE}..${BASE + 31}]` : `tile[0]  ← a[${BASE - 1}]   (thread 0)\ntile[33] ← a[${BASE + WARP}]   (thread 31)`;
+    }
+    else if (s.op === 'bar') {
+      const w = Math.max(0, st.sharedReadyAt - st.cycle);
+      st.cycle += w; st.stall += w;
+      kind = 'think'; path = [];
+      title = '__syncthreads：等整個 block 都寫完';
+      say = `等所有 thread 的 shared memory 寫入完成，才能保證接下來讀到的是別人寫的值。這裡 block 只有一個 warp，所以只多等了 ${w} cycle；真正的 block 有好幾個 warp，慢的那個決定大家何時繼續。`;
+      body = `等待 shared memory 寫入完成：${w} cycle`;
+    }
+    else if (s.op === 'lds') {
+      st.regs[s.dst] = { readyAt: st.cycle + LAT.shared, desc: st.shared.get(s.addr(0)) || '?' }; fresh.regs.push(s.dst);
+      st.bytes.sh += active.length * 4;
+      kind = 'hit'; path = ['reg', 'ldst', 'sh'];
+      title = '讀 shared memory';
+      say = `${waitNote}從 tile 讀一格。shared memory 在 SM 裡面，不必經過 L2，也不會 miss，約 ${LAT.shared} cycle 就回來。`;
+      body = `thread 0:  ${s.dst} = tile[${s.addr(0)}] = ${st.shared.get(s.addr(0))}\nthread 31: ${s.dst} = tile[${s.addr(31)}] = ${st.shared.get(s.addr(31))}`;
+    }
+    else if (s.op === 'fadd') {
+      st.regs[s.dst] = { readyAt: st.cycle + LAT.alu, desc: s.src.map(r => st.regs[r].desc).join(' + ') }; fresh.regs.push(s.dst);
+      kind = 'think'; path = ['reg'];
+      title = waited ? `浮點運算，但先 stall 了 ${waited} cycle` : '浮點運算，只碰 register';
+      say = `${waitNote}${waited ? '這就是記憶體延遲真正被付出的地方：不是在 load 那一步，而是在第一個用到它的指令。' : ''}FP32 core 做加法，${LAT.alu} cycle 後結果可用。`;
+      body = `thread 0:  ${s.dst} = ${st.regs[s.dst].desc}`;
+    }
+
+    frames.push(snap({ k, title, kind, say, body, path, hits, fresh, waited, issued, text: s.text }));
+  });
+  const last = frames[frames.length - 1];
+  return { frames, total: last.cycle, stall: last.stall, bytes: last.bytes };
+}
+
+/* ---------- drawings ---------- */
+const svgEl = (w, h) => `<svg class="chip" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img">`;
+const rect = (x, y, w, h, cls, id, r = 2) => `<rect ${id ? `id="${id}" ` : ''}class="${cls}" x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}"/>`;
+const txt = (x, y, s, cls, anchor = 'middle') => `<text class="${cls}" x="${x}" y="${y}" text-anchor="${anchor}">${s}</text>`;
+
+function drawPackage(g) {
+  const W = 600, H = 300;
+  let o = svgEl(W, H);
+  o += rect(4, 4, W - 8, H - 8, 'board', null, 6);
+  o += txt(12, 20, `${g.name} 封裝（interposer 上有一顆 GPU die 和六個 HBM 位置）`, 's', 'start');
+  // HBM stacks: 3 left, 3 right. H100 leaves the bottom-right position as a structural spacer.
+  const hbm = [];
+  [0, 1, 2].forEach(k => {
+    hbm.push({ x: 12, y: 44 + k * 78, on: true, id: k === 1 ? 'pkg-hbm' : null });
+    hbm.push({ x: W - 12 - 46, y: 44 + k * 78, on: !(k === 2 && !g.sixth) });
+  });
+  hbm.forEach(h => {
+    o += rect(h.x, h.y, 46, 70, 'mem' + (h.on ? '' : ' off'), h.id, 3);
+    o += txt(h.x + 23, h.y + 32, h.on ? g.mem : '結構件', 't' + (h.on ? '' : ' off'));
+    o += txt(h.x + 23, h.y + 46, h.on ? `${g.stackGB} GB` : '非記憶體', 's' + (h.on ? '' : ' off'));
+  });
+  o += txt(35, H - 12, `合計 ${g.total}`, 'xs');
+  o += txt(W - 35, H - 12, g.bw, 'xs');
+  // die
+  const dx = 66, dy = 32, dw = W - 132, dh = H - 56;
+  o += rect(dx, dy, dw, dh, 'die', null, 3);
+  o += txt(dx + 6, dy + 12, 'GH100 die · 每一小格是一個 SM，132 個啟用', 't', 'start');
+  o += txt(dx + dw - 6, dy + 12, 'TSMC 4N，80 B 個 transistor，814 mm²', 'xs', 'end');
+  o += rect(dx + 8, dy + 18, dw - 16, 16, 'blk'); o += txt(dx + dw / 2, dy + 29.5, 'PCIe 5.0 host interface · GigaThread Engine（把 block 和 cluster 分派到 SM）', 'xs');
+  o += rect(dx + 8, dy + dh - 24, dw - 16, 16, 'blk'); o += txt(dx + dw / 2, dy + dh - 12.5, 'NVLink 4 ×18(900 GB/s) · NVDEC ×7 · NVJPG ×7 · copy engines', 'xs');
+  // L2 band in the middle, two partitions
+  const ly = dy + 118;
+  o += rect(dx + 8, ly, dw - 16, 30, 'mem', 'pkg-l2', 2);
+  o += txt(dx + dw / 2, ly + 13, 'L2 cache 50 MB（所有 SM 共用，完整 die 60 MB）', 't');
+  o += txt(dx + dw / 2, ly + 25, `兩個 partition，近端 / 遠端延遲不同 · memory controllers ×${g.mc} → 兩側 HBM`, 'xs');
+  [0, 1, 2].forEach(k => {
+    o += rect(dx + 1, 44 + k * 78 + 6, 5, 58, 'blk');
+    o += rect(dx + dw - 6, 44 + k * 78 + 6, 5, 58, 'blk' + (k === 2 && !g.sixth ? ' off' : ''));
+  });
+  // 8 GPCs, 9 TPCs × 2 SMs = 18 cells each (144); 12 cells greyed → 132 enabled.
+  const gpcW = (dw - 16 - 3 * 6) / 4, gpcH = 62;
+  const OFF = new Set(['0-17', '1-16', '1-17', '2-17', '3-16', '3-17', '4-17', '5-16', '5-17', '6-17', '7-16', '7-17']);
+  let clusterBox = '';
+  for (let gi = 0; gi < 8; gi++) {
+    const col = gi % 4, rowTop = gi < 4;
+    const gx = dx + 8 + col * (gpcW + 6);
+    const gy = rowTop ? dy + 40 : ly + 36;
+    o += rect(gx, gy, gpcW, gpcH, 'blk', null, 2);
+    o += txt(gx + 4, gy + 9, `GPC ${gi}`, 'xs', 'start');
+    o += txt(gx + gpcW - 4, gy + 9, gi === 0 ? 'SM0 ↓ 下圖' : 'TPC ×9', 'xs', 'end');
+    const cw = (gpcW - 10 - 8 * 2.5) / 9, ch = 20;
+    for (let r = 0; r < 2; r++) for (let c = 0; c < 9; c++) {
+      const n = r * 9 + c;
+      const cellOff = OFF.has(`${gi}-${n}`);
+      const cx = gx + 5 + c * (cw + 2.5), cy = gy + 14 + r * (ch + 4);
+      const first = gi === 0 && n === 0;
+      o += rect(cx, cy, cw, ch, first ? 'cell sm0' : 'cell' + (cellOff ? ' off' : ''), first ? 'pkg-sm0' : null, 1.5);
+    }
+    if (gi === 0) clusterBox = `<rect class="cluster" x="${gx + 3}" y="${gy + 12}" width="${4 * (cw + 2.5) + 1.5}" height="${2 * (ch + 4) + 1}" rx="2"/>`;
+  }
+  o += clusterBox;
+  o += txt(dx + 8, ly - 5, '虛線框：一個 thread block cluster 住在同一個 GPC 的幾個 SM 上，彼此可以讀對方的 shared memory', 'xs', 'start');
+  return o + '</svg>';
+}
+
+function drawSM() {
+  const W = 760, H = 392;
+  let o = svgEl(W, H);
+  o += rect(4, 4, W - 8, H - 8, 'die', null, 4);
+  o += txt(12, 20, 'SM #0(Streaming Multiprocessor,Hopper)', 't', 'start');
+  o += txt(W - 12, 20, '每個 SM 最多同時住 64 個 warp（2048 個 thread，32 個 block）', 'xs', 'end');
+  o += rect(12, 27, W - 24, 14, 'blk'); o += txt(W / 2, 37, 'L1 instruction cache', 'xs');
+  // 4 processing blocks, 2 × 2
+  const pbW = (W - 24 - 8) / 2, pbH = 132, top = 47;
+  const unitRow = (x, y, n, cols, cls, w = 9, h = 8, gap = 2) => {
+    let r = '';
+    for (let k = 0; k < n; k++) r += rect(x + (k % cols) * (w + gap), y + Math.floor(k / cols) * (h + gap), w, h, 'unit ' + cls, null, 1);
+    return r;
+  };
+  for (let p = 0; p < 4; p++) {
+    const px = 12 + (p % 2) * (pbW + 8), py = top + Math.floor(p / 2) * (pbH + 8);
+    o += rect(px, py, pbW, pbH, 'blk', p === 0 ? 'sm-pb0' : null, 3);
+    o += txt(px + 6, py + 11, `Processing Block ${p}`, 't', 'start');
+    if (p === 0) o += txt(px + pbW - 6, py + 11, '我們的 warp 在這裡', 's', 'end');
+    o += rect(px + 6, py + 16, 70, 13, 'unit'); o += txt(px + 41, py + 25.5, 'L0 i-cache', 'xs');
+    o += rect(px + 82, py + 16, 130, 13, 'unit'); o += txt(px + 147, py + 25.5, 'Warp scheduler(32 thread/clk)', 'xs');
+    o += rect(px + 218, py + 16, pbW - 224, 13, 'unit'); o += txt(px + 218 + (pbW - 224) / 2, py + 25.5, 'Dispatch unit(32 thread/clk)', 'xs');
+    o += rect(px + 6, py + 34, pbW - 12, 14, 'mem', p === 0 ? 'sm-rf0' : null);
+    o += txt(px + pbW / 2, py + 44, 'Register file 64 KB(16,384 × 32-bit)', 'xs');
+    const c1 = px + 6, c2 = px + 126, c3 = px + 246, uy = py + 55;
+    o += unitRow(c1, uy, 16, 8, 'int32'); o += txt(c1, uy + 28, 'INT32 core ×16', 'xs', 'start');
+    o += unitRow(c2, uy, 32, 8, 'fp32'); o += txt(c2, uy + 48, 'FP32 core ×32', 'xs', 'start');
+    o += unitRow(c3, uy, 8, 4, 'ldst'); o += txt(c3, uy + 28, 'LD/ST ×8（記憶體入口）', 'xs', 'start');
+    if (p === 0) o += `<rect id="sm-ldst0" class="unit" x="${c3 - 2.5}" y="${uy - 2.5}" width="47" height="23" rx="2" fill="none"/>`;
+    o += unitRow(c1, uy + 36, 16, 8, 'fp64'); o += txt(c1, uy + 64, 'FP64 core ×16', 'xs', 'start');
+    o += rect(c2, uy + 56, 86, 8, 'unit tc', null, 1.5); o += txt(c2, uy + 74, 'Tensor Core ×1（第 4 代）', 'xs', 'start');
+    o += unitRow(c3, uy + 36, 4, 4, 'sfu'); o += txt(c3, uy + 54, 'SFU ×4（sin、exp 等特殊函數）', 'xs', 'start');
+  }
+  // L1 data / shared memory, TMA, texture, constant cache
+  const my = top + 2 * pbH + 8 + 8, lw = W - 24 - 248;
+  o += rect(12, my, lw, 46, 'mem', 'sm-l1', 3);
+  o += txt(12 + lw / 2, my + 19, '256 KB L1 data cache / shared memory', 't');
+  o += txt(12 + lw / 2, my + 34, '同一塊 SRAM；shared 最多切 228 KB，其餘當 L1。四個 Processing Block 共用', 'xs');
+  let bx = 12 + lw + 8;
+  o += rect(bx, my, 78, 46, 'blk', 'sm-tma', 3); o += txt(bx + 39, my + 16, 'TMA', 't'); o += txt(bx + 39, my + 28, 'Tensor Memory', 'xs'); o += txt(bx + 39, my + 39, 'Accelerator(DMA)', 'xs');
+  bx += 86;
+  o += rect(bx, my, 70, 46, 'blk', null, 3); o += txt(bx + 35, my + 21, 'Tex ×4', 'xs'); o += txt(bx + 35, my + 33, 'texture 單元', 'xs');
+  bx += 78;
+  o += rect(bx, my, 84, 46, 'blk', 'sm-const', 3); o += txt(bx + 42, my + 16, 'Constant cache', 'xs'); o += txt(bx + 42, my + 28, '__constant__', 'xs mono'); o += txt(bx + 42, my + 40, '讀取都經過這裡', 'xs');
+  o += txt(W / 2, H - 8, '↓ 往 L2 / HBM（上圖）。同一 cluster 的 SM 之間另有 SM-to-SM 網路（distributed shared memory，約 180 cycle）', 'xs');
+  return o + '</svg>';
+}
+
+function drawB300() {
+  const W = 600, H = 250;
+  let o = svgEl(W, H);
+  o += rect(4, 4, W - 8, H - 8, 'board', null, 6);
+  o += txt(12, 20, 'B300（Blackwell Ultra）封裝：兩顆 die、八顆 HBM3e', 's', 'start');
+  [0, 1, 2, 3].forEach(k => {
+    [12, W - 12 - 46].forEach(x => {
+      o += rect(x, 36 + k * 50, 46, 44, 'mem', null, 3);
+      o += txt(x + 23, 36 + k * 50 + 20, 'HBM3e', 't'); o += txt(x + 23, 36 + k * 50 + 33, '36 GB', 's');
+    });
+  });
+  o += txt(35, H - 8, '合計 288 GB', 'xs'); o += txt(W - 35, H - 8, '約 8 TB/s', 'xs');
+  const dx = 66, dy = 32, dh = H - 50, dw = (W - 132 - 40) / 2;
+  [0, 1].forEach(d => {
+    const x = dx + d * (dw + 40);
+    o += rect(x, dy, dw, dh, 'die', null, 3);
+    o += txt(x + 6, dy + 12, `die ${d}`, 't', 'start');
+    o += txt(x + dw - 6, dy + 12, d === 0 ? '每顆 die 80 個 SM 位置' : 'B300 共開 148 到 160 個', 'xs', 'end');
+    const cw = (dw - 16 - 9 * 2) / 10, ch = 9;
+    const l2y = dy + 18 + 3 * (ch + 2);
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 10; c++) {
+      const y = r < 3 ? dy + 18 + r * (ch + 2) : l2y + 40 + (r - 3) * (ch + 2);
+      o += rect(x + 8 + c * (cw + 2), y, cw, ch, 'cell', null, 1);
+    }
+    o += rect(x + 8, l2y, dw - 16, 36, 'mem', null, 2);
+    o += txt(x + dw / 2, l2y + 15, 'L2 63 MB（這一半）', 't');
+    o += txt(x + dw / 2, l2y + 28, '每個 SM 另有 256 KB Tensor Memory', 'xs');
+    o += rect(x + 8, dy + dh - 20, dw - 16, 12, 'blk'); o += txt(x + dw / 2, dy + dh - 11, d === 0 ? 'NVLink 5(1.8 TB/s)· PCIe 6' : 'NVLink-C2C → Grace CPU(900 GB/s)', 'xs');
+  });
+  const bxx = dx + dw, byy = dy + 30;
+  o += rect(bxx + 10, byy, 20, dh - 60, 'nvhbi', null, 2);
+  o += txt(bxx + 20, byy - 6, 'NV-HBI', 'xs');
+  o += txt(bxx + 20, byy + dh - 60 + 11, '≈10 TB/s', 'xs');
+  return o + '</svg>';
+}
+
+/* ---------- DOM ---------- */
+const $ = id => document.getElementById(id);
+const state = { preset: PRESETS[0], run: null, step: 0, gpu: 'h100' };
+const RESULTS = PRESETS.map(p => ({ p, ...simulate(p) }));
+
+$('fig-sm').querySelector('.fig-wrap').innerHTML = drawSM();
+$('fig-b300').querySelector('.fig-wrap').innerHTML = drawB300();
+
+function renderPackage() {
+  const g = GPUS[state.gpu];
+  $('fig-pkg').querySelector('.fig-wrap').innerHTML = drawPackage(g);
+  $('cap-pkg').textContent = g.cap;
+  $('tier-hbm-where').textContent = `${g.mem}，die 之外`;
+  $('tier-hbm-cap').textContent = `${g.total}，${g.bw}`;
+  $('fig-pkg').querySelectorAll('button[data-gpu]').forEach(b => b.classList.toggle('chosen', b.dataset.gpu === state.gpu));
+}
+$('fig-pkg').querySelectorAll('button[data-gpu]').forEach(b => b.addEventListener('click', () => { state.gpu = b.dataset.gpu; renderPackage(); renderAll(); }));
+
+function renderPresets() {
+  const host = $('presets');
+  host.querySelectorAll('button').forEach(b => b.remove());
+  PRESETS.forEach(p => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = p.label; b.className = p === state.preset ? 'chosen' : '';
+    b.addEventListener('click', () => load(p));
+    host.appendChild(b);
+  });
+}
+
+function load(p) {
+  state.preset = p; state.run = simulate(p); state.step = 0;
+  renderPresets(); renderAll();
+}
+
+const HOPS = [['reg', 'Register'], ['ldst', 'LD/ST'], ['sh', 'Shared'], ['l1', 'L1'], ['l2', 'L2'], ['hbm', 'HBM']];
+function light(id, cls) { const el = document.getElementById(id); if (!el) return; el.classList.remove('lit', 'hit', 'miss', 'pass', 'think'); if (cls) el.classList.add('lit', cls); }
+
+function renderAll() {
+  const { frames } = state.run;
+  const f = frames[state.step];
+  const stepDef = state.step ? state.preset.steps[state.step - 1] : null;
+
+  // code
+  $('code').innerHTML = state.preset.src.map((l, i) => {
+    const cls = stepDef && stepDef.line === i ? 'on' : (state.step && state.preset.steps.slice(0, state.step - 1).some(s => s.line === i) && !(stepDef && stepDef.line === i)) ? 'done' : '';
+    return `<span class="ln ${cls}">${l.replace(/</g, '&lt;')}</span>`;
+  }).join('');
+
+  // message
+  $('msg-head').innerHTML = `<span class="tag ${f.kind}">${f.kind === 'hit' ? '近' : f.kind === 'miss' ? '遠' : '算'}</span><span>${f.title}</span>`;
+  $('msg-body').textContent = state.step ? `${f.text}\n\n${f.body || ''}`.trimEnd() : state.preset.blurb;
+  $('say').textContent = f.say;
+
+  // path chips
+  const worst = f.hits && f.hits.length ? (f.hits.some(h => h.lvl === 'hbm') ? 'hbm' : f.hits.some(h => h.lvl === 'l2') ? 'l2' : 'l1') : null;
+  $('path').innerHTML = HOPS.filter(([k]) => f.path.includes(k)).map(([k, label], i, arr) => {
+    let cls = 'pass';
+    if (k === 'sh') cls = 'hit';
+    if (worst) {
+      if (k === worst) cls = 'hit';
+      else if (k === 'l1' || k === 'l2') cls = 'miss';
+    }
+    return `<span class="hop ${cls}">${label}</span>${i < arr.length - 1 ? '<span class="arrow">→</span>' : ''}`;
+  }).join('') || '<span class="hop">（不碰記憶體階層）</span>';
+
+  // chip highlights
+  ['pkg-sm0', 'pkg-l2', 'pkg-hbm', 'sm-pb0', 'sm-rf0', 'sm-ldst0', 'sm-l1'].forEach(id => light(id, null));
+  if (state.step) {
+    light('sm-pb0', 'think');
+    if (f.path.includes('reg')) light('sm-rf0', 'pass');
+    if (f.path.includes('ldst')) light('sm-ldst0', 'pass');
+    if (f.path.includes('sh')) light('sm-l1', 'hit');
+    if (f.path.includes('l1')) light('sm-l1', worst === 'l1' ? 'hit' : worst ? 'miss' : 'pass');
+    if (f.path.includes('l2')) { light('pkg-sm0', 'pass'); light('pkg-l2', worst === 'l2' ? 'hit' : worst === 'hbm' ? 'miss' : 'pass'); }
+    if (f.path.includes('hbm')) light('pkg-hbm', 'hit');
+  }
+
+  // controls
+  $('btn-prev').disabled = state.step === 0;
+  $('btn-next').disabled = state.step === frames.length - 1;
+  $('step-range').max = frames.length - 1; $('step-range').value = state.step;
+  $('count').textContent = `第 ${state.step} / ${frames.length - 1} 步 · cycle ${f.cycle}`;
+
+  // log
+  $('log').innerHTML = frames.slice(1).map((g, i) => {
+    const n = i + 1;
+    const cls = n === state.step ? 'on' : n > state.step ? 'future' : '';
+    return `<li><button type="button" class="log-row ${cls} ${g.kind}" data-step="${n}"><span class="who">${g.title}</span><span class="what">cycle ${g.issued}${g.waited ? ` · stall ${g.waited}` : ''} · ${g.text}</span></button></li>`;
+  }).join('');
+  $('log').querySelectorAll('.log-row').forEach(b => b.addEventListener('click', () => { state.step = +b.dataset.step; renderAll(); }));
+
+  // registers (thread 0)
+  const regs = Object.entries(f.regs);
+  $('regs').innerHTML = regs.length ? `<table class="mini"><thead><tr><th>名稱</th><th>內容（thread 0）</th><th>狀態</th></tr></thead><tbody>${regs.map(([k, v]) => {
+    const fresh = f.fresh.regs && f.fresh.regs.includes(k);
+    const pending = v.readyAt > f.cycle;
+    return `<tr class="${fresh ? 'fresh' : ''}"><td>${k}</td><td>${v.desc}</td><td class="${pending ? 'wait' : 'ok'}">${pending ? `cycle ${v.readyAt} 才到` : '就緒'}</td></tr>`;
+  }).join('')}</tbody></table>` : '<p class="empty">還沒有任何 register 被寫入。</p>';
+
+  // shared
+  if (f.shared.size) {
+    const slots = [...f.shared.entries()].sort((a, b) => a[0] - b[0]);
+    const fresh = new Set(f.fresh.shared || []);
+    const groups = [];
+    slots.forEach(([slot, v]) => {
+      const g = groups[groups.length - 1];
+      if (g && g.end === slot - 1 && g.fresh === fresh.has(slot)) { g.end = slot; g.last = v; } else groups.push({ start: slot, end: slot, first: v, last: v, fresh: fresh.has(slot) });
+    });
+    $('shared').innerHTML = `<div class="lines">${groups.map(g => `<span class="${g.fresh ? 'fresh' : 'have'}">tile[${g.start === g.end ? g.start : g.start + '..' + g.end}] = ${g.start === g.end ? g.first : g.first + '..' + g.last}</span>`).join('')}</div>`;
+  } else $('shared').innerHTML = `<p class="empty">${state.preset.key === 'shared' ? '還沒寫進任何東西。' : '這個案例不用 shared memory。'}</p>`;
+
+  // cache lines
+  const lineChips = (have, fresh, span) => {
+    const all = uniq(have);
+    if (!all.length) return '<span>（空）</span>';
+    return all.map(L => `<span class="${fresh.includes(L) ? 'fresh' : 'have'}">#${L}${span ? ` a[${L * LINE}..${L * LINE + LINE - 1}]` : ''}</span>`).join('');
+  };
+  $('l1').innerHTML = lineChips(f.l1, f.fresh.l1 || [], f.l1.length <= 6);
+  $('l2').innerHTML = lineChips(f.l2, f.fresh.l2 || [], f.l2.length <= 6);
+
+  // bytes
+  const b = f.bytes;
+  $('bytes').innerHTML = `
+    <dt>HBM → L2</dt><dd><b>${fmtB(b.hbm)}</b>${b.hbm ? `（有用 128 B，佔 ${Math.round(128 / b.hbm * 100)}%）` : ''}</dd>
+    <dt>L2 → L1</dt><dd>${fmtB(b.l2)}</dd>
+    <dt>L1 → register</dt><dd>${fmtB(b.l1)}</dd>
+    <dt>shared ↔ register</dt><dd>${fmtB(b.sh)}</dd>
+    <dt>目前 cycle</dt><dd><b>${f.cycle}</b>(其中 stall ${f.stall})</dd>`;
+
+  // compare table
+  $('compare-body').innerHTML = RESULTS.map(r => `<tr class="${r.p === state.preset ? 'now' : ''}"><td>${r.p.label}</td><td class="num">${r.total}</td><td class="num">${r.stall}</td><td class="num">${fmtB(r.bytes.hbm)}</td><td class="num">${fmtB(r.bytes.l2)}</td><td class="num">${fmtB(r.bytes.sh)}</td></tr>`).join('');
+  const [d, s, g] = RESULTS;
+  $('verdict').textContent = `直接讀三次只花 ${d.total} cycle，因為三個 load 的等待重疊了，而且鄰居的值 L1 已經有。先搬進 shared 反而要 ${s.total} cycle：多了一跳，還多一次同步。shared memory 真正划算的是「同一份資料被 block 裡很多 thread 反覆讀」的情況，例如矩陣乘法的 tile，這個例子每個值只被讀三次，L1 就夠了。跨步讀延遲差不多(${g.total} cycle)，但從 HBM 搬了 ${fmtB(g.bytes.hbm)}，是直接讀的 ${Math.round(g.bytes.hbm / d.bytes.hbm)} 倍。`;
+}
+
+$('btn-next').addEventListener('click', () => { if (state.step < state.run.frames.length - 1) { state.step++; renderAll(); } });
+$('btn-prev').addEventListener('click', () => { if (state.step > 0) { state.step--; renderAll(); } });
+$('btn-reset').addEventListener('click', () => { state.step = 0; renderAll(); });
+$('step-range').addEventListener('input', e => { state.step = +e.target.value; renderAll(); });
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input, select, textarea')) return;
+  if (e.key === 'ArrowRight') $('btn-next').click();
+  if (e.key === 'ArrowLeft') $('btn-prev').click();
+});
+
+renderPackage();
+load(PRESETS[0]);
+</script>
+</body>
+</html>
