@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>從線性 IR 建 CFG：FindLeaders 與 BuildGraph</title>
+<meta name="description" content="把 Engineering a Compiler 第四章建控制流程圖的兩段虛擬碼一步步跑給你看：FindLeaders 怎麼從 label 找出每個 basic block 的開頭，BuildGraph 怎麼找出 block 的結尾並連上邊。可以換範例，也可以自己改 ILOC 程式碼。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the workbench has presets, the editable ILOC source and the
+   step controls on top, then three panels: annotated listing, pseudocode + variables, CFG. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 這一步新增的節點 / 邊 */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* 警告、錯誤 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;         /* 目前這一條 */
+  --blk-a: #e4ebe9;        /* 已切好的 block，交替兩色 */
+  --blk-b: #dfe5f0;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; --blk-a: #1d2826; --blk-b: #1c2330; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+sub { font-size: 0.72em; line-height: 0; }
+i.hit, i.miss { font-style: normal; font-weight: 700; }
+i.hit { color: var(--hit); }
+i.miss { color: var(--miss); }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.foot { color: var(--muted); font-size: 0.85rem; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* tables */
+.table-wrap { overflow-x: auto; }
+table.cmp { border-collapse: collapse; font-size: 0.9rem; min-width: 34rem; width: 100%; }
+.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.cmp td code { white-space: nowrap; }
+
+/* static pseudocode in prose */
+.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.7; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow-x: auto; white-space: pre; }
+.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.col p { font-size: 0.88rem; color: var(--muted); margin-top: 0.4rem; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.88rem; }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
+@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
+textarea { width: 100%; min-height: 12.5rem; resize: vertical; font: inherit; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; tab-size: 4; }
+.errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+.jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.jumps button { font-size: 0.82rem; padding: 0.15rem 0.6rem; }
+.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+.say { font-size: 0.95rem; min-height: 3.2em; }
+.say .warn { display: block; margin-top: 0.35rem; color: var(--miss); }
+.say .warn::before { content: "⚠ "; }
+
+/* three panels */
+.work { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) minmax(0, 0.85fr); gap: 1rem; }
+@media (max-width: 980px) { .work { grid-template-columns: minmax(0, 1fr); } }
+.panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
+.panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+
+/* listing */
+.listing { padding: 0.5rem 0.5rem; background: var(--bg); overflow-x: auto; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; display: flex; flex-direction: column; gap: 0.1rem; flex: 1; }
+.op { display: grid; grid-template-columns: 1.4rem max-content minmax(max-content, 1fr) max-content; align-items: center; gap: 0.5rem; padding: 0.12rem 0.4rem; border-radius: 3px; border: 1px solid transparent; border-left-width: 3px; white-space: nowrap; }
+.op .num { color: var(--muted); font-size: 0.72rem; text-align: right; }
+.op .lab { color: var(--miss); font-weight: 600; }
+.op .txt.br { font-weight: 600; }
+.op.b-odd { background: var(--blk-a); border-left-color: var(--line); }
+.op.b-even { background: var(--blk-b); border-left-color: var(--line); }
+.op.scan { border-left-color: var(--hit); }
+.op.cur { background: var(--mark); border-color: var(--line); border-left-color: var(--ink); }
+.badges { display: flex; gap: 0.25rem; }
+.badge { font-family: var(--font-body); font-size: 0.66rem; font-weight: 700; line-height: 1.4; padding: 0 0.35rem; border-radius: 3px; white-space: nowrap; }
+.badge.lead { background: var(--miss); color: var(--surface); }
+.badge.last { border: 1px solid var(--muted); color: var(--muted); }
+.badge.dead { background: var(--muted); color: var(--surface); }
+
+/* pseudocode + variables */
+.pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.65; white-space: pre; overflow-x: auto; background: var(--bg); }
+.pseudo .pl { display: block; padding: 0 0.3rem; border-radius: 3px; }
+.pseudo .pl.on { background: var(--mark); font-weight: 600; }
+.pseudo .pl.head { font-weight: 600; }
+.pseudo .proc { display: block; opacity: 0.5; }
+.pseudo .proc.active { opacity: 1; }
+.pseudo .proc + .proc { margin-top: 0.6rem; }
+.vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.scalars { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.var { display: inline-flex; align-items: baseline; gap: 0.3rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+.var .k { color: var(--muted); font-size: 0.72rem; }
+.var .v { font-weight: 600; min-width: 1em; }
+.var.chg { border-color: var(--hit); background: var(--hit-soft); }
+.arr { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+.arr .k { color: var(--muted); font-size: 0.72rem; min-width: 4.2em; }
+.cell { display: inline-flex; flex-direction: column; align-items: center; min-width: 1.9rem; padding: 0 0.3rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); line-height: 1.3; }
+.cell small { font-size: 0.6rem; color: var(--muted); }
+.cell.chg { border-color: var(--hit); background: var(--hit-soft); }
+.arr .empty { color: var(--muted); font-size: 0.72rem; }
+
+/* graph */
+.graph { padding: 0.5rem; background: var(--bg); flex: 1; display: flex; align-items: flex-start; justify-content: center; }
+.graph svg { width: 100%; height: auto; max-width: 22rem; font-family: var(--font-mono); }
+.graph .node rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.graph .node.cur rect { fill: var(--mark); stroke: var(--ink); }
+.graph .node.new rect { stroke: var(--hit); stroke-width: 2.2; }
+.graph .node text { fill: var(--ink); font-size: 12px; }
+.graph .node text.rng { fill: var(--muted); font-size: 10px; }
+.graph .node text .lab { fill: var(--miss); font-weight: 600; }
+.graph .edge { fill: none; stroke: var(--muted); stroke-width: 1.4; }
+.graph .edge.new { stroke: var(--hit); stroke-width: 2.4; }
+.graph .nothing { fill: var(--muted); font-size: 12px; font-family: var(--font-body); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Engineering a Compiler 筆記</a>
+    <h1><span class="mono">CFG</span> 從線性 IR 建控制流程圖</h1>
+    <p class="lead">編譯器中段看到的是一串線性的指令。要做分析和最佳化，得先知道控制流會怎麼走：哪幾條指令一定連著執行、從哪裡能跳到哪裡。這一頁把 Engineering a Compiler 第四章建 CFG 的兩段虛擬碼一步步跑給你看：<code>FindLeaders</code> 找出每個 basic block 的第一條指令，<code>BuildGraph</code> 找出每個 block 的最後一條並連上邊。可以換範例，也可以自己改 ILOC 程式碼。</p>
+  </header>
+
+  <section class="prose">
+    <h2>線性 IR 缺了什麼</h2>
+    <p>ILOC 是書上用的線性 IR：一條指令一行，label 標在指令前面。線性 IR 好產生、好存，但「第 5 條執行完接著跑第 6 條嗎？」這件事它沒有明寫。要回答這個問題，先把指令切成 <strong>basic block</strong>：一段最長的連續指令，只能從第一條進來，只能從最後一條離開。所以 block 中間沒有 label（沒有人能跳進來），也沒有 branch（不會中途跳走）。</p>
+    <p>控制流程圖（CFG）的節點是 block，邊是可能的控制轉移。block 的第一條指令叫 <strong>leader</strong>。找到所有 leader，block 就切好了；再看每個 block 最後一條指令往哪跳，邊就連好了。這正好就是兩段演算法。</p>
+  </section>
+
+  <section class="prose">
+    <h2>ILOC 的三種控制流指令</h2>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>指令</th><th>意思</th><th>建圖時知道目標嗎</th></tr></thead>
+      <tbody>
+        <tr><td><code>cbr r<sub>k</sub> → l<sub>1</sub>, l<sub>2</sub></code></td><td>條件分支：r<sub>k</sub> 為真跳 l<sub>1</sub>，否則跳 l<sub>2</sub>。<strong>兩個目標都明寫</strong>。</td><td>知道，兩個</td></tr>
+        <tr><td><code>jumpI → l<sub>1</sub></code></td><td>無條件跳到 label l<sub>1</sub>。</td><td>知道，一個</td></tr>
+        <tr><td><code>jump → r<sub>1</sub></code></td><td>跳到 r<sub>1</sub> 裡存的位址。</td><td>不知道，可能是任何 label</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>關鍵是 ILOC <strong>沒有 fall-through</strong>：<code>cbr</code> 不會「不跳就繼續往下」，兩邊都是明寫的跳轉。這個設計直接決定了 <code>FindLeaders</code> 長什麼樣：一條指令能被跳到，當且僅當它有 label。所以「找 leader」就是「找 label」，不用再看前一條是不是 branch。大多數真實的組語都有 fall-through，到時候演算法要多一個 case，後面會講。</p>
+  </section>
+
+  <section class="prose">
+    <h2>兩段演算法</h2>
+    <p>書上的虛擬碼照抄如下。<code>n</code> 是指令數，<code>op<sub>i</sub></code> 是第 i 條指令。<code>FindLeaders</code> 掃一遍，把每個有 label 的指令編號填進 <code>Leader</code> 陣列，順手建節點。<code>BuildGraph</code> 對每個 leader 往下掃到下一個 leader 之前，記下 <code>Last</code>，再看 block 最後一條是什麼，決定加哪些邊。</p>
+  </section>
+  <div class="cols">
+    <div class="col">
+<pre class="code">FindLeaders()
+  next ← 1
+  Leader[next++] ← 1
+  create a CFG node for l<sub>1</sub>
+  for i ← 2 to n do
+    if op<sub>i</sub> has a label l<sub>i</sub> then
+      Leader[next++] ← i
+      create a CFG node for l<sub>i</sub>
+  MaxStmt ← next − 1</pre>
+      <p>第一條指令無條件是 leader，之後每一條有 label 的指令都是。MaxStmt 是 block 的個數。</p>
+    </div>
+    <div class="col">
+<pre class="code">BuildGraph()
+  for i ← 1 to MaxStmt do
+    j ← Leader[i] + 1
+    while (j ≤ n and op<sub>j</sub> ∉ Leader) do
+      j ← j + 1
+    j ← j − 1
+    Last[i] ← j
+    if op<sub>j</sub> is "cbr r<sub>k</sub> → l<sub>1</sub>, l<sub>2</sub>" then
+      add edge from j to node for l<sub>1</sub>
+      add edge from j to node for l<sub>2</sub>
+    else if op<sub>j</sub> is "jumpI → l<sub>1</sub>" then
+      add edge from j to node for l<sub>1</sub>
+    else if op<sub>j</sub> is "jump → r<sub>1</sub>" then
+      add edges from j to all labeled statements</pre>
+      <p>while 往下掃到下一個 leader 停下，退一格就是這個 block 的最後一條。邊只看最後一條。</p>
+    </div>
+  </div>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">ILOC 程式碼（可以改）</p>
+        <textarea id="src" spellcheck="false" aria-label="ILOC 程式碼"></textarea>
+        <div class="errs" id="errs"></div>
+        <p class="hint">每行一條指令，label 寫在前面加冒號。只有 <code>cbr r1 -&gt; L1, L2</code>、<code>jumpI -&gt; L1</code>、<code>jump -&gt; r1</code> 三種會被解讀，其他寫什麼都當普通指令。<code>#</code> 後面是註解。</p>
+      </div>
+      <div>
+        <p class="panel-title">執行</p>
+        <div class="controls">
+          <button id="btn-reset" type="button">重來</button>
+          <button id="btn-prev" type="button">上一步</button>
+          <button id="btn-next" type="button" class="primary">下一步</button>
+          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count" id="count"></span>
+        </div>
+        <div class="jumps">
+          <button id="btn-build" type="button">跳到 BuildGraph</button>
+          <button id="btn-end" type="button">跑完</button>
+        </div>
+        <p class="hint" id="phint"></p>
+        <p class="hint">左邊列表裡 <i class="miss">紫色</i> 是 label 和 leader，<i class="hit">綠色</i> 左框是正在掃的範圍，底色交替的是已經切好的 block。右邊圖裡 <i class="hit">綠色</i> 是這一步新加的節點或邊。</p>
+      </div>
+    </div>
+
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span>指令列表</span><span class="sub" id="nlabel"></span></div>
+        <div class="listing" id="listing"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>虛擬碼</span><span class="sub" id="phase"></span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+        <div class="vars" id="vars"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>CFG</span><span class="sub" id="gstat"></span></div>
+        <div class="graph" id="graph"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>幾個容易卡住的細節</h2>
+    <ul>
+      <li><strong><code>op<sub>j</sub> ∉ Leader</code> 是在問編號，不是在看指令。</strong>它的意思是「j 這個編號不在 Leader 陣列裡」。實作上要有 O(1) 的成員測試，例如一個 n 位的 bit vector；拿陣列線性搜尋，BuildGraph 就不再是線性時間。</li>
+      <li><strong><code>j ← j − 1</code> 是因為 while 多走了一步。</strong>迴圈停下來時 j 停在下一個 leader（或 n + 1），那條不屬於這個 block，退一格才是最後一條。</li>
+      <li><strong>其實有更短的寫法。</strong>Leader 是遞增填入的，所以 Last[i] 就是 Leader[i + 1] − 1，最後一個 block 則是 n。書上寫成掃描，是把「block 一路延伸到下一個 leader 之前」講白。整個 BuildGraph 的 while 加起來每條指令只看一次，還是 O(n)。</li>
+      <li><strong>邊的來源是 block，不是指令。</strong>「add edge from j」裡的 j 是 block i 的最後一條，圖上畫的是 B<sub>i</sub> 出去的邊。目標 l<sub>1</sub> 的節點，就是 leader 帶著那個 label 的 block。</li>
+    </ul>
+  </section>
+
+  <section class="prose">
+    <h2>書上接著講的複雜情況</h2>
+    <ul>
+      <li><strong>目標在暫存器裡（ambiguous jump）。</strong><code>jump → r</code> 編譯時不知道要跳去哪，演算法保守地連到每一個有 label 的 block。邊太多會讓後面的資料流分析結果變鈍。書上提到可以在 jump 後面用 <code>tbl</code> 這類 pseudo-op 列出可能的目標，建圖時只連那幾個。範例「jump → r」可以看到保守做法長什麼樣。</li>
+      <li><strong>IR 有 fall-through。</strong>如果條件分支「不跳就往下走」，branch 的下一條也是 leader，而且要多加一條到它的邊。FindLeaders 和 BuildGraph 各要多一個 case。</li>
+      <li><strong>branch 後面沒 label 的指令。</strong>在 ILOC 裡它不可達。演算法不會把它當 leader，於是它被吸進前一個 block，前一個 block 的最後一條不再是那個 branch，邊就丟了。範例「branch 後面沒 label」示範這個情況。實務上要在建圖前先刪掉這種死碼，或把它當 leader，讓它變成一個沒有入邊的節點。</li>
+      <li><strong>沒有人跳到的 label。</strong>仍然是 leader、仍然建節點，只是沒有入邊，在 CFG 裡不可達。不過 <code>jump → r</code> 的保守做法會給它一條入邊。</li>
+      <li><strong>程序呼叫。</strong>這兩段演算法沒把呼叫當成 branch。有些編譯器選擇在呼叫處切開 block，方便處理跨程序的效應或例外。</li>
+    </ul>
+  </section>
+
+  <section class="prose three">
+    <h2>看完可以帶走的三句話</h2>
+    <ol>
+      <li><strong>找 leader 就是在找「能從別處進來的點」。</strong>ILOC 沒有 fall-through，所以等於找 label；有 fall-through 的 IR 要再算上每條 branch 的下一條。</li>
+      <li><strong>block 的結尾由下一個 leader 決定，邊由 block 最後一條指令決定。</strong>這是兩件事，演算法也分成兩段。</li>
+      <li><strong>演算法的正確性靠 IR 的性質撐著。</strong>換一個 IR，先問「哪些指令能被跳到」和「哪些指令會跳走」，再改這兩段。</li>
+    </ol>
+  </section>
+
+  <section class="prose">
+    <h2>這個模型省略了什麼</h2>
+    <ul>
+      <li><strong>entry 和 exit 節點。</strong>很多編譯器會加兩個虛擬節點代表程序的進入和離開，方便後面的分析。這裡只有 block。</li>
+      <li><strong>節點和邊的資料結構。</strong>鄰接串列還是陣列、邊怎麼去重，書上這一段都沒講。這一頁重複的邊只畫一條。</li>
+      <li><strong>不可達 block 的清理。</strong>建完圖之後把沒有入邊的 block 拿掉是另一個 pass。</li>
+      <li><strong>其他形式的控制轉移。</strong>例外、間接呼叫、多目標的 jump table，這裡只用 <code>jump → r</code> 一種代表。</li>
+      <li><strong>ILOC 的其他指令。</strong>算術、載入、儲存、比較都只當普通指令，內容不影響建圖。</li>
+    </ul>
+  </section>
+
+  <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, 3rd ed., Chapter 4（Intermediate Representations）。兩段虛擬碼照書上的寫法。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const PRESETS = [
+  { title: 'if-then-else', hint: '三個目標 label、兩條 jumpI 匯回 L3。最單純的菱形。',
+    src: `    loadI 0 => r1
+    cmp_LT r1, r2 => r3
+    cbr r3 -> L1, L2
+L1: add r1, r2 => r4
+    jumpI -> L3
+L2: sub r1, r2 => r4
+    jumpI -> L3
+L3: store r4 => r5` },
+  { title: '迴圈', hint: '迴圈本體最後一條 jumpI 跳回條件判斷，圖上會出現一條往回的邊。',
+    src: `    loadI 0 => r1
+    loadI 10 => r2
+    jumpI -> L1
+L1: cmp_LT r1, r2 => r3
+    cbr r3 -> L2, L3
+L2: addI r1, 1 => r1
+    jumpI -> L1
+L3: store r1 => r4` },
+  { title: 'jump → r', hint: '目標在暫存器裡。看 BuildGraph 怎麼保守地連到每一個有 label 的 block。',
+    src: `    loadI @table => r1
+    load r1 => r2
+    jump -> r2
+L1: loadI 1 => r3
+    jumpI -> L4
+L2: loadI 2 => r3
+    jumpI -> L4
+L3: loadI 3 => r3
+    jumpI -> L4
+L4: store r3 => r5` },
+  { title: 'branch 後面沒 label', hint: '第 3 條沒有 label 卻接在 cbr 後面。看它怎麼被吸進 block 1，以及 cbr 的邊去了哪裡。',
+    src: `    cmp_LT r1, r2 => r3
+    cbr r3 -> L1, L2
+    addI r1, 1 => r1   # 不可達
+L1: add r1, r2 => r4
+    jumpI -> L3
+L2: sub r1, r2 => r4
+    jumpI -> L3
+L3: store r4 => r5` },
+];
+
+const PSEUDO = {
+  find: [
+    ['F0', 'FindLeaders()'],
+    ['F1', '  next ← 1'],
+    ['F2', '  Leader[next++] ← 1'],
+    ['F3', '  create a CFG node for l<sub>1</sub>'],
+    ['F4', '  for i ← 2 to n do'],
+    ['F5', '    if op<sub>i</sub> has a label l<sub>i</sub> then'],
+    ['F6', '      Leader[next++] ← i'],
+    ['F7', '      create a CFG node for l<sub>i</sub>'],
+    ['F8', '  MaxStmt ← next − 1'],
+  ],
+  build: [
+    ['B0', 'BuildGraph()'],
+    ['B1', '  for i ← 1 to MaxStmt do'],
+    ['B2', '    j ← Leader[i] + 1'],
+    ['B3', '    while (j ≤ n and op<sub>j</sub> ∉ Leader) do'],
+    ['B4', '      j ← j + 1'],
+    ['B5', '    j ← j − 1'],
+    ['B6', '    Last[i] ← j'],
+    ['B7', '    if op<sub>j</sub> is "cbr r<sub>k</sub> → l<sub>1</sub>, l<sub>2</sub>" then'],
+    ['B8', '      add edge from j to node for l<sub>1</sub>'],
+    ['B9', '      add edge from j to node for l<sub>2</sub>'],
+    ['B10', '    else if op<sub>j</sub> is "jumpI → l<sub>1</sub>" then'],
+    ['B11', '      add edge from j to node for l<sub>1</sub>'],
+    ['B12', '    else if op<sub>j</sub> is "jump → r<sub>1</sub>" then'],
+    ['B13', '      add edges from j to all labeled statements'],
+  ],
+};
+
+// ---- parser: one op per line, optional "label:" prefix ----
+function parse(src) {
+  const ops = [], errors = [];
+  src.split('\n').forEach((raw, idx) => {
+    const ln = idx + 1;
+    let t = raw.replace(/(#|\/\/).*$/, '').trim();
+    if (!t) return;
+    let label = null;
+    const m = t.match(/^([A-Za-z_]\w*)\s*:\s*(.*)$/);
+    if (m) { label = m[1]; t = m[2].trim(); }
+    if (!t) { errors.push(`第 ${ln} 行：label ${label} 後面沒有指令。`); return; }
+    const norm = t.replace(/→/g, '->').replace(/⇒/g, '=>');
+    let kind = 'other', targets = [], reg = null, mm;
+    if ((mm = norm.match(/^cbr\s+(\w+)\s*->\s*(\w+)\s*,\s*(\w+)$/))) { kind = 'cbr'; reg = mm[1]; targets = [mm[2], mm[3]]; }
+    else if ((mm = norm.match(/^jumpI\s*->\s*(\w+)$/))) { kind = 'jumpI'; targets = [mm[1]]; }
+    else if ((mm = norm.match(/^jump\s*->\s*(\w+)$/))) { kind = 'jump'; reg = mm[1]; }
+    else if (/^(cbr|jumpI|jump)\b/.test(norm)) errors.push(`第 ${ln} 行：看不懂「${t}」。格式是 cbr r1 -> L1, L2、jumpI -> L1、jump -> r1。`);
+    ops.push({ label, text: t, kind, targets, reg, ln });
+  });
+  if (ops.length === 0) errors.push('至少要有一條指令。');
+  const labels = new Map();
+  ops.forEach((op, idx) => {
+    if (!op.label) return;
+    if (labels.has(op.label)) errors.push(`第 ${op.ln} 行：label ${op.label} 定義了兩次。`);
+    labels.set(op.label, idx + 1);
+  });
+  ops.forEach(op => op.targets.forEach(t => { if (!labels.has(t)) errors.push(`第 ${op.ln} 行：label ${t} 沒有定義。`); }));
+  return { ops, errors, labels };
+}
+
+// ---- run both procedures, snapshotting state after every pseudocode line ----
+function buildTrace(P) {
+  const ops = P.ops, n = ops.length, labels = P.labels;
+  const steps = [];
+  const st = { next: null, i: null, j: null, maxStmt: null, leader: [], last: [], nodes: [], edges: [] };
+  const snap = (proc, lines, x) => steps.push(Object.assign({
+    proc, lines, next: st.next, i: st.i, j: st.j, maxStmt: st.maxStmt,
+    leader: st.leader.slice(), last: st.last.slice(), nodes: st.nodes.slice(), edges: st.edges.slice(),
+    newEdges: [], newNode: null, cursor: null, scan: null, cur: null, changed: [], say: '', warn: '',
+  }, x));
+  const opN = k => `op<sub>${k}</sub>`;
+  const blockOfOp = at => { const idx = st.nodes.findIndex(nd => nd.at === at); return idx < 0 ? null : idx + 1; };
+  const addEdge = (from, to) => {
+    const k = st.edges.findIndex(e => e.from === from && e.to === to);
+    if (k >= 0) return k;
+    st.edges.push({ from, to }); return st.edges.length - 1;
+  };
+
+  // FindLeaders
+  st.next = 1;
+  snap('find', ['F1'], { changed: ['next'], say: 'next 是 Leader 陣列下一個要填的位置，從 1 開始。' });
+  st.leader[1] = 1; st.next = 2;
+  snap('find', ['F2'], { cursor: 1, changed: ['next', 'leader:1'], say: '第一條指令永遠是 leader：程序從這裡進來。Leader[1] ← 1，next 變成 2。' });
+  st.nodes.push({ b: 1, at: 1, label: ops[0].label });
+  snap('find', ['F3'], { cursor: 1, newNode: 1, say: ops[0].label ? `為 ${ops[0].label} 建節點 B1。` : `${opN(1)} 沒有 label，但它還是第一個 block 的開頭，照樣建節點 B1。` });
+  for (let i = 2; i <= n; i++) {
+    st.i = i;
+    const op = ops[i - 1], prev = ops[i - 2];
+    if (op.label) {
+      snap('find', ['F4', 'F5'], { cursor: i, changed: ['i'], say: `${opN(i)} 有 label ${op.label}。ILOC 裡只有帶 label 的指令能成為 branch 的目標，所以它是 leader。` });
+      const slot = st.next; st.leader[slot] = i; st.next++;
+      st.nodes.push({ b: slot, at: i, label: op.label });
+      snap('find', ['F6', 'F7'], { cursor: i, newNode: slot, changed: ['next', 'leader:' + slot], say: `Leader[${slot}] ← ${i}，next 變成 ${st.next}。為 ${op.label} 建節點 B${slot}。` });
+    } else {
+      const warn = prev.kind !== 'other'
+        ? `前一條 ${opN(i - 1)} 是 ${prev.kind}，而這一條沒有 label。ILOC 沒有 fall-through，所以這一條不可達。演算法不會把它當 leader，等一下看 BuildGraph 會發生什麼事。` : '';
+      snap('find', ['F4', 'F5'], { cursor: i, changed: ['i'], warn, say: `${opN(i)} 沒有 label，沒有 branch 能跳到它，不是 leader。` });
+    }
+  }
+  st.i = null; st.maxStmt = st.next - 1;
+  snap('find', ['F8'], { changed: ['maxStmt', 'i'], say: `MaxStmt ← next − 1 = ${st.maxStmt}：總共 ${st.maxStmt} 個 block。FindLeaders 結束。每個 block 到哪裡結束、彼此怎麼連，還不知道。` });
+
+  // BuildGraph
+  const isLeader = k => st.leader.includes(k);
+  for (let i = 1; i <= st.maxStmt; i++) {
+    st.i = i;
+    const L = st.leader[i];
+    st.j = L + 1;
+    snap('build', ['B1', 'B2'], { cursor: st.j <= n ? st.j : null, scan: [L, L], cur: i, changed: ['i', 'j'],
+      say: `看 block ${i}，它從 ${opN(L)} 開始。j 從 leader 的下一條 ${opN(L + 1)} 開始往下掃。` });
+    while (st.j <= n && !isLeader(st.j)) {
+      const jj = st.j; st.j++;
+      snap('build', ['B3', 'B4'], { cursor: st.j <= n ? st.j : null, scan: [L, jj], cur: i, changed: ['j'],
+        say: `${opN(jj)} 的編號不在 Leader 裡，所以它屬於 block ${i}。j ← j + 1 = ${st.j}。` });
+    }
+    snap('build', ['B3'], { cursor: st.j <= n ? st.j : null, scan: [L, st.j - 1], cur: i,
+      say: st.j > n ? `j = ${st.j} 已經超過最後一條（n = ${n}），while 停。` : `${opN(st.j)} 在 Leader 裡，是 block ${blockOfOp(st.j)} 的開頭，while 停。這條不屬於 block ${i}。` });
+    st.j--; st.last[i] = st.j;
+    snap('build', ['B5', 'B6'], { cursor: st.j, scan: [L, st.j], cur: i, changed: ['j', 'last:' + i],
+      say: `退一格：block ${i} 是 ${opN(L)} 到 ${opN(st.j)}。Last[${i}] ← ${st.j}。` });
+    const last = ops[st.j - 1];
+    const common = { cursor: st.j, scan: [L, st.j], cur: i };
+    if (last.kind === 'cbr') {
+      const b1 = blockOfOp(labels.get(last.targets[0])), b2 = blockOfOp(labels.get(last.targets[1]));
+      const ne = [...new Set([addEdge(i, b1), addEdge(i, b2)])];
+      snap('build', ['B7', 'B8', 'B9'], Object.assign({ newEdges: ne,
+        say: `${opN(st.j)} 是 cbr，兩個目標都明寫：加邊 B${i} → B${b1}（${last.targets[0]}）和 B${i} → B${b2}（${last.targets[1]}）。` + (b1 === b2 ? '兩個目標相同，只畫一條邊。' : '') }, common));
+    } else if (last.kind === 'jumpI') {
+      const b1 = blockOfOp(labels.get(last.targets[0]));
+      snap('build', ['B10', 'B11'], Object.assign({ newEdges: [addEdge(i, b1)],
+        say: `${opN(st.j)} 是 jumpI，加一條邊 B${i} → B${b1}（${last.targets[0]}）。` }, common));
+    } else if (last.kind === 'jump') {
+      const targets = st.nodes.filter(nd => nd.label);
+      const ne = targets.map(nd => addEdge(i, nd.b));
+      snap('build', ['B12', 'B13'], Object.assign({ newEdges: ne,
+        say: `${opN(st.j)} 是 jump → ${last.reg}，目標在暫存器裡，編譯時不知道會跳去哪。保守做法：加邊到每一個有 label 的 block` + (targets.length ? `：${targets.map(nd => 'B' + nd.b).join('、')}。` : '。這裡一個 label 都沒有，所以一條邊都沒加。') }, common));
+    } else {
+      const inner = [];
+      for (let k = L; k < st.j; k++) if (ops[k - 1].kind !== 'other') inner.push(k);
+      const warn = inner.length
+        ? `問題：block ${i} 中間的 ${inner.map(opN).join('、')} 是 branch，但演算法只看最後一條。branch 後面沒 label 的指令被吸進這個 block，branch 的邊全部消失了。建圖前應該先刪掉這種不可達的指令，或把它當成 leader。` : '';
+      snap('build', ['B7', 'B10', 'B12'], Object.assign({ warn,
+        say: `${opN(st.j)} 不是 cbr、jumpI、jump，三個 case 都不成立，不加任何邊。block ${i} 沒有後繼：控制流在這裡離開這段程式碼。` }, common));
+    }
+  }
+  st.i = null; st.j = null;
+  snap('build', [], { changed: ['i', 'j'], say: `BuildGraph 結束：${st.maxStmt} 個 block，${st.edges.length} 條邊。右邊就是這段程式碼的 CFG。` });
+  return steps;
+}
+
+const INIT = { proc: null, lines: [], next: null, i: null, j: null, maxStmt: null, leader: [], last: [], nodes: [], edges: [], newEdges: [], newNode: null, cursor: null, scan: null, cur: null, changed: [], say: '', warn: '' };
+const state = { pi: 0, k: 0, parsed: null, trace: [] };
+const total = () => state.trace.length;
+const cur = () => state.k === 0 ? INIT : state.trace[state.k - 1];
+
+function rebuild() {
+  state.parsed = parse($('src').value);
+  state.trace = state.parsed.errors.length ? [] : buildTrace(state.parsed);
+  state.k = 0;
+}
+
+// ---- rendering ----
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.pi = i; $('src').value = c.src; rebuild(); renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderPseudoShell() {
+  $('pseudo').innerHTML = ['find', 'build'].map(proc =>
+    `<span class="proc" data-p="${proc}">` + PSEUDO[proc].map(([id, txt], k) =>
+      `<span class="pl${k === 0 ? ' head' : ''}" data-l="${id}">${txt}</span>`).join('') + '</span>').join('');
+}
+
+function renderListing(s) {
+  const ops = state.parsed.ops;
+  const slotOf = k => s.leader.indexOf(k);     // block number whose leader is op k, or -1
+  const blockOf = k => { for (let b = 1; b < s.leader.length; b++) if (s.last[b] != null && k >= s.leader[b] && k <= s.last[b]) return b; return null; };
+  $('nlabel').textContent = `n = ${ops.length}`;
+  $('listing').innerHTML = ops.map((op, idx) => {
+    const k = idx + 1, b = blockOf(k), slot = slotOf(k);
+    let cls = 'op';
+    if (b) cls += b % 2 ? ' b-odd' : ' b-even';
+    if (s.scan && k >= s.scan[0] && k <= s.scan[1]) cls += ' scan';
+    if (s.cursor === k) cls += ' cur';
+    const badges = [];
+    if (slot > 0) badges.push(`<span class="badge lead">B${slot}</span>`);
+    if (b && s.last[b] === k) badges.push(`<span class="badge last">last</span>`);
+    if (b && op.kind !== 'other' && s.last[b] !== k) badges.push(`<span class="badge dead">邊丟了</span>`);
+    return `<div class="${cls}"><span class="num">${k}</span><span class="lab">${op.label ? esc(op.label) + ':' : ''}</span><span class="txt${op.kind !== 'other' ? ' br' : ''}">${esc(op.text)}</span><span class="badges">${badges.join('')}</span></div>`;
+  }).join('');
+}
+
+function renderPseudo(s) {
+  document.querySelectorAll('#pseudo .pl').forEach(el => el.classList.toggle('on', s.lines.includes(el.dataset.l)));
+  document.querySelectorAll('#pseudo .proc').forEach(el => el.classList.toggle('active', s.proc === null || el.dataset.p === s.proc));
+  $('phase').textContent = s.proc === 'find' ? 'FindLeaders' : s.proc === 'build' ? 'BuildGraph' : '';
+}
+
+function renderVars(s) {
+  const ch = new Set(s.changed);
+  const v = (key, name, val) => `<span class="var${ch.has(key) ? ' chg' : ''}"><span class="k">${name}</span><span class="v">${val ?? '–'}</span></span>`;
+  const count = Math.max(s.maxStmt || 0, (s.next || 1) - 1);
+  const cells = (arr, prefix) => {
+    let h = '';
+    for (let b = 1; b <= count; b++) h += `<span class="cell${ch.has(prefix + ':' + b) ? ' chg' : ''}"><small>${b}</small>${arr[b] ?? '·'}</span>`;
+    return h || '<span class="empty">（還沒有東西）</span>';
+  };
+  $('vars').innerHTML = `
+    <div class="scalars">${v('n', 'n', state.parsed.ops.length)}${v('next', 'next', s.next)}${v('i', 'i', s.i)}${v('j', 'j', s.j)}${v('maxStmt', 'MaxStmt', s.maxStmt)}</div>
+    <div class="arr"><span class="k">Leader</span>${cells(s.leader, 'leader')}</div>
+    <div class="arr"><span class="k">Last</span>${cells(s.last, 'last')}</div>`;
+}
+
+function renderGraph(s) {
+  const nodes = s.nodes;
+  $('gstat').textContent = `${nodes.length} 節點 · ${s.edges.length} 邊`;
+  if (nodes.length === 0) {
+    $('graph').innerHTML = '<svg viewBox="0 0 300 80"><text class="nothing" x="150" y="44" text-anchor="middle">還沒有節點</text></svg>';
+    return;
+  }
+  const NW = 150, NH = 40, GAP = 28, TOP = 12;
+  const bulge = (a, b) => 18 + 12 * Math.abs(a - b) + 3 * Math.min(a, b);
+  let left = 0, right = 0;
+  s.edges.forEach(e => {
+    if (e.to > e.from + 1) right = Math.max(right, bulge(e.from, e.to));
+    else if (e.to < e.from) left = Math.max(left, bulge(e.from, e.to));
+    else if (e.to === e.from) right = Math.max(right, 44);
+  });
+  const X = 12 + left * 0.75, W = X + NW + 12 + right * 0.75;
+  const H = TOP * 2 + nodes.length * NH + (nodes.length - 1) * GAP;
+  const yOf = b => TOP + (b - 1) * (NH + GAP);
+  let out = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="控制流程圖">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+      <marker id="arr-new" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--hit)"/></marker>
+    </defs>`;
+  s.edges.forEach((e, idx) => {
+    const isNew = s.newEdges.includes(idx);
+    const ya = yOf(e.from), yb = yOf(e.to), cx = X + NW / 2, my = NH / 2;
+    let d;
+    if (e.to === e.from + 1) d = `M ${cx} ${ya + NH} L ${cx} ${yb}`;
+    else if (e.to > e.from) { const k = bulge(e.from, e.to) * 0.75; d = `M ${X + NW} ${ya + my} C ${X + NW + k} ${ya + my}, ${X + NW + k} ${yb + my}, ${X + NW} ${yb + my}`; }
+    else if (e.to < e.from) { const k = bulge(e.from, e.to) * 0.75; d = `M ${X} ${ya + my} C ${X - k} ${ya + my}, ${X - k} ${yb + my}, ${X} ${yb + my}`; }
+    else d = `M ${X + NW} ${ya + my - 9} C ${X + NW + 34} ${ya + my - 22}, ${X + NW + 34} ${ya + my + 22}, ${X + NW} ${ya + my + 9}`;
+    out += `<path class="edge${isNew ? ' new' : ''}" d="${d}" marker-end="url(#${isNew ? 'arr-new' : 'arr'})"/>`;
+  });
+  nodes.forEach(nd => {
+    const y = yOf(nd.b);
+    const rng = s.leader[nd.b] != null ? `op ${s.leader[nd.b]}–${s.last[nd.b] ?? '?'}` : '';
+    const cls = 'node' + (s.newNode === nd.b ? ' new' : '') + (s.cur === nd.b ? ' cur' : '');
+    out += `<g class="${cls}"><rect x="${X}" y="${y}" width="${NW}" height="${NH}" rx="4"/>
+      <text x="${X + 10}" y="${y + 17}"><tspan font-weight="600">B${nd.b}</tspan>${nd.label ? `  <tspan class="lab">${esc(nd.label)}:</tspan>` : ''}</text>
+      <text class="rng" x="${X + 10}" y="${y + 32}">${rng}</text></g>`;
+  });
+  $('graph').innerHTML = out + '</svg>';
+}
+
+function renderAll() {
+  const bad = state.parsed.errors.length > 0;
+  const T = total();
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && $('src').value === PRESETS[i].src));
+  $('errs').innerHTML = state.parsed.errors.map(e => `<span>${esc(e)}</span>`).join('');
+  $('phint').textContent = $('src').value === PRESETS[state.pi].src ? PRESETS[state.pi].hint : '';
+  $('step-range').max = T; $('step-range').value = state.k;
+  $('count').textContent = `第 ${state.k} / ${T} 步`;
+  $('btn-prev').disabled = state.k === 0;
+  $('btn-next').disabled = bad || state.k >= T;
+  $('btn-build').disabled = bad;
+  $('btn-end').disabled = bad || state.k >= T;
+  const s = bad ? INIT : cur();
+  renderListing(s);
+  renderPseudo(s);
+  renderVars(s);
+  renderGraph(s);
+  const say = $('say');
+  if (bad) say.textContent = '程式碼有錯，修好之後再開始。';
+  else if (state.k === 0) say.textContent = '按「下一步」開始執行 FindLeaders。';
+  else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '');
+}
+
+$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
+$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
+$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
+$('btn-build').addEventListener('click', () => { const idx = state.trace.findIndex(s => s.proc === 'build'); if (idx >= 0) { state.k = idx + 1; renderAll(); } });
+$('btn-end').addEventListener('click', () => { state.k = total(); renderAll(); });
+$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
+$('src').addEventListener('input', () => { rebuild(); renderAll(); });
+document.addEventListener('keydown', e => {
+  if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
+  if (e.key === 'ArrowRight') $('btn-next').click();
+  if (e.key === 'ArrowLeft') $('btn-prev').click();
+});
+
+renderPresets();
+renderPseudoShell();
+$('src').value = PRESETS[0].src;
+rebuild();
+renderAll();
+</script>
+</body>
+</html>

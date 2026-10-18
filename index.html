@@ -61,6 +61,10 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
 .mini-isa i { display: block; height: 0.55rem; background: var(--line); border-radius: 1px; }
 .mini-isa i.a { background: var(--left); opacity: 0.75; }
 .mini-isa i.b { background: var(--right); opacity: 0.75; }
+.mini-cfg { width: 100%; height: 3.4rem; }
+.mini-cfg rect { fill: var(--bg); stroke: var(--line); }
+.mini-cfg rect.l { stroke: var(--left); }
+.mini-cfg path { fill: none; stroke: var(--right); stroke-width: 1.5; }
 </style>
 </head>
 <body>
@@ -130,6 +134,23 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         <div class="text">
           <h2>ISA 比較：x86、ARM、RISC-V</h2>
           <p>七篇系列，每篇挑一個設計決定，看三個指令集各自選了什麼、換到了什麼：編碼長度、暫存器數量、呼叫慣例、條件分支、定址模式、立即值、micro-op。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="eac/">
+        <div class="glyph" aria-hidden="true">
+          <svg class="mini-cfg" viewBox="0 0 120 56">
+            <rect x="40" y="2" width="40" height="12" rx="2"/>
+            <rect class="l" x="6" y="22" width="40" height="12" rx="2"/>
+            <rect class="l" x="74" y="22" width="40" height="12" rx="2"/>
+            <rect class="l" x="40" y="42" width="40" height="12" rx="2"/>
+            <path d="M52 14 L30 22 M68 14 L90 22 M30 34 L52 42 M90 34 L68 42"/>
+          </svg>
+        </div>
+        <div class="text">
+          <h2>Engineering a Compiler 筆記</h2>
+          <p>讀 Cooper 和 Torczon 的編譯器教科書時，把值得動手走一遍的演算法做成互動頁。第一篇：從線性 IR 建控制流程圖。</p>
         </div>
       </a>
     </li>
