@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPU 記憶體階層逐步圖解</title>
-<meta name="description" content="逐步執行一個 warp 的幾條指令,看每一次存取在 H100 晶片上走到哪一層、花了多少 cycle。">
+<meta name="description" content="逐步執行一個 warp 的幾條指令，看每一次存取在 H100 晶片上走到哪一層、花了多少 cycle。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
 <style>
 /* Layout: one reading column; the stepper is a single workbench — the kernel on top,
@@ -334,15 +334,6 @@ svg.chip { display: block; width: 100%; max-width: 54rem; margin: 0 auto; height
   </div>
   <p class="foot">Register、shared、constant cache、L1、TMA 都在第二張圖的 SM 裡；L2 在第一張圖 die 中央；其餘本體都在第一張圖的 HBM，或根本在這張圖之外的主機記憶體。</p>
 
-  <section class="prose">
-    <h2>看完可以帶走的三句話</h2>
-    <ul>
-      <li>Shared memory 和 L1 是同一塊 SRAM，差別是誰管：L1 由硬體自動快取，shared 由你自己搬。它不是「比 L1 更快的一層」，而是「保證在這裡、不會被別人擠掉」的一層。只有一個 warp、每個值只用一次的時候，搬進 shared 只是多一跳。</li>
-      <li>一個 warp 發出 load 之後不會停下來，它會繼續發下一條指令，直到有指令要用那個還沒回來的 register 才 stall。所以連續發出幾個獨立的 load，等待時間會重疊，而不是相加。</li>
-      <li>記憶體是以 cache line 為單位搬的。32 個 thread 讀 32 個相鄰的 float 只動一條 line；讀 32 個相隔很遠的 float 要動 32 條 line，延遲一樣，但吃掉 32 倍的頻寬。HBM 頻寬被 132 個 SM 分，平均每個 SM 每 cycle 只有大約 13 B（H100）或 18 B（H200），浪費不起。</li>
-    </ul>
-  </section>
-
   <section class="gen">
     <div class="prose">
       <h2>從 H100 到 GB300：又多了什麼</h2>
@@ -369,16 +360,17 @@ svg.chip { display: block; width: 100%; max-width: 54rem; margin: 0 auto; height
   </section>
 
   <section class="prose">
-    <h2>這個模型省略了什麼</h2>
+    <h2>結語</h2>
+    <p>Shared memory 和 L1 是同一塊 SRAM，差別是誰管：L1 由硬體自動快取，shared 由你自己搬，它不是「比 L1 更快的一層」，而是「保證在這裡、不會被別人擠掉」的一層。一個 warp 發出 load 之後不會停下來，直到有指令要用那個還沒回來的 register 才 stall，所以連續幾個獨立的 load 等待時間會重疊而不是相加。記憶體以 cache line 為單位搬，32 個 thread 讀 32 個相鄰的 float 只動一條 line，讀相隔很遠的要動 32 條，延遲一樣但吃掉 32 倍的頻寬，而 HBM 頻寬分到每個 SM 每 cycle 只有十幾 byte，浪費不起。</p>
+    <p>這一頁只有一個 warp，所以每次等記憶體都是真的在等。真正的 SM 上同時住著幾十個 warp（H100 最多 64 個），一個在等的時候 scheduler 會切去發別的 warp 的指令，這才是 GPU 藏住幾百個 cycle 的主要方法，也是 occupancy 這個指標的來源。另一條線是上面「從 H100 到 GB300」那一節：雙 die 的 L2、TMEM、CPU 和 GPU 共用的位址空間，每一項都在改這一頁的某條規則。</p>
+    <p>模擬器裡的 L1 和 L2 只記「這條 line 在不在」，沒有容量上限也不會被驅逐；真的 L2 以 32 B sector 為單位搬，L1 的 line 是 128 B，這裡統一用 128 B。延遲全部用固定值（shared 30、L1 40、L2 260、HBM 600 cycle），實際上 L2 分兩個 partition，近端命中約 260、遠端約 410，HBM 在 480 到 660 之間，模擬器一律當近端。沒有進模擬器的還有：</p>
     <ul>
-      <li>這裡只有一個 warp。真正的 SM 上同時住著幾十個 warp（H100 最多 64 個），一個在等記憶體時 scheduler 會切去發別的 warp 的指令，這才是 GPU 藏住幾百個 cycle 的主要方法。那是另一篇的主題。</li>
-      <li>L1 和 L2 只記「這條 line 在不在」，沒有容量上限，也不會被驅逐。真的 L2 以 32 B sector 為單位搬，L1 的 line 是 128 B，這裡統一用 128 B。</li>
-      <li>延遲全部用固定值：shared 30、L1 40、L2 260、HBM 600 cycle。實際上 L2 分兩個 partition，近端命中約 260、遠端約 410；HBM 在 480 到 660 之間，看資料落在哪一邊。模擬器一律當近端。</li>
-      <li>Shared memory 的 bank conflict、L1 的寫入策略、TLB、常數記憶體、texture 路徑、TMA 和 distributed shared memory 都沒有進模擬器。store 在這裡視為寫穿到 L2 且不讓 warp 等待。</li>
+      <li>shared memory 的 bank conflict、L1 的寫入策略、TLB、常數記憶體、texture 路徑、TMA 和 distributed shared memory；store 在這裡視為寫穿到 L2 且不讓 warp 等待。</li>
       <li>第二張圖的單元數是 H100 whitepaper 的配置；H800 是同一顆 die，主要差在 NVLink 頻寬被砍。GeForce 系列的 SM 另外有 RT Core，FP32 和 INT32 的比例也不同。</li>
       <li>Processing Block 裡每個 scheduler 一個 cycle 只能發一條指令，這裡把發射成本當成 1 cycle，也假設每個 thread 的工作完全相同，沒有 branch。</li>
     </ul>
   </section>
+
 </main>
 
 <script>
@@ -880,7 +872,7 @@ function renderAll() {
   // compare table
   $('compare-body').innerHTML = RESULTS.map(r => `<tr class="${r.p === state.preset ? 'now' : ''}"><td>${r.p.label}</td><td class="num">${r.total}</td><td class="num">${r.stall}</td><td class="num">${fmtB(r.bytes.hbm)}</td><td class="num">${fmtB(r.bytes.l2)}</td><td class="num">${fmtB(r.bytes.sh)}</td></tr>`).join('');
   const [d, s, g] = RESULTS;
-  $('verdict').textContent = `直接讀三次只花 ${d.total} cycle，因為三個 load 的等待重疊了，而且鄰居的值 L1 已經有。先搬進 shared 反而要 ${s.total} cycle：多了一跳，還多一次同步。shared memory 真正划算的是「同一份資料被 block 裡很多 thread 反覆讀」的情況，例如矩陣乘法的 tile，這個例子每個值只被讀三次，L1 就夠了。跨步讀延遲差不多(${g.total} cycle)，但從 HBM 搬了 ${fmtB(g.bytes.hbm)}，是直接讀的 ${Math.round(g.bytes.hbm / d.bytes.hbm)} 倍。`;
+  $('verdict').textContent = `直接讀三次只花 ${d.total} cycle，因為三個 load 的等待重疊了，而且鄰居的值 L1 已經有。先搬進 shared 反而要 ${s.total} cycle：多了一跳，還多一次同步。shared memory 真正划算的是「同一份資料被 block 裡很多 thread 反覆讀」的情況，例如矩陣乘法的 tile，這個例子每個值只被讀三次，L1 就夠了。跨步讀延遲差不多（${g.total} cycle），但從 HBM 搬了 ${fmtB(g.bytes.hbm)}，是直接讀的 ${Math.round(g.bytes.hbm / d.bytes.hbm)} 倍。`;
 }
 
 $('btn-next').addEventListener('click', () => { if (state.step < state.run.frames.length - 1) { state.step++; renderAll(); } });

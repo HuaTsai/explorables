@@ -182,24 +182,18 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
   </div>
   <p class="foot">x86 和 AArch64 的縮放各有限制：x86 的 scale 最大 8，AArch64 的縮放只能等於存取大小。所以第三個案例的 ×16 兩邊都得先用一條算術指令處理，差距縮小。RISC-V 不管怎樣都要先算，但開了 C 擴充後這些算術指令多半是 2 bytes，bytes 總數和另外兩邊差距不大，差的是指令數。</p>
 
-  <section class="prose three">
-    <h2>看完可以帶走的三句話</h2>
-    <ol>
-      <li><strong>定址模式是把常見的位址算術塞進 load/store。</strong>陣列索引和結構成員是最常見的兩種，所以「base + index×大小 + 常數」這個形狀被 x86 直接內建成一條指令的位址欄位。</li>
-      <li><strong>x86 最寬，AArch64 中間，RISC-V 只留最小集合。</strong>x86 連縮放倍數都可以和存取大小無關；AArch64 給縮放和位移，但縮放綁死在存取大小；RISC-V 只留 base + 12 位元常數，其餘全部交給 <code>slli</code>、<code>add</code> 這類一般指令。三個 ISA 剛好是三種哲學。</li>
-      <li><strong>代價差在指令數，不在 bytes。</strong>RISC-V 多出來的算術指令壓縮後常是 2 bytes，程式大小和 x86 差不多。真正的差異是同一件事要發出更多條指令，前端要更寬、解碼和排程的工作更多。這就是為什麼 RISC-V 後來加了 Zba 擴充把縮放加法補回來（見下）。</li>
-    </ol>
-  </section>
-
   <section class="prose">
-    <h2>這個模型省略了什麼</h2>
+    <h2>結語</h2>
+    <p>定址模式是把常見的位址算術塞進 load 和 store：陣列索引和結構成員最常見，所以「base + index × 大小 + 常數」這個形狀被 x86 直接內建成一條指令的位址欄位。三個 ISA 剛好是三種哲學：x86 最寬，連縮放倍數都可以和存取大小無關；AArch64 給縮放和位移，但縮放綁死在存取大小；RISC-V 只留 base + 12 位元常數，其餘交給 <code>slli</code>、<code>add</code> 這類一般指令。代價差在指令數，不在 bytes：RISC-V 多出來的算術指令壓縮後常是 2 bytes，程式大小和 x86 差不多，真正的差異是同一件事要發出更多條指令，前端要更寬。這也是 RISC-V 後來加 Zba 擴充把縮放加法補回來的原因。</p>
+    <p>位址算式裡的常數部分能放多大，和<a href="../immediates/">立即值</a>那一篇是同一個問題：12 bits 的位移放不下就得先湊常數。x86 那個很寬的位址欄位在編碼上要付 ModRM 和 SIB 兩個 byte，見<a href="../encoding/">指令編碼</a>；而帶縮放的 load 進了核心可能被拆成兩個 µop，見 <a href="../micro-ops/">micro-op</a>。</p>
+    <p>案例裡沒有迴圈，也假設程式不是位置無關碼，所以有幾件事看不到：</p>
     <ul>
-      <li><strong>pre/post-index 在迴圈裡的價值。</strong>AArch64 的 <code>ldr x0, [x1], #8</code> 載入之後順便把 x1 往前推 8，一條指令做完「讀目前元素、指標前進」，迴圈裡每輪省一條 <code>add</code>。x86 和 RISC-V 都沒有這種「會改 base 的 load」。本頁的案例沒有迴圈，看不到這個差別。</li>
-      <li><strong>x86 的 <code>lea</code> 把定址模式當算術用。</strong><code>lea rax, [rdi + rsi*8 + 16]</code> 只算位址、不碰記憶體，等於一條免費的三運算元乘加。第一篇的 <code>a + b</code> 就是用它編的。</li>
-      <li><strong>segment 暫存器。</strong>x86 的位址其實還可以加一個 segment base，64 位元下只剩 <code>fs</code> 和 <code>gs</code> 在用，拿來放 thread-local 資料的起點。這裡略過。</li>
-      <li><strong>RISC-V 的 Zba 擴充。</strong><code>sh1add</code>、<code>sh2add</code>、<code>sh3add</code> 一條做 <code>rd = rs1×2/4/8 + rs2</code>。用 <code>-march=rv64gc_zba</code> 重編第一個案例，<code>slli</code> + <code>add</code> 併成 <code>sh3add a0, a1, a0</code>，三條變兩條。但第三個案例的 ×16 不在 2、4、8 之內，還是三條。RVA22 以後的 profile 已把 Zba 列為必備。</li>
-      <li><strong>位置無關碼（-fPIC）下的全域變數。</strong>第四個案例假設連結時就知道 <code>g</code> 的位址。編成共享函式庫時，<code>g</code> 可能被別的函式庫定義，三邊都要多一次間接：x86 變 <code>mov rax, [rip + g@GOTPCREL]</code> 再 <code>mov rax, [rax]</code>，AArch64 的 <code>adrp</code> 改指向 GOT，RISC-V 用 <code>auipc</code> 配 <code>%got_pcrel_hi</code> 再多一條 <code>ld</code>。</li>
-      <li><strong>RISC-V 的 code model。</strong>本頁用預設的 medlow，<code>lui</code> 給絕對位址的高 20 位元，程式必須落在 ±2 GB 內。改用 <code>-mcmodel=medany</code> 會變成 <code>auipc</code> 相對 PC，和 AArch64 的 <code>adrp</code> 思路一樣。</li>
+      <li>pre/post-index 在迴圈裡的價值。AArch64 的 <code>ldr x0, [x1], #8</code> 載入之後順便把 x1 往前推 8，迴圈裡每輪省一條 <code>add</code>；x86 和 RISC-V 都沒有這種會改 base 的 load。</li>
+      <li>x86 的 <code>lea</code> 把定址模式當算術用：<code>lea rax, [rdi + rsi*8 + 16]</code> 只算位址不碰記憶體，等於一條免費的三運算元乘加。</li>
+      <li>segment 暫存器。64 位元下只剩 <code>fs</code> 和 <code>gs</code> 在用，拿來放 thread-local 資料的起點。</li>
+      <li>RISC-V 的 Zba 擴充：<code>sh1add</code>、<code>sh2add</code>、<code>sh3add</code> 一條做 <code>rd = rs1×2/4/8 + rs2</code>。用 <code>-march=rv64gc_zba</code> 重編第一個案例，<code>slli</code> + <code>add</code> 併成 <code>sh3add</code>，三條變兩條；但第三個案例的 ×16 不在 2、4、8 之內，還是三條。RVA22 以後的 profile 已把 Zba 列為必備。</li>
+      <li>位置無關碼下的全域變數。編成共享函式庫時，<code>g</code> 可能被別的函式庫定義，三邊都要多一次間接：x86 經 <code>g@GOTPCREL</code>，AArch64 的 <code>adrp</code> 改指向 GOT，RISC-V 用 <code>auipc</code> 配 <code>%got_pcrel_hi</code> 再多一條 <code>ld</code>。</li>
+      <li>RISC-V 的 code model。本頁用預設的 medlow，<code>lui</code> 給絕對位址的高 20 位元，程式必須落在 ±2 GB 內；<code>-mcmodel=medany</code> 會改用 <code>auipc</code> 相對 PC，和 AArch64 的 <code>adrp</code> 思路一樣。</li>
     </ul>
   </section>
 </main>

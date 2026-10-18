@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>find_rows 逐步圖解</title>
-<meta name="description" content="一行一步執行排序加二分搜尋的向量化查表,看 pos、hit、回傳值每個中間 tensor 長什麼樣,以及為什麼 clamp 不會製造假命中。">
+<meta name="description" content="一行一步執行排序加二分搜尋的向量化查表，看 pos、hit、回傳值每個中間 tensor 長什麼樣，以及為什麼 clamp 不會製造假命中。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
 <style>
 /* Layout: one reading column; the stepper is a single workbench — keys tape,
@@ -46,7 +46,7 @@ h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-w
 h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
 h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
 h3 { font-size: 1rem; margin: 0; }
-p { margin: 0; max-width: 38em; }
+p { margin: 0; }
 .lead { color: var(--muted); margin-top: 0.75rem; }
 .prose { display: flex; flex-direction: column; gap: 0.75rem; }
 code, .mono { font-family: var(--font-mono); }
@@ -150,22 +150,22 @@ pre.code .ln.skip { opacity: 0.3; text-decoration: line-through; }
   <header>
     <a class="back" href="../">← Explorables</a>
     <h1><span class="mono">find_rows</span> 逐步圖解</h1>
-    <p class="lead">一個 <code>{key: row}</code> 的 dict 查表,用「排序 + 二分搜尋」寫成沒有迴圈的 tensor 運算。一行 code 一步,每一步把整個中間 tensor 攤開來看:<code>pos</code> 長什麼樣、<code>hit</code> 長什麼樣、最後回傳的又長什麼樣。</p>
+    <p class="lead">一個 <code>{key: row}</code> 的 dict 查表，用「排序 + 二分搜尋」寫成沒有迴圈的 tensor 運算。一行 code 一步，每一步把整個中間 tensor 攤開來看：<code>pos</code> 長什麼樣、<code>hit</code> 長什麼樣、最後回傳的又長什麼樣。</p>
   </header>
 
   <section class="prose">
     <h2>問題是什麼</h2>
-    <p>稀疏卷積把每個 active voxel 的座標 <code>(b, z, y, x)</code> 壓成一個整數 <code>key</code>,存在 <code>keys[N]</code> 裡。<b>第 <i class="l">i</i> 個 key 就是 feature table 的第 <i class="l">i</i> 個 row</b>。建 rulebook 時,對每個 voxel 的每個鄰居座標算出 key,問:「這個鄰居是 active 的嗎?是的話它在第幾 row?」</p>
-    <p>單筆查詢就是 Python 的 <code>table.get(q, -1)</code>。但一次要查幾百萬筆,而且在 GPU 上,所以要寫成不帶 Python 迴圈的 tensor 運算:每一行 code 對<b>整個</b> <code>queries</code> tensor 做一次,中間值都跟 <code>queries</code> 同形狀。這裡 <code>queries</code> 故意用二維 <code>[Q, K]</code>,對應「Q 個 voxel 各有 K 個鄰居」,看形狀怎麼一路保留到回傳值。</p>
+    <p>稀疏卷積把每個 active voxel 的座標 <code>(b, z, y, x)</code> 壓成一個整數 <code>key</code>，存在 <code>keys[N]</code> 裡。<b>第 <i class="l">i</i> 個 key 就是 feature table 的第 <i class="l">i</i> 個 row</b>。建 rulebook 時，對每個 voxel 的每個鄰居座標算出 key，問：「這個鄰居是 active 的嗎？是的話它在第幾 row?」</p>
+    <p>單筆查詢就是 Python 的 <code>table.get(q, -1)</code>。但一次要查幾百萬筆，而且在 GPU 上，所以要寫成不帶 Python 迴圈的 tensor 運算：每一行 code 對<b>整個</b> <code>queries</code> tensor 做一次，中間值都跟 <code>queries</code> 同形狀。這裡 <code>queries</code> 故意用二維 <code>[Q, K]</code>，對應「Q 個 voxel 各有 K 個鄰居」，看形狀怎麼一路保留到回傳值。</p>
   </section>
 
   <section class="bench" aria-label="逐步執行">
     <div class="row">
       <div class="inputs">
-        <label><span>keys — N 個,不重複;row 順序就是你輸入的順序</span>
+        <label><span>keys — N 個，不重複；row 順序就是你輸入的順序</span>
           <input id="keys-input" type="text" spellcheck="false" autocomplete="off">
         </label>
-        <label><span>queries — 用 <code>;</code> 分列,每列個數要相同;不加 <code>;</code> 就是一維</span>
+        <label><span>queries — 用 <code>;</code> 分列，每列個數要相同；不加 <code>;</code> 就是一維</span>
           <input id="queries-input" type="text" spellcheck="false" autocomplete="off">
         </label>
       </div>
@@ -175,22 +175,22 @@ pre.code .ln.skip { opacity: 0.3; text-decoration: line-through; }
 
     <div class="rows2">
     <div class="row">
-      <p class="row-title"><span>KEYS — 原始順序,<i class="l">row</i> 就是 feature table 的列號</span><code id="keys-shape"></code></p>
+      <p class="row-title"><span>KEYS — 原始順序，<i class="l">row</i> 就是 feature table 的列號</span><code id="keys-shape"></code></p>
       <div class="tape-wrap"><div class="tape" id="keys-tape"></div></div>
     </div>
 
     <div class="row">
-      <p class="row-title"><span>QUERIES — 輸入,不會變</span><code id="queries-shape"></code></p>
+      <p class="row-title"><span>QUERIES — 輸入，不會變</span><code id="queries-shape"></code></p>
       <div class="tape-wrap"><div class="grid" id="queries-grid"></div></div>
     </div>
 
     <div class="row" id="row-sorted">
-      <p class="row-title"><span>SORTED_KEYS — 每格掛著<i class="l">原本的 row</i>,底下是落在這格的 query 數</span><code id="sorted-shape"></code></p>
+      <p class="row-title"><span>SORTED_KEYS — 每格掛著<i class="l">原本的 row</i>，底下是落在這格的 query 數</span><code id="sorted-shape"></code></p>
       <div class="tape-wrap"><div class="tape" id="sorted-tape"></div></div>
     </div>
 
     <div class="row" id="row-pos">
-      <p class="row-title"><span>POS — <code>searchsorted</code> 插入點,<code>clamp</code> 後</span><code id="pos-shape"></code></p>
+      <p class="row-title"><span>POS — <code>searchsorted</code> 插入點，<code>clamp</code> 後</span><code id="pos-shape"></code></p>
       <div class="tape-wrap"><div class="grid" id="pos-grid"></div></div>
     </div>
 
@@ -218,7 +218,7 @@ pre.code .ln.skip { opacity: 0.3; text-decoration: line-through; }
 
     <div class="panels">
       <div class="panel">
-        <p class="panel-title">CODE — minispconv/rulebook.py,每一行只執行一次</p>
+        <p class="panel-title">CODE — minispconv/rulebook.py，每一行只執行一次</p>
         <pre class="code"><code id="code"></code></pre>
       </div>
       <div class="panel">
@@ -230,21 +230,21 @@ pre.code .ln.skip { opacity: 0.3; text-decoration: line-through; }
 
   <section class="prose">
     <h2>為什麼要先排序</h2>
-    <p><code>searchsorted</code> 是二分搜尋,前提是序列已排序,但 <code>keys</code> 的順序是 feature table 的 row 順序,不能動。所以用 <code>argsort</code> 拿到一個<b>排列</b> <code>order</code>:<code>order[i]</code> 是「排序後第 <i class="r">i</i> 格原本是第幾 <i class="l">row</i>」。排序後的 tape 每一格都掛著自己原本的 row 號,找到位置之後查回去就行,這就是最後 <code>order[pos]</code> 那一下。</p>
-    <p>排序只做一次,之後 27 個 kernel tap 的鄰居查詢都對同一份 <code>sorted_keys</code> 做。這是 <code>linearize</code> 和 <code>find_rows</code> 拆成兩個函式的原因:key 算一次,查很多次。</p>
+    <p><code>searchsorted</code> 是二分搜尋，前提是序列已排序，但 <code>keys</code> 的順序是 feature table 的 row 順序，不能動。所以用 <code>argsort</code> 拿到一個<b>排列</b> <code>order</code>:<code>order[i]</code> 是「排序後第 <i class="r">i</i> 格原本是第幾 <i class="l">row</i>」。排序後的 tape 每一格都掛著自己原本的 row 號，找到位置之後查回去就行，這就是最後 <code>order[pos]</code> 那一下。</p>
+    <p>排序只做一次，之後 27 個 kernel tap 的鄰居查詢都對同一份 <code>sorted_keys</code> 做。這是 <code>linearize</code> 和 <code>find_rows</code> 拆成兩個函式的原因：key 算一次，查很多次。</p>
   </section>
 
   <section class="prose">
     <h2>clamp 為什麼不會製造假命中</h2>
-    <p><code>searchsorted</code> 回傳的是「插入點」:第一個 <code>&ge; q</code> 的位置。如果 <code>q</code> 比所有 key 都大,插入點是 <code>N</code>,而 <code>sorted_keys[N]</code> 越界,直接索引會炸。</p>
-    <p>於是把 <code>pos</code> clamp 到 <code>N - 1</code>。這看起來像在亂改答案,但接下來要比的是 <code>sorted_keys[N - 1] == q</code>,也就是跟<b>最大的 key</b> 比。<code>q</code> 之所以會落到 <code>N</code>,正是因為它嚴格大於所有 key,包括最大那個,所以這個比較<b>必定是 False</b>。clamp 只是讓越界的 query 走到一個保證 miss 的格子,不會把它變成命中。試試上面「全部越界」的範例,在 clamp 那一步看哪幾格被改動,再看下一步 <code>hit</code> 那幾格全是 False。</p>
-    <p>反過來,小於所有 key 的 query 落在 <code>pos = 0</code>,不越界,直接跟最小 key 比,也是 miss。所以只需要 clamp 上界。</p>
+    <p><code>searchsorted</code> 回傳的是「插入點」：第一個 <code>&ge; q</code> 的位置。如果 <code>q</code> 比所有 key 都大，插入點是 <code>N</code>，而 <code>sorted_keys[N]</code> 越界，直接索引會炸。</p>
+    <p>於是把 <code>pos</code> clamp 到 <code>N - 1</code>。這看起來像在亂改答案，但接下來要比的是 <code>sorted_keys[N - 1] == q</code>，也就是跟<b>最大的 key</b> 比。<code>q</code> 之所以會落到 <code>N</code>，正是因為它嚴格大於所有 key，包括最大那個，所以這個比較<b>必定是 False</b>。clamp 只是讓越界的 query 走到一個保證 miss 的格子，不會把它變成命中。試試上面「全部越界」的範例，在 clamp 那一步看哪幾格被改動，再看下一步 <code>hit</code> 那幾格全是 False。</p>
+    <p>反過來，小於所有 key 的 query 落在 <code>pos = 0</code>，不越界，直接跟最小 key 比，也是 miss。所以只需要 clamp 上界。</p>
   </section>
 
   <section class="prose">
     <h2>兩個容易漏掉的細節</h2>
-    <p><b>dtype。</b><code>argsort</code> 和 <code>searchsorted</code> 一律回 int64,不看輸入是什麼。rulebook 全程 int32,所以 <code>order</code> 建立時就轉成 int32,之後 <code>order[pos]</code> 和 <code>where(..., -1)</code> 都維持 int32。漏掉這一步,錯誤要到 <code>Rulebook.__post_init__</code> 才會爆。</p>
-    <p><b>空的 keys。</b>N = 0 時 <code>N - 1 = -1</code>,clamp 和索引都會出錯。整幀點雲被 range 濾光在推論端是真的會發生的事,所以函式開頭直接回全 -1,讓它對空輸入也有定義,上層就不必每一處都防。</p>
+    <p><b>dtype。</b><code>argsort</code> 和 <code>searchsorted</code> 一律回 int64，不看輸入是什麼。rulebook 全程 int32，所以 <code>order</code> 建立時就轉成 int32，之後 <code>order[pos]</code> 和 <code>where(..., -1)</code> 都維持 int32。漏掉這一步，錯誤要到 <code>Rulebook.__post_init__</code> 才會爆。</p>
+    <p><b>空的 keys。</b>N = 0 時 <code>N - 1 = -1</code>,clamp 和索引都會出錯。整幀點雲被 range 濾光在推論端是真的會發生的事，所以函式開頭直接回全 -1，讓它對空輸入也有定義，上層就不必每一處都防。</p>
   </section>
 
   <section class="prose">
@@ -252,14 +252,20 @@ pre.code .ln.skip { opacity: 0.3; text-decoration: line-through; }
     <div class="cmp">
       <div>
         <h3>sort + searchsorted(L1)</h3>
-        <p>建表 O(N log N),每筆查詢 O(log N)。沒有碰撞處理、沒有 load factor、沒有 sentinel key,正確性可以一眼看完。</p>
+        <p>建表 O(N log N)，每筆查詢 O(log N)。沒有碰撞處理、沒有 load factor、沒有 sentinel key，正確性可以一眼看完。</p>
       </div>
       <div>
         <h3>GPU hash table(L2)</h3>
-        <p>建表 O(N),每筆查詢期望 O(1)。要處理碰撞、選 empty key、調 capacity。spconv 上游走這條。</p>
+        <p>建表 O(N)，每筆查詢期望 O(1)。要處理碰撞、選 empty key、調 capacity。spconv 上游走這條。</p>
       </div>
     </div>
-    <p>兩者的介面完全一樣:<code>find_rows(keys, queries) -&gt; rows</code>。docstring 刻意說「背後用什麼是這個函式的私事」,就是為了之後換成 hash table 時,呼叫端和測試一行都不用改。L1 版本的價值是當 L2 的對拍基準。</p>
+    <p>兩者的介面完全一樣：<code>find_rows(keys, queries) -&gt; rows</code>。docstring 刻意說「背後用什麼是這個函式的私事」，就是為了之後換成 hash table 時，呼叫端和測試一行都不用改。L1 版本的價值是當 L2 的對拍基準。</p>
+  </section>
+  <section class="prose">
+    <h2>結語</h2>
+    <p>一個 dict 查表可以寫成沒有迴圈的 tensor 運算：先把 keys 排序並記住排列 <code>order</code>，每筆 query 用 <code>searchsorted</code> 找插入點，比對一次決定命中，再用 <code>order[pos]</code> 查回原本的 row。中間值都和 queries 同形狀，所以二維的 <code>[Q, K]</code> 一路保留到回傳值。Clamp 不會製造假命中，因為被 clamp 的 query 一定嚴格大於最大的 key。</p>
+    <p>同一個介面換成 GPU hash table 就是上一節說的 L2 版本，建表 O(N)、查詢期望 O(1)；這一頁的 L1 版本留著當它的對拍基準。</p>
+    <p>這裡的 keys 假設不重複，重複的 key 只會命中排序後的其中一筆，哪一筆由 <code>argsort</code> 的穩定性決定；<code>searchsorted</code> 本身的 GPU 實作和記憶體存取模式也沒有談，這一頁只看形狀和正確性。</p>
   </section>
 </main>
 
@@ -269,7 +275,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 const PRESETS = [
-  { name: '測試裡的例子,2×4', keys: '42 7 19 3', queries: '19 5 42 42; 100 3 0 7' },
+  { name: '測試裡的例子，2×4', keys: '42 7 19 3', queries: '19 5 42 42; 100 3 0 7' },
   { name: '全部命中、順序打亂', keys: '10 20 30 40', queries: '30 10; 40 20' },
   { name: '全部越界', keys: '3 7', queries: '7 8 1000000' },
   { name: '比最小的還小', keys: '50 60', queries: '0 49; 50 61' },
@@ -307,7 +313,7 @@ function parseQueries(src) {
   if (!src.trim()) return { rows: [[]], shape: [0] };
   if (!src.includes(';')) { const r = parseInts(src); return { rows: [r], shape: [r.length] }; }
   const rows = src.split(';').map(parseInts);
-  if (rows.some(r => r.length !== rows[0].length)) throw new Error('queries 每一列的個數要相同,才是一個矩形 tensor');
+  if (rows.some(r => r.length !== rows[0].length)) throw new Error('queries 每一列的個數要相同，才是一個矩形 tensor');
   return { rows, shape: [rows.length, rows[0].length] };
 }
 
@@ -356,7 +362,7 @@ const shapeStr = () => `[${state.shape.join(', ')}]`;
 
 function renderKeysTape(s) {
   const { keys } = state;
-  if (keys.length === 0) { $('keys-tape').innerHTML = '<span class="empty">keys 是空的(N = 0)</span>'; return; }
+  if (keys.length === 0) { $('keys-tape').innerHTML = '<span class="empty">keys 是空的（N = 0）</span>'; return; }
   const found = new Set(s.result ? flat(s.result).filter(r => r >= 0) : []);
   $('keys-tape').innerHTML = keys.map((k, i) =>
     cell(found.has(i) ? 'found' : '', [`<small class="row-tag">row ${i}</small>`, `<span class="key">${k}</span>`, `<small></small>`])).join('');
@@ -365,7 +371,7 @@ function renderKeysTape(s) {
 function renderSortedTape(s) {
   const { keys } = state;
   const N = keys.length;
-  if (N === 0) { $('sorted-tape').innerHTML = '<span class="empty">沒有東西可排序,直接走 return</span>'; return; }
+  if (N === 0) { $('sorted-tape').innerHTML = '<span class="empty">沒有東西可排序，直接走 return</span>'; return; }
   if (!s.order) { $('sorted-tape').innerHTML = state.keys.map((_, i) => cell('ghost', [`<small class="pos-tag">pos ${i}</small>`, `<span class="key">·</span>`, `<small></small>`, `<small></small>`])).join(''); return; }
   const landed = new Array(N + 1).fill(0);
   if (s.pos) flat(s.pos).forEach(p => landed[p]++);
@@ -390,7 +396,7 @@ function renderSortedTape(s) {
 // One 2-D grid in queries' shape. `cellOf(i, j)` returns {text, cls} or null for "not yet".
 function renderGrid(id, cellOf, top = null) {
   const { Q, shape } = state;
-  if (shape[shape.length - 1] === 0) { $(id).innerHTML = '<span class="empty">沒有 query,形狀 [0] 的空 tensor</span>'; return; }
+  if (shape[shape.length - 1] === 0) { $(id).innerHTML = '<span class="empty">沒有 query，形狀 [0] 的空 tensor</span>'; return; }
   $(id).innerHTML = Q.map((row, i) => '<div class="tape">' + row.map((q, j) => {
     const c = cellOf(i, j);
     const idx = shape.length === 1 ? `[${j}]` : `[${i},${j}]`;
@@ -428,7 +434,7 @@ function renderGrids(s) {
     return r >= 0 ? { text: `<span class="l">${r}</span>`, cls: 'found', sub: `row ${r}` } : { text: `<span class="b">-1</span>`, cls: 'bad', sub: s.hit ? 'miss' : 'N = 0' };
   });
   $('ret-shape').textContent = s.result ? `return: ${sh} int32` : '尚未執行';
-  $('grid-hint').textContent = havePos ? '滑過任一格,同一格和它的 pos 會一起框出。' : '';
+  $('grid-hint').textContent = havePos ? '滑過任一格，同一格和它的 pos 會一起框出。' : '';
   // row states: which row the current line writes to, which are still pending
   const writes = { argsort: 'row-sorted', gather: 'row-sorted', search: 'row-pos', clamp: 'row-pos', hit: 'row-hit', where: 'row-ret', empty2: 'row-ret' };
   for (const [id, have] of [['row-sorted', !!s.order], ['row-pos', havePos], ['row-hit', !!s.hit], ['row-ret', !!s.result]]) {
@@ -462,44 +468,44 @@ function narrate(s) {
   const fr = r => r === -1 ? '<i class="b">-1</i>' : `<i class="l">${r}</i>`;
   switch (s.line) {
     case 'def':
-      return `<p>進入函式。<code>keys</code> 是 <code>[${N}]</code> int32;<code>queries</code> 是 <code>${shapeStr()}</code> int32,共 ${nq} 筆。</p>
-              <p>接下來每一行對<b>整個</b> <code>queries</code> 做一次。沒有迴圈、不會回頭。中間值 <code>pos</code>、<code>hit</code>、回傳值,形狀全部是 <code>${shapeStr()}</code>。</p>`;
+      return `<p>進入函式。<code>keys</code> 是 <code>[${N}]</code> int32;<code>queries</code> 是 <code>${shapeStr()}</code> int32，共 ${nq} 筆。</p>
+              <p>接下來每一行對<b>整個</b> <code>queries</code> 做一次。沒有迴圈、不會回頭。中間值 <code>pos</code>、<code>hit</code>、回傳值，形狀全部是 <code>${shapeStr()}</code>。</p>`;
     case 'empty':
-      return `<p>N = 0,條件成立。再往下走 <code>N - 1 = -1</code>,clamp 和索引都會出錯,所以在這裡攔住。</p>`;
+      return `<p>N = 0，條件成立。再往下走 <code>N - 1 = -1</code>,clamp 和索引都會出錯，所以在這裡攔住。</p>`;
     case 'empty2':
-      return `<p>回一個跟 <code>queries</code> 同形狀、全是 -1 的 tensor。空輸入也有定義,上層不必再防。</p>
+      return `<p>回一個跟 <code>queries</code> 同形狀、全是 -1 的 tensor。空輸入也有定義，上層不必再防。</p>
               ${tensor('return', s.result, 'int32', fr)}`;
     case 'argsort':
-      return `<p><code>argsort</code> 不動 <code>keys</code>,而是回一個<b>排列</b>:排序後第 <i class="r">i</i> 格原本是第幾 <i class="l">row</i>。這一行跟 <code>queries</code> 無關,只看 <code>keys</code>。</p>
-              <pre><span class="shape"># order: shape [${N}], int32(argsort 給 int64,立刻轉)</span>\n[${s.order.map(r => `<i class="l">${r}</i>`).join(', ')}]</pre>`;
+      return `<p><code>argsort</code> 不動 <code>keys</code>，而是回一個<b>排列</b>：排序後第 <i class="r">i</i> 格原本是第幾 <i class="l">row</i>。這一行跟 <code>queries</code> 無關，只看 <code>keys</code>。</p>
+              <pre><span class="shape"># order: shape [${N}], int32(argsort 給 int64，立刻轉)</span>\n[${s.order.map(r => `<i class="l">${r}</i>`).join(', ')}]</pre>`;
     case 'gather':
-      return `<p>用 <code>order</code> 當索引去撿 key,得到排好序的 tape。每格仍然掛著自己原本的 <i class="l">row</i>,等一下查到位置就能查回去。</p>
+      return `<p>用 <code>order</code> 當索引去撿 key，得到排好序的 tape。每格仍然掛著自己原本的 <i class="l">row</i>，等一下查到位置就能查回去。</p>
               <pre><span class="shape"># sorted_keys: shape [${N}], int32</span>\n[${s.sorted.join(', ')}]</pre>`;
     case 'search': {
       const over = flat(s.pos).filter(p => p === N).length;
-      return `<p>對 <code>queries</code> 的每一格獨立做二分搜尋,回傳<b>插入點</b>:<code>sorted_keys</code> 裡第一個 <code>&ge; q</code> 的位置。所以 <code>pos</code> 跟 <code>queries</code> 同形狀。</p>
+      return `<p>對 <code>queries</code> 的每一格獨立做二分搜尋，回傳<b>插入點</b>:<code>sorted_keys</code> 裡第一個 <code>&ge; q</code> 的位置。所以 <code>pos</code> 跟 <code>queries</code> 同形狀。</p>
               ${tensor('pos', s.pos, 'int64', p => p === N ? `<i class="b">${p}</i>` : `<i class="r">${p}</i>`)}
-              ${over ? `<p>有 ${over} 格是 <i class="b">${N}</i>,等於 N:那些 query 比所有 key 都大。<code>sorted_keys[${N}]</code> 不存在,下一行不處理就會炸。</p>` : `<p>沒有任何一格等於 N,全部在 <code>[0, ${N - 1}]</code> 內。</p>`}`;
+              ${over ? `<p>有 ${over} 格是 <i class="b">${N}</i>，等於 N：那些 query 比所有 key 都大。<code>sorted_keys[${N}]</code> 不存在，下一行不處理就會炸。</p>` : `<p>沒有任何一格等於 N，全部在 <code>[0, ${N - 1}]</code> 內。</p>`}`;
     }
     case 'clamp': {
       const changed = [];
       flat(s.raw).forEach((p, k) => { if (p !== flat(s.pos)[k]) changed.push(k); });
-      return `<p>把每一格的 <code>pos</code> 限制在 <code>&le; N - 1 = ${N - 1}</code>。只有原本等於 N 的格子會變,其他格子原樣。</p>
+      return `<p>把每一格的 <code>pos</code> 限制在 <code>&le; N - 1 = ${N - 1}</code>。只有原本等於 N 的格子會變，其他格子原樣。</p>
               ${tensor('pos', s.pos, 'int64', (p, i) => `<i class="r">${p}</i>`)}
               ${changed.length
-                ? `<p>${changed.length} 格從 ${N} 變成 ${N - 1},現在指到<b>最大的 key</b> ${s.sorted[N - 1]}。這不會製造假命中:那些 query 既然大於所有 key,下一行跟 ${s.sorted[N - 1]} 比必定是 False。</p>`
-                : `<p>這次沒有格子被改動,clamp 是 no-op。</p>`}`;
+                ? `<p>${changed.length} 格從 ${N} 變成 ${N - 1}，現在指到<b>最大的 key</b> ${s.sorted[N - 1]}。這不會製造假命中：那些 query 既然大於所有 key，下一行跟 ${s.sorted[N - 1]} 比必定是 False。</p>`
+                : `<p>這次沒有格子被改動，clamp 是 no-op。</p>`}`;
     }
     case 'hit':
-      return `<p>用 <code>pos</code> 去撿 <code>sorted_keys</code>,得到每格「插入點上的 key」,再跟 <code>queries</code> 逐格比較。二分搜尋只告訴你「該插在哪」,等不等於要自己比。</p>
+      return `<p>用 <code>pos</code> 去撿 <code>sorted_keys</code>，得到每格「插入點上的 key」，再跟 <code>queries</code> 逐格比較。二分搜尋只告訴你「該插在哪」，等不等於要自己比。</p>
               ${tensor('sorted_keys[pos]', mapQ(s.pos, p => s.sorted[p]), 'int32')}
               ${tensor('hit', s.hit, 'bool', fb)}`;
     case 'where': {
       const nHit = flat(s.hit).filter(Boolean).length;
-      return `<p><code>order[pos]</code> 把每格的排序位置換回<b>原本的 row</b>,形狀還是 <code>${shapeStr()}</code>。<code>where</code> 逐格挑:<code>hit</code> 為 True 取 <code>order[pos]</code>,否則取 -1。</p>
+      return `<p><code>order[pos]</code> 把每格的排序位置換回<b>原本的 row</b>，形狀還是 <code>${shapeStr()}</code>。<code>where</code> 逐格挑：<code>hit</code> 為 True 取 <code>order[pos]</code>，否則取 -1。</p>
               ${tensor('order[pos]', mapQ(s.pos, p => s.order[p]), 'int32', r => `<i class="l">${r}</i>`)}
               ${tensor('return', s.result, 'int32', fr)}
-              <p>${nq} 筆查詢,${nHit} 筆命中。上面 KEYS tape 亮起的 row 就是被命中的那些。整個函式六個 tensor 運算、零迴圈,所以 GPU 上百萬筆也是同一份 code。</p>`;
+              <p>${nq} 筆查詢，${nHit} 筆命中。上面 KEYS tape 亮起的 row 就是被命中的那些。整個函式六個 tensor 運算、零迴圈，所以 GPU 上百萬筆也是同一份 code。</p>`;
     }
   }
   return '';
@@ -527,7 +533,7 @@ function run() {
   try {
     keys = parseInts($('keys-input').value);
     parsed = parseQueries($('queries-input').value);
-    if (new Set(keys).size !== keys.length) throw new Error('keys 不能重複:每個 active voxel 的 key 都是唯一的');
+    if (new Set(keys).size !== keys.length) throw new Error('keys 不能重複：每個 active voxel 的 key 都是唯一的');
   } catch (e) {
     $('error').textContent = e.message;
     return;

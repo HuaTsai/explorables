@@ -209,22 +209,16 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
   <p class="foot">AArch64 和 RISC-V 的堆疊 bytes 包含回傳位址（x30 / ra）那一格；x86 的回傳位址由 <code>call</code> 指令自己推進堆疊，不算在函式的 frame 裡。AArch64 的 frame 以 16 bytes 對齊，x86-64 在 call 之前也要 16 bytes 對齊，所以 N=4 時多了一個 <code>push rax</code> 當填充。</p>
 
   <section class="prose">
-    <h2>看完可以帶走的三句話</h2>
-    <ol>
-      <li><strong>暫存器多，差在「跨 call 能留幾個」。</strong>直線程式碼裡 16 個暫存器大多夠用。真正的分水嶺是函式呼叫：x86-64 只有 6 個 callee-saved，第 7 個值就得進堆疊；AArch64 有 10 到 11 個，RISC-V 有 12 個。一般程式裡函式呼叫到處都是，這個差距會一路累積成記憶體存取。</li>
-      <li><strong>caller-saved 和 callee-saved 是軟體約定，不是硬體。</strong>硬體只知道 rsp、x30、x0 這些真的綁死的。哪些暫存器跨 call 要保留，是 ABI 文件說的；Windows x64 和 Linux x86-64 用同一顆 CPU，分法卻不同。所以同一個 ISA 換作業系統，這張圖會變。</li>
-      <li><strong>x86 的 16 個是歷史數字，而且已經被判定不夠。</strong>32 位元 x86 只有 8 個，AMD 在 2003 年做 x86-64 時加倍到 16，受限於指令編碼只多出 1 個 bit（REX.R / REX.B）。Intel 2024 年起的 APX 擴充再加 16 個到 32 個，要付的代價是每條用到新暫存器的指令都多一個 2 byte 前綴。</li>
-    </ol>
-  </section>
-
-  <section class="prose">
-    <h2>這個模型省略了什麼</h2>
+    <h2>結語</h2>
+    <p>暫存器多，差在「跨 call 能留幾個」。直線程式碼裡 16 個大多夠用，分水嶺是函式呼叫：x86-64 只有 6 個 callee-saved，第 7 個值就得進堆疊，AArch64 有 10 到 11 個，RISC-V 有 12 個，一般程式裡函式呼叫到處都是，差距會一路累積成記憶體存取。而 caller-saved 和 callee-saved 的分法是 ABI 文件說的，不是硬體，同一顆 CPU 換作業系統這張圖就會變。x86 的 16 個是歷史數字：32 位元只有 8 個，x86-64 靠 REX 多出的 1 個 bit 加倍到 16，Intel 2024 年起的 APX 再加到 32 個，代價是每條用到新暫存器的指令多一個 2 byte 前綴。</p>
+    <p>這一頁只看「有幾個」。它們在一次呼叫裡怎麼分工，哪些放參數、哪些放回傳位址、哪些得先備份，是<a href="../calling-convention/">函式呼叫慣例</a>那一篇。暫存器數量為什麼被編碼卡住，回頭看<a href="../encoding/">指令編碼</a>裡的 5 bit 欄位和 REX 前綴。</p>
+    <p>這裡只畫整數暫存器，而且數字來自一個特定的編譯器版本：</p>
     <ul>
-      <li><strong>浮點和向量暫存器是另一個檔。</strong>x86-64 有 16 個 xmm（AVX-512 下 32 個 zmm），AArch64 有 32 個 v，RISC-V 有 32 個 f 加 V 擴充的 32 個 v。它們有自己的 caller / callee-saved 分法，這裡沒畫。</li>
-      <li><strong>硬體實體暫存器遠多於架構暫存器。</strong>現代核心做暫存器重新命名，實體暫存器檔有兩三百個，架構上的 16 或 32 個只是程式看得到的名字。暫存器數量影響的是編譯器能不能避免記憶體存取，不是硬體能同時追蹤幾個值。</li>
-      <li><strong>clang 的分配器是啟發式。</strong>它決定先用哪個 callee-saved、哪個值該溢出，這些選擇隨版本和 <code>-O</code> 等級變。這裡的數字是 clang 23 <code>-O2</code> 的結果，GCC 會給不同但趨勢相同的數字。</li>
-      <li><strong>x86 的部分暫存器問題。</strong>寫 <code>al</code>、<code>ax</code> 只改 rax 的低位，寫 <code>eax</code> 卻會清掉高 32 位元。這些歷史相容規則讓 x86 的暫存器比表面上更難用，這裡沒碰。</li>
-      <li><strong>frame pointer。</strong>這裡全部用 <code>-fomit-frame-pointer</code>，所以 rbp 和 x29 都當一般 callee-saved 用。開 frame pointer 的話 x86 少一個、AArch64 少一個，RISC-V 的 s0 也會被佔走。</li>
+      <li>浮點和向量暫存器是另一個檔：x86-64 有 16 個 xmm（AVX-512 下 32 個 zmm），AArch64 有 32 個 v，RISC-V 有 32 個 f 加 V 擴充的 32 個 v，各有自己的 caller 和 callee-saved 分法。</li>
+      <li>硬體的實體暫存器檔有兩三百個，架構上的 16 或 32 個只是程式看得到的名字。暫存器數量影響的是編譯器能不能避免記憶體存取，不是硬體能同時追蹤幾個值。</li>
+      <li>clang 的分配器是啟發式，先用哪個 callee-saved、哪個值該溢出，隨版本和 <code>-O</code> 等級變。這裡是 clang 23 <code>-O2</code> 的結果，GCC 會給不同但趨勢相同的數字。</li>
+      <li>x86 的部分暫存器問題：寫 <code>al</code>、<code>ax</code> 只改 rax 的低位，寫 <code>eax</code> 卻會清掉高 32 位元。這些相容規則讓 x86 的暫存器比表面上更難用。</li>
+      <li>這裡全部用 <code>-fomit-frame-pointer</code>，所以 rbp 和 x29 都當一般 callee-saved 用。開 frame pointer 的話 x86 和 AArch64 各少一個，RISC-V 的 s0 也會被佔走。</li>
     </ul>
   </section>
 </main>

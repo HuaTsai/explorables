@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>函式呼叫與 Stack 逐步圖解</title>
-<meta name="description" content="用真實位址逐步看 call 和 ret 怎麼搬動 rip 與 rsp、frame 怎麼疊起來又拆掉、為什麼 call 的瞬間 rsp 必須是 16 的倍數,以及返回位址被蓋掉會發生什麼事。">
+<meta name="description" content="用真實位址逐步看 call 和 ret 怎麼搬動 rip 與 rsp、frame 怎麼疊起來又拆掉、為什麼 call 的瞬間 rsp 必須是 16 的倍數，以及返回位址被蓋掉會發生什麼事。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
 <style>
 /* Layout: one reading column. The main workbench shows code on the left, registers and the
@@ -51,7 +51,7 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f
 h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
 h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
 h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; max-width: 38em; }
+p { margin: 0; }
 .lead { color: var(--muted); margin-top: 0.75rem; }
 .prose { display: flex; flex-direction: column; gap: 0.75rem; }
 code, .mono { font-family: var(--font-mono); }
@@ -182,14 +182,14 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
   <header>
     <a class="back" href="../">← Explorables</a>
     <h1>函式呼叫與 <span class="mono">Stack</span> 逐步圖解</h1>
-    <p class="lead">一條 <code>call</code> 做了什麼、<code>ret</code> 怎麼知道回哪裡、frame 怎麼疊起來又拆掉。用真實位址一步一步走,順便看為什麼 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數。</p>
+    <p class="lead">一條 <code>call</code> 做了什麼、<code>ret</code> 怎麼知道回哪裡、frame 怎麼疊起來又拆掉。用真實位址一步一步走，順便看為什麼 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數。</p>
   </header>
 
   <section class="prose">
     <h2>只有兩個指標在動</h2>
-    <p><strong><code>rip</code></strong> 指向下一條要執行的指令,<strong><code>rsp</code></strong> 指向 stack 的頂端。Stack 往低位址長,所以 <code>push</code> 是先把 <code>rsp</code> 減 8 再寫入,<code>pop</code> 是先讀出再把 <code>rsp</code> 加 8。</p>
-    <p><code>call</code> 等於「<code>push</code> 下一條指令的位址,然後 <code>jmp</code>」。<code>ret</code> 等於「<code>pop</code> 到 <code>rip</code>」。這就是全部的硬體機制。其他所有東西,包括 16 bytes 對齊、callee-saved、frame pointer,都是編譯器在這兩條指令之上的約定。下面的 stepper 會把 <code>call</code> 和 <code>ret</code> 各拆成兩個半步,讓 <code>rsp</code> 和 <code>rip</code> 的變化分開看。</p>
-    <p>暫存器的角色分配(哪個放參數、哪個要保存)在<a href="../x86-registers/">暫存器地圖</a>那一頁,這裡不重複。</p>
+    <p><strong><code>rip</code></strong> 指向下一條要執行的指令，<strong><code>rsp</code></strong> 指向 stack 的頂端。Stack 往低位址長，所以 <code>push</code> 是先把 <code>rsp</code> 減 8 再寫入，<code>pop</code> 是先讀出再把 <code>rsp</code> 加 8。</p>
+    <p><code>call</code> 等於「<code>push</code> 下一條指令的位址，然後 <code>jmp</code>」。<code>ret</code> 等於「<code>pop</code> 到 <code>rip</code>」。這就是全部的硬體機制。其他所有東西，包括 16 bytes 對齊、callee-saved、frame pointer，都是編譯器在這兩條指令之上的約定。下面的 stepper 會把 <code>call</code> 和 <code>ret</code> 各拆成兩個半步，讓 <code>rsp</code> 和 <code>rip</code> 的變化分開看。</p>
+    <p>暫存器的角色分配（哪個放參數、哪個要保存）在<a href="../x86-registers/">暫存器地圖</a>那一頁，這裡不重複。</p>
   </section>
 
   <section class="bench" aria-label="逐步執行">
@@ -227,14 +227,14 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
 
   <section class="prose">
     <h2>為什麼是 16 的倍數</h2>
-    <p>規則原文:執行 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數。因為 <code>call</code> 一定推 8 bytes,所以每個函式進入時 <code>rsp</code> 一定餘 8。編譯器靠這個保證在編譯期就算出 <code>sub rsp, 24</code> 這種常數,讓 stack 上的 16 bytes 物件(<code>xmm</code> spill、<code>long double</code>、<code>__int128</code>)不需要執行期對齊。</p>
-    <p>硬體不檢查這條規則,違反的後果出現在被呼叫的那一方:它內部用 <code>movaps</code> 存取 stack 時位址對不齊,直接 fault。在第一個範例勾選「拿掉 <code>push rbx</code>」就能看到 <code>printf</code> 內部炸掉。這也是手寫組語或 JIT 最常見的 crash 來源。</p>
-    <p>反過來說,任何要 <code>call</code> 別人的函式,進入後都得讓 <code>rsp</code> 再少 8 的奇數倍。大多數函式本來就有 push 的需求,順便就對齊了;真的沒有需求的函式會多一條純補位的 <code>push</code>,或是被優化成 <code>jmp</code> 的 tail call 而完全省掉,見 <code>tail call</code> 那組範例。</p>
+    <p>規則原文：執行 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數。因為 <code>call</code> 一定推 8 bytes，所以每個函式進入時 <code>rsp</code> 一定餘 8。編譯器靠這個保證在編譯期就算出 <code>sub rsp, 24</code> 這種常數，讓 stack 上的 16 bytes 物件(<code>xmm</code> spill、<code>long double</code>、<code>__int128</code>)不需要執行期對齊。</p>
+    <p>硬體不檢查這條規則，違反的後果出現在被呼叫的那一方：它內部用 <code>movaps</code> 存取 stack 時位址對不齊，直接 fault。在第一個範例勾選「拿掉 <code>push rbx</code>」就能看到 <code>printf</code> 內部炸掉。這也是手寫組語或 JIT 最常見的 crash 來源。</p>
+    <p>反過來說，任何要 <code>call</code> 別人的函式，進入後都得讓 <code>rsp</code> 再少 8 的奇數倍。大多數函式本來就有 push 的需求，順便就對齊了；真的沒有需求的函式會多一條純補位的 <code>push</code>，或是被優化成 <code>jmp</code> 的 tail call 而完全省掉，見 <code>tail call</code> 那組範例。</p>
   </section>
 
   <section class="prose">
     <h2>遞迴到底能多深</h2>
-    <p>每一層呼叫都在 stack 上留下一個 frame,直到撞上 stack 末端的 guard page。Linux 主執行緒的 stack 預設 8 MiB,frame 大小由編譯器決定。拖動深度看 <code>rsp</code> 往下走到哪裡。</p>
+    <p>每一層呼叫都在 stack 上留下一個 frame，直到撞上 stack 末端的 guard page。Linux 主執行緒的 stack 預設 8 MiB,frame 大小由編譯器決定。拖動深度看 <code>rsp</code> 往下走到哪裡。</p>
   </section>
   <section class="bench" aria-label="遞迴深度">
     <div class="row opt" id="rec-opt"></div>
@@ -248,7 +248,7 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
 
   <section class="prose">
     <h2>返回位址放在 stack 上的代價</h2>
-    <p>返回位址和區域變數住在同一塊記憶體,只隔幾個 bytes。一個 <code>char buf[8]</code> 配上不檢查長度的 <code>strcpy</code>,多寫幾個字就會蓋到 saved <code>rbx</code>,再多幾個就蓋到返回位址,<code>ret</code> 之後 <code>rip</code> 跳到攻擊者決定的地方。這是 1988 年 Morris worm 到今天所有 stack smashing 的原型。在最後一組範例裡拖動字串長度,再勾選 stack protector 看 canary 怎麼擋。</p>
+    <p>返回位址和區域變數住在同一塊記憶體，只隔幾個 bytes。一個 <code>char buf[8]</code> 配上不檢查長度的 <code>strcpy</code>，多寫幾個字就會蓋到 saved <code>rbx</code>，再多幾個就蓋到返回位址，<code>ret</code> 之後 <code>rip</code> 跳到攻擊者決定的地方。這是 1988 年 Morris worm 到今天所有 stack smashing 的原型。在最後一組範例裡拖動字串長度，再勾選 stack protector 看 canary 怎麼擋。</p>
   </section>
   <section class="bench" aria-label="返回位址覆寫">
     <div class="row opt" id="bof-opt"></div>
@@ -259,13 +259,20 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
     </div>
   </section>
 
+  <section class="prose">
+    <h2>結語</h2>
+    <p>硬體只提供兩個動作：<code>call</code> 把返回位址推進 stack 再跳走，<code>ret</code> 把它彈回 <code>rip</code>。Frame、16 bytes 對齊、callee-saved 都是編譯器疊在這兩個動作上的約定，硬體不檢查，所以違反的後果不在違反的那一行，而在被呼叫的函式裡炸開。返回位址和區域變數住在同一塊記憶體，這是 stack smashing 能成立的全部原因。</p>
+    <p>哪個暫存器放參數、哪些要保存，在<a href="../x86-registers/">暫存器地圖</a>那一頁；把同一個問題拿到 ARM 和 RISC-V 上比，在 <a href="../isa/calling-convention/">ISA 比較的呼叫慣例</a>那一篇。</p>
+    <p>這一頁只走 SysV AMD64，位址是示意的，frame 大小也是為了畫圖挑的；Win64 的 shadow space、exception unwinding、32 位元的 cdecl 和硬體 shadow stack 列在下面的「這一頁沒講的」裡，沒有展開。</p>
+  </section>
+
   <details>
     <summary>這一頁沒講的</summary>
     <ul>
-      <li><strong>Win64 的差異</strong>:同樣要求 <code>call</code> 時 16 對齊,另外 caller 要多留 32 bytes shadow space。參數暫存器的差異見暫存器地圖。</li>
-      <li><strong>Exception unwinding、<code>setjmp</code>/<code>longjmp</code></strong>:一次跳過多層 frame 的機制,靠 <code>.eh_frame</code> 表而不是 <code>rbp</code> 鏈。</li>
-      <li><strong>32 位元的 cdecl</strong>:參數全部走 stack,caller 負責清理。x86-64 已經不用。</li>
-      <li><strong>Shadow stack / CET</strong>:Intel 2020 年起的硬體機制,把返回位址另外存一份在 CPU 保護的區域,<code>ret</code> 時比對,專門對付這頁最後一個範例。</li>
+      <li><strong>Win64 的差異</strong>：同樣要求 <code>call</code> 時 16 對齊，另外 caller 要多留 32 bytes shadow space。參數暫存器的差異見暫存器地圖。</li>
+      <li><strong>Exception unwinding、<code>setjmp</code>/<code>longjmp</code></strong>：一次跳過多層 frame 的機制，靠 <code>.eh_frame</code> 表而不是 <code>rbp</code> 鏈。</li>
+      <li><strong>32 位元的 cdecl</strong>：參數全部走 stack,caller 負責清理。x86-64 已經不用。</li>
+      <li><strong>Shadow stack / CET</strong>:Intel 2020 年起的硬體機制，把返回位址另外存一份在 CPU 保護的區域，<code>ret</code> 時比對，專門對付這頁最後一個範例。</li>
     </ul>
   </details>
 </main>
@@ -279,7 +286,7 @@ const hexp = n => '0x' + n.toString(16).padStart(12, '0').replace(/^0+(?=.{8})/,
 /* ---------- constants ---------- */
 const STR_ADDR = 0x402010;        // .L.str
 const LIBC_RET = 0x7f1c4a029d90;  // __libc_start_call_main 裡的返回位址
-const CANARY = 0x9e1f2b7d4600;    // 低 byte 永遠是 00,擋 strcpy
+const CANARY = 0x9e1f2b7d4600;    // 低 byte 永遠是 00，擋 strcpy
 const REG64 = { rax: 'rax', eax: 'rax', al: 'rax', rbx: 'rbx', ebx: 'rbx', rcx: 'rcx', ecx: 'rcx', rdx: 'rdx', edx: 'rdx',
   rsi: 'rsi', esi: 'rsi', rdi: 'rdi', edi: 'rdi', rbp: 'rbp', rsp: 'rsp', r8: 'r8', r9: 'r9', r10: 'r10', r11: 'r11', xmm0: 'xmm0' };
 const REGSZ = n => n.startsWith('xmm') ? 16 : /^r/.test(n) ? 8 : /^e/.test(n) ? 4 : n === 'al' ? 1 : 2;
@@ -287,11 +294,11 @@ const REGSZ = n => n.startsWith('xmm') ? 16 : /^r/.test(n) ? 8 : /^e/.test(n) ? 
 /* ---------- stub bodies for library functions ---------- */
 const PRINTF_STUB = { name: 'printf', note: '簡化', lines: [
   'sub rsp, 24', 'movaps xmmword ptr [rsp], xmm0', '(印出字串)', 'add rsp, 24', 'ret'],
-  notes: { 1: '真實的 printf 有幾百條指令,這裡只留一條有代表性的:它把 xmm 暫存器存到 stack 時用的是要求 16 對齊的 movaps。', 2: 'printf 的工作本身。' } };
+  notes: { 1: '真實的 printf 有幾百條指令，這裡只留一條有代表性的：它把 xmm 暫存器存到 stack 時用的是要求 16 對齊的 movaps。', 2: 'printf 的工作本身。' } };
 const B_STUB = { name: 'B', note: '簡化', lines: ['sub rsp, 24', 'movaps xmmword ptr [rsp], xmm0', 'add rsp, 24', 'ret'],
-  notes: { 1: 'B 被編譯時假設進入時 rsp 餘 8,所以 sub 24 之後 rsp 就是 16 的倍數,可以放心用 movaps。' } };
+  notes: { 1: 'B 被編譯時假設進入時 rsp 餘 8，所以 sub 24 之後 rsp 就是 16 的倍數，可以放心用 movaps。' } };
 const USE_STUB = { name: 'use', note: '簡化', lines: ['(讀 [rdi])', 'ret'] };
-const STRCPY_STUB = { name: 'strcpy', note: '簡化', lines: ['(逐 byte 複製,直到 NUL)', 'ret'] };
+const STRCPY_STUB = { name: 'strcpy', note: '簡化', lines: ['(逐 byte 複製，直到 NUL)', 'ret'] };
 const PUTS_STUB = { name: 'puts', note: '簡化', lines: ['(印出 [rdi])', 'ret'] };
 
 /* ---------- scenarios ---------- */
@@ -304,13 +311,13 @@ const SCENARIOS = [
     options: [{ id: 'nopush', label: '拿掉 add 的 push rbx / pop rbx(違反 ABI)' }],
     build: o => [
       { name: 'main', note: '簡化', lines: ['push rax', 'mov edi, 1', 'mov esi, 2', 'call add', 'pop rcx', 'ret'],
-        notes: { 0: 'main 等一下要 call,進入時 rsp 餘 8,先推 8 bytes 湊成 16 的倍數。push rax 比 sub rsp, 8 短 3 個 byte,值本身不重要。', 4: '把那 8 bytes 拿回來,pop 到哪個暫存器都無所謂。' } },
+        notes: { 0: 'main 等一下要 call，進入時 rsp 餘 8，先推 8 bytes 湊成 16 的倍數。push rax 比 sub rsp, 8 短 3 個 byte，值本身不重要。', 4: '把那 8 bytes 拿回來，pop 到哪個暫存器都無所謂。' } },
       { name: 'add', retReg: 'rbx', lines: o.nopush
           ? ['lea ebx, [rsi+rdi]', 'lea rdi, [rip+str]', 'mov esi, ebx', 'xor eax, eax', 'call printf', 'mov eax, ebx', 'ret']
           : ['push rbx', 'lea ebx, [rsi+rdi]', 'lea rdi, [rip+str]', 'mov esi, ebx', 'xor eax, eax', 'call printf', 'mov eax, ebx', 'pop rbx', 'ret'],
         notes: o.nopush
-          ? { 0: '少了 push rbx,rsp 停在餘 8。而且 rbx 是 callee-saved,沒存就改也是另一個 bug,這裡先看對齊。', 4: '看 rsp 的 mod 16 標示:餘 8 就 call,違反規則。硬體不攔,問題會在 printf 裡爆。' }
-          : { 0: '一個 push 做兩件事:保存 main 的 rbx(callee-saved 的義務),同時讓 rsp 從餘 8 變成餘 0。', 1: 'a + b 放進 rbx 而不是留在 rdi,因為 printf 回來後 rdi、rsi、rax 都不能信,只有 callee-saved 的 rbx 保證不變。', 3: 'printf 是可變參數,SysV 規定 al 要先填「用了幾個 xmm 傳浮點」,這裡是 0。', 7: '把 main 的 rbx 還回去,離開時和進來時一模一樣。' } },
+          ? { 0: '少了 push rbx,rsp 停在餘 8。而且 rbx 是 callee-saved，沒存就改也是另一個 bug，這裡先看對齊。', 4: '看 rsp 的 mod 16 標示：餘 8 就 call，違反規則。硬體不攔，問題會在 printf 裡爆。' }
+          : { 0: '一個 push 做兩件事：保存 main 的 rbx(callee-saved 的義務)，同時讓 rsp 從餘 8 變成餘 0。', 1: 'a + b 放進 rbx 而不是留在 rdi，因為 printf 回來後 rdi、rsi、rax 都不能信，只有 callee-saved 的 rbx 保證不變。', 3: 'printf 是可變參數，SysV 規定 al 要先填「用了幾個 xmm 傳浮點」，這裡是 0。', 7: '把 main 的 rbx 還回去，離開時和進來時一模一樣。' } },
       PRINTF_STUB,
     ],
   },
@@ -322,7 +329,7 @@ const SCENARIOS = [
       { name: 'main', note: '簡化', lines: ['push rax', 'mov edi, 7', 'call leaf', 'pop rcx', 'ret'] },
       { name: 'leaf', redzone: true, lines: ['mov [rsp-4], edi', 'mov eax, [rsp-4]', 'inc eax', 'ret'],
         names: { '[rsp-4]': 'x' },
-        notes: { 0: 'rsp 完全沒動,直接寫到 rsp 下面。SysV 保證 rsp 以下 128 bytes(red zone)不被 signal handler 碰,leaf function 可以不調 rsp 就用,省掉 sub / add。', 3: '沒 call 別人,既不用對齊也不用保存,直接 ret。' } },
+        notes: { 0: 'rsp 完全沒動，直接寫到 rsp 下面。SysV 保證 rsp 以下 128 bytes(red zone)不被 signal handler 碰，leaf function 可以不調 rsp 就用，省掉 sub / add。', 3: '沒 call 別人，既不用對齊也不用保存，直接 ret。' } },
     ],
   },
   {
@@ -333,29 +340,29 @@ const SCENARIOS = [
       { name: 'main', note: '簡化', lines: ['push rax', 'mov edi, 7', 'call nonleaf', 'pop rcx', 'ret'] },
       { name: 'nonleaf', lines: ['push rax', 'mov [rsp+4], edi', 'lea rdi, [rsp+4]', 'call use', 'pop rax', 'ret'],
         names: { '[rsp+4]': 'x' },
-        notes: { 0: '這次要 call use,rsp 非得再少 8 不可。既然一定要挪,就順便把這 8 bytes 當 x 的家。', 1: 'x 只佔 4 bytes,放在那 8 bytes 的高半部,低 4 bytes 閒置。', 2: 'x 的位址要傳給 use,所以 x 不能只住暫存器,得有記憶體位址。' } },
+        notes: { 0: '這次要 call use,rsp 非得再少 8 不可。既然一定要挪，就順便把這 8 bytes 當 x 的家。', 1: 'x 只佔 4 bytes，放在那 8 bytes 的高半部，低 4 bytes 閒置。', 2: 'x 的位址要傳給 use，所以 x 不能只住暫存器，得有記憶體位址。' } },
       USE_STUB,
     ],
   },
   {
     id: 'fp', label: '-O0 frame pointer', title: 'rbp 當 frame pointer',
-    c: ['int add(int a, int b) {', '  int s = a + b;', '  return s;', '}', '// 用 -O0 編,保留 rbp 鏈'],
+    c: ['int add(int a, int b) {', '  int s = a + b;', '  return s;', '}', '// 用 -O0 編，保留 rbp 鏈'],
     show: ['rip', 'rsp', 'rbp', 'rax', 'rdi', 'rsi'], entry: 'main', args: {},
     build: () => [
       { name: 'main', note: '-O0', lines: ['push rbp', 'mov rbp, rsp', 'sub rsp, 16', 'mov edi, 1', 'mov esi, 2', 'call add', 'add rsp, 16', 'pop rbp', 'ret'],
-        notes: { 0: '-O0 的標準開場:存舊 rbp。', 1: 'rbp 指向這個 frame 的底,之後區域變數都用 [rbp - n] 定址,不管 rsp 怎麼變。' } },
+        notes: { 0: '-O0 的標準開場：存舊 rbp。', 1: 'rbp 指向這個 frame 的底，之後區域變數都用 [rbp - n] 定址，不管 rsp 怎麼變。' } },
       { name: 'add', lines: ['push rbp', 'mov rbp, rsp', 'mov [rbp-4], edi', 'mov [rbp-8], esi', 'mov eax, [rbp-4]', 'add eax, [rbp-8]', 'pop rbp', 'ret'],
         names: { '[rbp-4]': 'a', '[rbp-8]': 'b' },
-        notes: { 0: 'add 也存舊 rbp,形成一條鏈:每個 saved rbp 指向上一層的 saved rbp。debugger 的 backtrace 就是順這條鏈往上爬。', 1: 'rbp 固定指向這裡,之後 a、b 都用 rbp 相對位址,人讀組語比用會變動的 rsp 清楚。', 6: '-O1 以上會省掉 rbp(-fomit-frame-pointer),改用 .eh_frame 表讓 debugger 還原,換到一個自由的暫存器。' } },
+        notes: { 0: 'add 也存舊 rbp，形成一條鏈：每個 saved rbp 指向上一層的 saved rbp。debugger 的 backtrace 就是順這條鏈往上爬。', 1: 'rbp 固定指向這裡，之後 a、b 都用 rbp 相對位址，人讀組語比用會變動的 rsp 清楚。', 6: '-O1 以上會省掉 rbp(-fomit-frame-pointer)，改用 .eh_frame 表讓 debugger 還原，換到一個自由的暫存器。' } },
     ],
   },
   {
-    id: 'tail', label: 'tail call', title: 'jmp 取代 call,不疊 frame',
-    c: ['void A(void) { B(); }', '// B() 是 A 的最後一件事', '// → 編成 jmp B,不是 call B'],
+    id: 'tail', label: 'tail call', title: 'jmp 取代 call，不疊 frame',
+    c: ['void A(void) { B(); }', '// B() 是 A 的最後一件事', '// → 編成 jmp B，不是 call B'],
     show: ['rip', 'rsp'], entry: 'A', args: {},
     build: () => [
       { name: 'A', lines: ['jmp B'],
-        notes: { 0: 'A 呼叫 B 之後沒事做,直接 jmp 過去,讓 B 的 ret 回到 A 的 caller。沒有 call 就沒有新返回位址被 push,rsp 不動,frame 不疊。A 進入時餘 8,B 進入時也餘 8,對齊自然滿足,一個 byte 都不用補。' } },
+        notes: { 0: 'A 呼叫 B 之後沒事做，直接 jmp 過去，讓 B 的 ret 回到 A 的 caller。沒有 call 就沒有新返回位址被 push,rsp 不動，frame 不疊。A 進入時餘 8,B 進入時也餘 8，對齊自然滿足，一個 byte 都不用補。' } },
       B_STUB,
     ],
   },
@@ -408,7 +415,7 @@ function buildSteps(scn, opts) {
     rsp_entry: RSP_ENTRY, funcs, curFi: fi, curLi: li, ...extra,
   });
   const callers = [];  // {fi,li} to resume
-  steps.push(snap({ say: `進入 ${funcs[fi].name}。它被 caller 用 call 叫進來,[rsp] 是那次 call 推入的返回位址。rsp 餘 8,這是每個函式進入時的標準狀態。`, firstEntry: true }));
+  steps.push(snap({ say: `進入 ${funcs[fi].name}。它被 caller 用 call 叫進來，[rsp] 是那次 call 推入的返回位址。rsp 餘 8，這是每個函式進入時的標準狀態。`, firstEntry: true }));
 
   let guard = 0;
   while (guard++ < 200) {
@@ -435,50 +442,50 @@ function buildSteps(scn, opts) {
       const aligned = regs.rsp % 16 === 0;
       // note: alignment is checked at the moment of call, i.e. before the push
       const preAlign = (regs.rsp + 8) % 16 === 0;
-      steps.push(snap({ say: `call ${target} 的前半:把返回位址 ${hexp(retAddr)} 推上 stack(rsp 先減 8 再寫入)。對齊規則看的是 push 之前的 rsp = ${hexp(regs.rsp + 8)},mod 16 = ${(regs.rsp + 8) % 16}。${preAlign ? '合規。' : '不是 16 的倍數,違反 ABI,問題會在被呼叫的函式裡爆。'}${note}`, half: true, rd, wr, memRd, memWr, callPre: (regs.rsp + 8) % 16 }));
+      steps.push(snap({ say: `call ${target} 的前半：把返回位址 ${hexp(retAddr)} 推上 stack(rsp 先減 8 再寫入)。對齊規則看的是 push 之前的 rsp = ${hexp(regs.rsp + 8)},mod 16 = ${(regs.rsp + 8) % 16}。${preAlign ? '合規。' : '不是 16 的倍數，違反 ABI，問題會在被呼叫的函式裡爆。'}${note}`, half: true, rd, wr, memRd, memWr, callPre: (regs.rsp + 8) % 16 }));
       callers.push({ fi, li: li + 1 });
       const tfi = L.byName[target];
       fi = tfi; li = 0; regs.rip = codeAddr(funcs, fi, li); 
-      steps.push(snap({ say: `call ${target} 的後半:rip 跳到 ${funcs[fi].name} 的第一條指令。rsp 現在餘 ${regs.rsp % 16}。` }));
+      steps.push(snap({ say: `call ${target} 的後半：rip 跳到 ${funcs[fi].name} 的第一條指令。rsp 現在餘 ${regs.rsp % 16}。` }));
       continue;
     }
     if (mn === 'jmp') {
       const target = ops[0];
       const tfi = L.byName[target];
       fi = tfi; li = 0; regs.rip = codeAddr(funcs, fi, li);
-      steps.push(snap({ say: `jmp ${target}:只改 rip,不碰 rsp,不推返回位址。${funcs[fi].name} 結束時的 ret 會直接回到最外層的 caller,少疊一層 frame。${note}` }));
+      steps.push(snap({ say: `jmp ${target}：只改 rip，不碰 rsp，不推返回位址。${funcs[fi].name} 結束時的 ret 會直接回到最外層的 caller，少疊一層 frame。${note}` }));
       continue;
     }
     if (mn === 'ret') {
       const slot = regs.rsp; const cell = mem.get(slot);
       memRd.add(slot);
-      steps.push(snap({ say: `ret 的前半:從 [rsp] = ${hexp(slot)} 讀出返回位址 ${cell ? hexp(cell.v) : '??'}。${cell && cell.ovw ? '這個位址已經被覆寫過了!' : ''}${note}`, half: true, memRd, danger: cell && cell.ovw }));
+      steps.push(snap({ say: `ret 的前半：從 [rsp] = ${hexp(slot)} 讀出返回位址 ${cell ? hexp(cell.v) : '??'}。${cell && cell.ovw ? '這個位址已經被覆寫過了！' : ''}${note}`, half: true, memRd, danger: cell && cell.ovw }));
       const target = cell ? cell.v : undefined;
       mem.delete(slot); regs.rsp += 8; wr.add('rsp');
       const pc = L.addr2pc.get(target);
       if (!pc) {
         regs.rip = target;
-        steps.push(snap({ say: `ret 的後半:rsp 加 8,rip = ${target === LIBC_RET ? 'libc(正常返回最外層)' : hexp(target || 0)}。${target === LIBC_RET ? '執行結束。' : '這不是任何已知指令的位址,控制流被劫持。'}`, done: true, crash: target !== LIBC_RET }));
+        steps.push(snap({ say: `ret 的後半：rsp 加 8,rip = ${target === LIBC_RET ? 'libc(正常返回最外層)' : hexp(target || 0)}。${target === LIBC_RET ? '執行結束。' : '這不是任何已知指令的位址，控制流被劫持。'}`, done: true, crash: target !== LIBC_RET }));
         break;
       }
       regs.rip = target; fi = pc.fi; li = pc.li; callers.pop();
-      steps.push(snap({ say: `ret 的後半:rsp 加 8 回到 ${hexp(regs.rsp)},rip 跳回 ${funcs[fi].name}。` }));
+      steps.push(snap({ say: `ret 的後半：rsp 加 8 回到 ${hexp(regs.rsp)},rip 跳回 ${funcs[fi].name}。` }));
       continue;
     }
     // ordinary instructions
     let say = '';
     const memTok = ops.find(o => o.includes('['));
-    if (mn === 'push') { const v = readReg(ops[0]); regs.rsp -= 8; wr.add('rsp'); mem.set(regs.rsp, { v, label: `saved ${REG64[ops[0]] || ops[0]}`, owner: f.name }); memWr.add(regs.rsp); say = `push ${ops[0]}:rsp 減 8,把 ${ops[0]} 存到 [rsp]。rsp 現在餘 ${regs.rsp % 16}。`; }
-    else if (mn === 'pop') { const slot = regs.rsp; const c = mem.get(slot); memRd.add(slot); setReg(ops[0], c ? c.v : undefined); mem.delete(slot); regs.rsp += 8; wr.add('rsp'); say = `pop ${ops[0]}:從 [rsp] 取值放回 ${ops[0]},rsp 加 8。`; }
-    else if (mn === 'sub' && ops[0] === 'rsp') { regs.rsp -= Number(ops[1]); wr.add('rsp'); say = `rsp 減 ${ops[1]},空出區域變數空間。現在餘 ${regs.rsp % 16}。`; }
-    else if (mn === 'add' && ops[0] === 'rsp') { regs.rsp += Number(ops[1]); wr.add('rsp'); say = `rsp 加 ${ops[1]},收回區域變數空間。`; }
-    else if (mn === 'lea') { const ea = parseEA(memTok, regs); if (/rsp|rbp/.test(memTok)) { rd.add(/rbp/.test(memTok) ? 'rbp' : 'rsp'); } setReg(ops[0], ea); say = `lea ${ops[0]}:算出 ${memTok} 的位址 = ${hexp(ea)} 放進 ${ops[0]}(不讀記憶體)。`; }
-    else if (mn === 'movaps') { const ea = parseEA(memTok, regs); rd.add('rsp'); const ok = ea % 16 === 0; memWr.add(slotOf(ea)); if (ok) { mem.set(slotOf(ea), { v: 'xmm0', label: 'spilled xmm0', owner: f.name, bytes16: true }); say = `movaps 把 xmm0(16 bytes)存到 ${memTok} = ${hexp(ea)}。位址 mod 16 = 0,對齊,成功。`; } else { say = `movaps 要存到 ${memTok} = ${hexp(ea)},但 mod 16 = ${ea % 16} ≠ 0。#GP fault,程式在這裡 crash。這就是上游沒對齊的下場。`; steps.push(snap({ say: say + note, rd, wr, memRd, memWr, crash: true, done: true })); break; } }
+    if (mn === 'push') { const v = readReg(ops[0]); regs.rsp -= 8; wr.add('rsp'); mem.set(regs.rsp, { v, label: `saved ${REG64[ops[0]] || ops[0]}`, owner: f.name }); memWr.add(regs.rsp); say = `push ${ops[0]}:rsp 減 8，把 ${ops[0]} 存到 [rsp]。rsp 現在餘 ${regs.rsp % 16}。`; }
+    else if (mn === 'pop') { const slot = regs.rsp; const c = mem.get(slot); memRd.add(slot); setReg(ops[0], c ? c.v : undefined); mem.delete(slot); regs.rsp += 8; wr.add('rsp'); say = `pop ${ops[0]}：從 [rsp] 取值放回 ${ops[0]},rsp 加 8。`; }
+    else if (mn === 'sub' && ops[0] === 'rsp') { regs.rsp -= Number(ops[1]); wr.add('rsp'); say = `rsp 減 ${ops[1]}，空出區域變數空間。現在餘 ${regs.rsp % 16}。`; }
+    else if (mn === 'add' && ops[0] === 'rsp') { regs.rsp += Number(ops[1]); wr.add('rsp'); say = `rsp 加 ${ops[1]}，收回區域變數空間。`; }
+    else if (mn === 'lea') { const ea = parseEA(memTok, regs); if (/rsp|rbp/.test(memTok)) { rd.add(/rbp/.test(memTok) ? 'rbp' : 'rsp'); } setReg(ops[0], ea); say = `lea ${ops[0]}：算出 ${memTok} 的位址 = ${hexp(ea)} 放進 ${ops[0]}（不讀記憶體）。`; }
+    else if (mn === 'movaps') { const ea = parseEA(memTok, regs); rd.add('rsp'); const ok = ea % 16 === 0; memWr.add(slotOf(ea)); if (ok) { mem.set(slotOf(ea), { v: 'xmm0', label: 'spilled xmm0', owner: f.name, bytes16: true }); say = `movaps 把 xmm0(16 bytes)存到 ${memTok} = ${hexp(ea)}。位址 mod 16 = 0，對齊，成功。`; } else { say = `movaps 要存到 ${memTok} = ${hexp(ea)}，但 mod 16 = ${ea % 16} ≠ 0。#GP fault，程式在這裡 crash。這就是上游沒對齊的下場。`; steps.push(snap({ say: say + note, rd, wr, memRd, memWr, crash: true, done: true })); break; } }
     else if (mn === 'mov' && ops[0].includes('[')) { const ea = parseEA(ops[0], regs); if (/rbp/.test(ops[0])) rd.add('rbp'); else if (/rsp/.test(ops[0])) rd.add('rsp'); const v = /^\d+$/.test(ops[1]) ? Number(ops[1]) : readReg(ops[1]); const slot = slotOf(ea); const label = (f.names && f.names[ops[0]]) || mem.get(slot)?.label; mem.set(slot, { v, label, owner: f.name, sub: (((ea % 8) + 8) % 8) }); memWr.add(slot); say = `把 ${ops[1]} 寫到 ${ops[0]}${label ? '(變數 ' + label + ')' : ''}。`; }
     else if (mn === 'mov' && memTok) { const ea = parseEA(memTok, regs); const slot = slotOf(ea); memRd.add(slot); const c = mem.get(slot); setReg(ops[0], c ? c.v : undefined); say = `從 ${memTok} 讀值放進 ${ops[0]}。`; }
-    else if (mn === 'mov' && ops[0] === 'rbp' && ops[1] === 'rsp') { setReg('rbp', readReg('rsp')); say = `rbp = rsp:把 rbp 固定在這個 frame 的底,之後區域變數都用 rbp 相對位址。`; }
+    else if (mn === 'mov' && ops[0] === 'rbp' && ops[1] === 'rsp') { setReg('rbp', readReg('rsp')); say = `rbp = rsp：把 rbp 固定在這個 frame 的底，之後區域變數都用 rbp 相對位址。`; }
     else if (mn === 'mov') { const v = /^\d+$/.test(ops[1]) ? Number(ops[1]) : readReg(ops[1]); setReg(ops[0], v); say = `${ops[0]} = ${ops[1]}。`; }
-    else if (mn === 'xor') { setReg(ops[0], 0); say = `${ops[0]} 清零(xor 自己)。`; }
+    else if (mn === 'xor') { setReg(ops[0], 0); say = `${ops[0]} 清零（xor 自己）。`; }
     else if (mn === 'inc') { setReg(ops[0], (readReg(ops[0]) || 0) + 1); say = `${ops[0]} 加 1。`; }
     else if (mn === 'add') { const b = /^\d+$/.test(ops[1]) ? Number(ops[1]) : readReg(ops[1]); setReg(ops[0], (readReg(ops[0]) || 0) + b); say = `${ops[0]} += ${ops[1]}。`; }
     else { say = raw; }
@@ -558,7 +565,7 @@ function renderStack(step) {
   }
   $('stack').innerHTML = rows.join('');
   const leaf = funcs[step.curFi] && funcs[step.curFi].redzone;
-  $('rz-note').innerHTML = leaf ? '虛線格子在 rsp 下方,屬於 red zone:leaf function 不調整 rsp 也能安全使用的 128 bytes。' : '';
+  $('rz-note').innerHTML = leaf ? '虛線格子在 rsp 下方，屬於 red zone:leaf function 不調整 rsp 也能安全使用的 128 bytes。' : '';
 }
 
 function renderStepper() {
@@ -596,7 +603,7 @@ function renderOptions() {
 const STACK_LIMIT = 8 * 1024 * 1024;   // 8 MiB
 const REC_FRAME = 16;                   // count() frame: push rax + 返回位址
 function renderRec() {
-  const kFrames = Number($('rec-depth').value);   // 單位:千層
+  const kFrames = Number($('rec-depth').value);   // 單位：千層
   const depth = kFrames * 1000;
   const used = depth * REC_FRAME;
   const rsp = RSP0 - used;
@@ -625,7 +632,7 @@ function renderRec() {
 function renderBof() {
   const len = Number($('bof-len').value);
   const prot = $('bof-prot').checked;
-  // layout (high addr at top): 返回位址, saved rbx, [canary], buf(8)
+  // layout (high addr at top)：返回位址，saved rbx, [canary], buf(8)
   // without protector: buf | saved rbx | ret    → buf[8..15]=saved rbx, buf[16..23]=ret
   // with protector:    buf | canary | saved rbx | ret → buf[8..15]=canary
   const regions = prot
@@ -659,12 +666,12 @@ function renderBof() {
   const retBase = prot ? 24 : 16;
   const rbxBase = prot ? 16 : 8;
   if (prot) {
-    if (len <= 8) { verdict = `寫了 ${len} bytes,沒超過 buf。正常。`; cls = 'ok'; }
-    else { verdict = `寫了 ${len} bytes,蓋到了 canary。函式返回前會比對 canary,發現被改,呼叫 __stack_chk_fail 直接中止,ret 根本不會執行。這就是 -fstack-protector 擋住攻擊的方式。`; cls = 'ok'; }
+    if (len <= 8) { verdict = `寫了 ${len} bytes，沒超過 buf。正常。`; cls = 'ok'; }
+    else { verdict = `寫了 ${len} bytes，蓋到了 canary。函式返回前會比對 canary，發現被改，呼叫 __stack_chk_fail 直接中止，ret 根本不會執行。這就是 -fstack-protector 擋住攻擊的方式。`; cls = 'ok'; }
   } else {
-    if (len <= 8) { verdict = `寫了 ${len} bytes,剛好在 buf 內(含 NUL)。正常。`; cls = 'ok'; }
-    else if (len <= 16) { verdict = `寫了 ${len} bytes,蓋掉了 saved rbx。函式還能返回,但 rbx 還原成垃圾,之後用到 rbx 的地方會出錯。`; cls = ''; }
-    else { verdict = `寫了 ${len} bytes,蓋掉了返回位址。ret 會跳到 0x4141...('AAAA'),控制流被劫持。把那串 'A' 換成精心設計的位址,就是經典的 stack smashing。`; cls = 'bad'; }
+    if (len <= 8) { verdict = `寫了 ${len} bytes，剛好在 buf 內（含 NUL）。正常。`; cls = 'ok'; }
+    else if (len <= 16) { verdict = `寫了 ${len} bytes，蓋掉了 saved rbx。函式還能返回，但 rbx 還原成垃圾，之後用到 rbx 的地方會出錯。`; cls = ''; }
+    else { verdict = `寫了 ${len} bytes，蓋掉了返回位址。ret 會跳到 0x4141...('AAAA')，控制流被劫持。把那串 'A' 換成精心設計的位址，就是經典的 stack smashing。`; cls = 'bad'; }
   }
   const sv = $('bof-verdict'); sv.textContent = verdict; sv.className = 'say ' + cls;
 }

@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>區域值編號 LVN：在一個 block 裡找重複的計算</title>
+<meta name="description" content="把 Engineering a Compiler 第八章的 local value numbering 一步步跑給你看：值編號怎麼發、hash 表怎麼查、哪一條運算被改寫成重用。可以切換基本版和擴展版（交換律、常數摺疊、代數恆等式），也會標出名字被覆寫之後虛擬碼寫出錯誤程式的那一刻。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the workbench has presets, the editable source, the mode switch
+   and the step controls on top, then three panels: annotated listing, pseudocode + variables, tables. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 這一步新增或改動的 entry */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* 警告、錯誤 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;         /* 目前這一條 */
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+sub { font-size: 0.72em; line-height: 0; }
+i.hit, i.miss { font-style: normal; font-weight: 700; }
+i.hit { color: var(--hit); }
+i.miss { color: var(--miss); }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.foot { color: var(--muted); font-size: 0.85rem; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* static pseudocode in prose */
+.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow-x: auto; white-space: pre; }
+.code b { color: var(--hit); font-weight: 600; }
+.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.col p { font-size: 0.88rem; color: var(--muted); margin-top: 0.4rem; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.88rem; }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
+@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
+textarea { width: 100%; min-height: 10rem; resize: vertical; font: inherit; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; tab-size: 4; }
+.errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.modes { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+.modes .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.modes button { font-size: 0.88rem; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+.jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.jumps button { font-size: 0.82rem; padding: 0.15rem 0.6rem; }
+.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+.say { font-size: 0.95rem; min-height: 3.2em; }
+.say .warn { display: block; margin-top: 0.35rem; color: var(--miss); }
+.say .warn::before { content: "⚠ "; }
+.say .note { display: block; margin-top: 0.35rem; color: var(--muted); font-size: 0.9rem; }
+
+/* three panels */
+.work { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.5fr) minmax(0, 1fr); gap: 1rem; }
+@media (max-width: 980px) { .work { grid-template-columns: minmax(0, 1fr); } }
+.panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
+.panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+
+/* listing */
+.listing { padding: 0.5rem; background: var(--bg); overflow-x: auto; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.6; display: flex; flex-direction: column; gap: 0.15rem; flex: 1; }
+.op { display: grid; grid-template-columns: 1.4rem minmax(max-content, 1fr) max-content; align-items: center; gap: 0.5rem; padding: 0.15rem 0.45rem; border-radius: 3px; border: 1px solid transparent; border-left-width: 3px; white-space: nowrap; }
+.op .num { color: var(--muted); font-size: 0.72rem; text-align: right; }
+.op.todo { opacity: 0.55; }
+.op.cur { background: var(--mark); border-color: var(--line); border-left-color: var(--ink); opacity: 1; }
+.op.done { border-left-color: var(--line); }
+.op .orig.gone { color: var(--muted); text-decoration: line-through; }
+.op .new { color: var(--hit); font-weight: 600; }
+.op .new.bad { color: var(--miss); }
+.op .arrow { color: var(--muted); margin-inline: 0.35rem; }
+.badge { font-family: var(--font-body); font-size: 0.66rem; font-weight: 700; line-height: 1.4; padding: 0 0.35rem; border-radius: 3px; white-space: nowrap; }
+.badge.reuse, .badge.fold, .badge.simp, .badge.const { background: var(--hit); color: var(--surface); }
+.badge.bad { background: var(--miss); color: var(--surface); }
+
+/* pseudocode + variables */
+.pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.65; white-space: pre; overflow-x: auto; background: var(--bg); }
+.pseudo .pl { display: block; padding: 0 0.3rem; border-radius: 3px; }
+.pseudo .pl.on { background: var(--mark); font-weight: 600; }
+.pseudo .pl.head { font-weight: 600; }
+.pseudo .pl.add { color: var(--hit); }
+.vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.78rem; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.var { display: inline-flex; align-items: baseline; gap: 0.3rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+.var .k { color: var(--muted); font-size: 0.72rem; }
+.var .v { font-weight: 600; min-width: 1em; }
+.var.chg { border-color: var(--hit); background: var(--hit-soft); }
+
+/* tables */
+.tables { padding: 0.5rem 0.6rem; background: var(--bg); flex: 1; display: flex; flex-direction: column; gap: 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; overflow-x: auto; }
+.tables h3 { margin: 0 0 0.25rem; font-family: var(--font-body); font-size: 0.75rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; }
+table.tb { border-collapse: collapse; width: 100%; }
+.tb th, .tb td { padding: 0.2rem 0.5rem; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: baseline; }
+.tb th { font-family: var(--font-body); font-size: 0.7rem; color: var(--muted); font-weight: 700; }
+.tb tr.chg td { background: var(--hit-soft); }
+.tb .vn { font-weight: 600; }
+.tb .c { color: var(--muted); }
+.tb .stale { color: var(--miss); text-decoration: line-through; }
+.tb .stale-tag { font-family: var(--font-body); font-size: 0.66rem; font-weight: 700; color: var(--miss); margin-left: 0.3rem; }
+.tb .empty { color: var(--muted); font-family: var(--font-body); font-size: 0.78rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Engineering a Compiler 筆記</a>
+    <h1><span class="mono">LVN</span> 區域值編號：在一個 block 裡找重複的計算</h1>
+    <p class="lead">一個 basic block 裡常常有同一個值被算了兩次。要找出來，比對「運算式長得一不一樣」是不夠的：名字會被覆寫，<code>b + c</code> 出現兩次不代表是同一個值。Engineering a Compiler 第八章的 local value numbering（LVN）改成追蹤「值」：每個值一個編號，用編號組 hash key 查重複。這一頁把書上的虛擬碼一步步跑給你看，可以在基本版和擴展版之間切換，也可以自己改程式碼。</p>
+  </header>
+
+  <section class="prose">
+    <h2>名字和值是兩回事</h2>
+    <p>看這段程式。第 4 條的 <code>a − d</code> 和第 2 條一模一樣，而且 a、d 中間都沒被改過，所以第 4 條是多餘的。第 3 條的 <code>b + c</code> 也和第 1 條長得一樣，但 b 在第 2 條被覆寫了，算出來是不同的值。</p>
+<pre class="code">a ← b + c
+b ← a − d
+c ← b + c
+d ← a − d</pre>
+    <p>LVN 的做法是給每個「值」一個<strong>值編號</strong>（value number）。名字只是值暫時放的位置，名字被重新賦值，就換成裝新的值編號。要判斷兩個運算是不是算同一個值，看的是「運算子加上兩個運算元的值編號」，這三樣東西組成 hash key。key 相同，值就相同。</p>
+    <p>兩張表就夠了：一張把名字對到值編號，一張把 key 對到值編號（和一個可以去拿這個值的名字）。演算法從頭到尾掃一遍 block，每條運算查一次表。</p>
+  </section>
+
+  <section class="prose">
+    <h2>兩個版本的虛擬碼</h2>
+    <p>左邊是基本版。右邊是擴展版，<i class="hit">綠色</i>的行是多出來的：先把可交換運算的兩個值編號排成固定順序，命中 key 時允許直接寫常數，新 key 的時候順手做常數摺疊和代數恆等式化簡。核心迴圈完全沒變。</p>
+  </section>
+  <div class="cols">
+    <div class="col">
+<pre class="code">for i ← 1 to n, where the block has n operations
+    in the form "T<sub>i</sub> ← L<sub>i</sub> Op<sub>i</sub> R<sub>i</sub>" do
+  get the value numbers V<sub>1</sub> and V<sub>2</sub> for L<sub>i</sub> and R<sub>i</sub>
+  if T<sub>i</sub> has no table entry then
+    create a table entry for T<sub>i</sub>
+  construct a hash key, k, as ⟨V<sub>1</sub>, Op<sub>i</sub>, V<sub>2</sub>⟩
+  if k is already present in the table then
+    replace operation i with "T<sub>i</sub> ← x",
+        where x is the name stored under the key k
+  else
+    create a table entry for k
+    generate a new value number for k
+        and store it in k's table entry
+    store the name T<sub>i</sub> in k's table entry
+  store k's value number in the table entry for T<sub>i</sub></pre>
+      <p>最後一行在 if/else 外面：不管 key 是舊的還是新的，T<sub>i</sub> 都拿到 k 的值編號。</p>
+    </div>
+    <div class="col">
+<pre class="code">for i ← 1 to n, where the block has n operations
+    in the form "T<sub>i</sub> ← L<sub>i</sub> Op<sub>i</sub> R<sub>i</sub>" do
+  get the value numbers V<sub>1</sub> and V<sub>2</sub> for L<sub>i</sub> and R<sub>i</sub>
+  if T<sub>i</sub> has no table entry then
+    create a table entry for T<sub>i</sub>
+<b>  if Op<sub>i</sub> commutes and V<sub>1</sub> > V<sub>2</sub> then
+    swap V<sub>1</sub> and V<sub>2</sub></b>
+  construct a hash key, k, as ⟨V<sub>1</sub>, Op<sub>i</sub>, V<sub>2</sub>⟩
+  if k is already present in the table then
+    replace operation i with "T<sub>i</sub> ← x",
+        where x is the <b>constant value or</b> name stored under the key k
+  else
+    create a table entry for k
+    generate a new value number for k
+        and store it in k's table entry
+    store the name T<sub>i</sub> in k's table entry
+<b>    if V<sub>1</sub> and V<sub>2</sub> are both marked as constant then
+      evaluate L<sub>i</sub> Op<sub>i</sub> R<sub>i</sub> into c
+      replace operation i with "T<sub>i</sub> ← c"
+      store c in the table entries for k and T<sub>i</sub>
+    else if L<sub>i</sub> Op<sub>i</sub> R<sub>i</sub> matches an algebraic identity then
+      replace operation i with the simplified version</b>
+  store k's value number in the table entry for T<sub>i</sub></pre>
+      <p>交換律的處理在組 key 之前；常數摺疊和恆等式只在「新 key」的分支裡，因為 key 命中時表裡已經有答案了。</p>
+    </div>
+  </div>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">三位址碼（可以改）</p>
+        <textarea id="src" spellcheck="false" aria-label="三位址碼"></textarea>
+        <div class="errs" id="errs"></div>
+        <p class="hint">每行一條，格式 <code>a ← b + c</code>，箭頭可以打 <code>&lt;-</code> 或 <code>=</code>，運算子 <code>+ − × ÷</code> 或 <code>+ - * /</code>，運算元是名字或整數。<code>a ← 17</code> 這種單純賦值不在書上的虛擬碼裡，這裡當作把右邊的值編號直接給左邊。</p>
+      </div>
+      <div>
+        <p class="panel-title">執行</p>
+        <div class="modes"><span class="lbl">版本</span><button id="mode-basic" type="button">基本</button><button id="mode-ext" type="button">擴展</button></div>
+        <div class="controls">
+          <button id="btn-reset" type="button">重來</button>
+          <button id="btn-prev" type="button">上一步</button>
+          <button id="btn-next" type="button" class="primary">下一步</button>
+          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count" id="count"></span>
+        </div>
+        <div class="jumps">
+          <button id="btn-op" type="button">跳到下一條運算</button>
+          <button id="btn-end" type="button">跑完</button>
+        </div>
+        <p class="hint" id="phint"></p>
+        <p class="hint">左邊列表裡 <i class="hit">綠色</i> 是改寫後的運算，<i class="miss">紫色</i> 是照虛擬碼寫出來卻是錯的改寫。右邊表格裡 <i class="hit">綠底</i> 是這一步動到的 entry，<i class="miss">劃掉的名字</i> 代表那個名字已經不裝這個值了。</p>
+      </div>
+    </div>
+
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span>運算列表</span><span class="sub" id="nlabel"></span></div>
+        <div class="listing" id="listing"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>虛擬碼</span><span class="sub" id="phase"></span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+        <div class="vars" id="vars"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>hash 表</span><span class="sub" id="tstat"></span></div>
+        <div class="tables" id="tables"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>值編號什麼時候取、什麼時候給</h2>
+    <ul>
+      <li><strong>運算元的值編號在覆寫 T<sub>i</sub> 之前就取好了。</strong>所以 <code>a ← a + b</code> 沒問題：右邊的 a 拿到的是舊值編號，最後一行才把 a 換成新的。「if T<sub>i</sub> has no table entry」那兩行只是確保最後一行有地方可以寫。</li>
+      <li><strong>第一次出現的名字當場發新編號。</strong>虛擬碼寫「get the value numbers」沒說找不到怎麼辦，書上正文有補：沒有值編號的名字就給一個新的。這代表「從 block 外面進來的值」，每個都當成彼此不同。</li>
+      <li><strong>key 裡沒有名字。</strong>⟨V<sub>1</sub>, Op, V<sub>2</sub>⟩ 三樣都和名字無關，所以名字被覆寫不會讓 key 失效，只會讓 key 底下存的那個名字失效。這是下一節的重點。</li>
+      <li><strong>交換律比的是值編號的大小，不是名字。</strong>V<sub>1</sub> &gt; V<sub>2</sub> 就交換，讓 x + y 和 y + x 做出同一個 key。減法和除法不可交換，順序要保留。</li>
+      <li><strong>常數摺疊只在新 key 的分支裡。</strong>如果 key 命中，表裡早就存著常數，直接照抄。摺疊完要把常數同時記在 key 和 T<sub>i</sub> 的 entry 上，後面用到 T<sub>i</sub> 的運算才能繼續摺疊。</li>
+      <li><strong>恆等式化簡之後，T<sub>i</sub> 拿到的仍是 key 的新值編號。</strong>照虛擬碼，<code>a ← x + 0</code> 改寫成 <code>a ← x</code>，但 a 的值編號是 ⟨V<sub>x</sub>, +, V<sub>0</sub>⟩ 的新編號，不是 x 的。於是之後 <code>a + y</code> 和 <code>x + y</code> 做出不同的 key，重複沒被抓到。「化簡後的值編號」那個範例就是這個情況。更細心的實作會讓 a 直接拿 x 的值編號。</li>
+    </ul>
+  </section>
+
+  <section class="prose">
+    <h2>naming 問題：hash 表裡的名字會過期</h2>
+    <p>命中 key 的時候，演算法把運算改寫成 <code>T<sub>i</sub> ← x</code>，x 是當初第一次算出這個值時的目標名字。但那個名字之後可能被重新賦值了。「naming 問題」這個範例：</p>
+<pre class="code">a ← x + y      ⟨V<sub>x</sub>, +, V<sub>y</sub>⟩ 是新 key，記下名字 a
+b ← x + y      命中，改寫成 b ← a   ✓
+a ← 17         a 的值編號換掉了，但 key 底下還記著名字 a
+c ← x + y      命中，改寫成 c ← a   ✗  a 現在是 17</pre>
+    <p>值的判斷沒有錯：第 4 條算的確實還是第 1 條那個值。錯的是「去哪裡拿」。這一頁照虛擬碼執行，遇到這種情況會把改寫標成紫色並說明。書上給兩種修法：</p>
+    <ul>
+      <li><strong>改寫前檢查名字還有效。</strong>x 目前的值編號必須等於 key 的值編號；不等就代表 x 被覆寫了，要找其他還裝著這個值的名字（上例中的 b），找不到就老實重算。實作上可以替每個值編號維護「目前哪些名字裝著它」的清單。</li>
+      <li><strong>改用 SSA 命名。</strong>每個名字只定義一次，第 3 條變成 a<sub>1</sub> ← 17，a<sub>0</sub> 永遠裝著 x + y，c ← a<sub>0</sub> 一定正確。這是後面章節幾乎所有最佳化都建在 SSA 上的原因之一。</li>
+    </ul>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>值編號回答「這算出來是哪個值」，名字只回答「它暫時放在哪」；名字被覆寫就換編號，所以長得一樣的運算式不一定是同一個值，長得不一樣的也可能是。key 由值編號組成，所以不會過期，會過期的是 key 底下記的名字，改寫成 <code>T ← x</code> 之前要確認 x 還裝著那個值，或一開始就用 SSA 名字。擴展版的功能都插在固定的兩個位置：組 key 之前整理 key，建新 key 的時候順手算，核心迴圈還是「查表、沒有就新增、把編號給 T」。</p>
+    <p>LVN 只看一個 block，表在 block 開頭是空的。書上第八章接著把它推到 extended basic block 和整個 CFG（superlocal 和 global value numbering），表要能沿著 CFG 的路徑繼承和回收，那需要先有 <a href="../cfg/">CFG</a>。同一章的 <a href="../tree-balance/">樹高平衡</a>是另一種 block 內的變換，和 LVN 一樣靠「每個名字只定義一次」才好做。</p>
+    <p>這一頁只有暫存器之間的算術，load 和 store 要考慮位址是否相同、中間有沒有別的 store，書上在後面才處理。改寫成 <code>T ← x</code> 之後如果 T 沒人用，整條可以刪掉，那是另一個 pass 的事。恆等式書上列了二十幾條，這裡只做加減乘除最常見的幾條，<code>a ÷ a = 1</code> 假設 a ≠ 0。常數摺疊照 JavaScript 的整數運算做，除法向零截斷，除以零不摺疊，真的編譯器要照目標機器的語意。naming 問題這裡只標出錯誤，沒有實作「找別的有效名字」或 SSA 改名。</p>
+  </section>
+
+  <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, Chapter 8, Section 8.4.1（Local Value Numbering）。虛擬碼照書上的寫法；中譯本（第二版）裡是圖 8-2 和圖 8-4。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const OPS = { '+': { sym: '+', commutes: true }, '-': { sym: '−', commutes: false }, '*': { sym: '×', commutes: true }, '/': { sym: '÷', commutes: false } };
+
+const PRESETS = [
+  { title: '書上的例子', hint: '第 4 條和第 2 條算的是同一個值，第 3 條和第 1 條不是。看值編號怎麼分辨這兩件事。',
+    src: `a ← b + c
+b ← a − d
+c ← b + c
+d ← a − d` },
+  { title: 'naming 問題', hint: '第 4 條會命中第 1 條的 key，但 a 已經在第 3 條被覆寫。照虛擬碼跑會寫出錯的程式。',
+    src: `a ← x + y
+b ← x + y
+a ← 17
+c ← x + y` },
+  { title: '交換律', hint: '基本版抓不到 b，擴展版可以。減法不可交換，d 兩種版本都抓不到。切換版本比較看看。',
+    src: `a ← x + y
+b ← y + x
+c ← x − y
+d ← y − x` },
+  { title: '常數與恆等式', hint: '切到擴展版。a 在編譯期算出來，b 跟著摺疊，c 靠交換律命中 b 的 key 直接拿常數，d、e、f 各走一條恆等式。',
+    src: `a ← 4 × 2
+b ← a + 1
+c ← 1 + a
+d ← x × 0
+e ← x + 0
+f ← x − x` },
+  { title: '化簡後的值編號', hint: '擴展版把 a ← x + 0 化簡成 a ← x，但照虛擬碼 a 拿到的是新值編號，所以第 3 條沒被認出和第 2 條相同。',
+    src: `a ← x + 0
+b ← x + y
+c ← a + y` },
+];
+
+const LINE = {
+  L0: 'for i ← 1 to n, where the block has n operations\n    in the form "T<sub>i</sub> ← L<sub>i</sub> Op<sub>i</sub> R<sub>i</sub>" do',
+  L1: '  get the value numbers V<sub>1</sub> and V<sub>2</sub> for L<sub>i</sub> and R<sub>i</sub>',
+  L2: '  if T<sub>i</sub> has no table entry then',
+  L3: '    create a table entry for T<sub>i</sub>',
+  C1: '  if Op<sub>i</sub> commutes and V<sub>1</sub> > V<sub>2</sub> then',
+  C2: '    swap V<sub>1</sub> and V<sub>2</sub>',
+  L4: '  construct a hash key, k, as ⟨V<sub>1</sub>, Op<sub>i</sub>, V<sub>2</sub>⟩',
+  L5: '  if k is already present in the table then',
+  L6: '    replace operation i with "T<sub>i</sub> ← x",\n        where x is the name stored under the key k',
+  L6x: '    replace operation i with "T<sub>i</sub> ← x",\n        where x is the constant value or name stored under the key k',
+  L7: '  else',
+  L8: '    create a table entry for k',
+  L9: "    generate a new value number for k and store it in k's table entry",
+  L10: '    store the name T<sub>i</sub> in k\'s table entry',
+  F1: '    if V<sub>1</sub> and V<sub>2</sub> are both marked as constant then',
+  F2: '      evaluate L<sub>i</sub> Op<sub>i</sub> R<sub>i</sub> into c',
+  F3: '      replace operation i with "T<sub>i</sub> ← c"',
+  F4: '      store c in the table entries for k and T<sub>i</sub>',
+  A1: '    else if L<sub>i</sub> Op<sub>i</sub> R<sub>i</sub> matches an algebraic identity then',
+  A2: '      replace operation i with the simplified version',
+  L11: "  store k's value number in the table entry for T<sub>i</sub>",
+};
+const PSEUDO = {
+  basic: ['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10', 'L11'],
+  ext: ['L0', 'L1', 'L2', 'L3', 'C1', 'C2', 'L4', 'L5', 'L6x', 'L7', 'L8', 'L9', 'L10', 'F1', 'F2', 'F3', 'F4', 'A1', 'A2', 'L11'],
+};
+const ADDED = new Set(['C1', 'C2', 'L6x', 'F1', 'F2', 'F3', 'F4', 'A1', 'A2']);
+
+// ---- parser: one "T ← L op R" or "T ← x" per line ----
+function parse(src) {
+  const ops = [], errors = [];
+  const operand = s => /^-?\d+$/.test(s) ? { kind: 'const', v: Number(s), key: String(Number(s)) }
+    : /^[A-Za-z_]\w*$/.test(s) ? { kind: 'name', v: s, key: s } : null;
+  src.split('\n').forEach((raw, idx) => {
+    const ln = idx + 1;
+    const t = raw.replace(/(#|\/\/).*$/, '').trim();
+    if (!t) return;
+    const norm = t.replace(/←|:=|<-/g, '=').replace(/−/g, '-').replace(/×/g, '*').replace(/÷/g, '/');
+    let m = norm.match(/^([A-Za-z_]\w*)\s*=\s*(-?\w+)\s*([-+*\/])\s*(-?\w+)$/);
+    if (m) {
+      const L = operand(m[2]), R = operand(m[4]);
+      if (!L || !R) { errors.push(`第 ${ln} 行：運算元要是名字或整數，「${!L ? m[2] : m[4]}」不是。`); return; }
+      ops.push({ ln, dst: m[1], L, op: m[3], R }); return;
+    }
+    m = norm.match(/^([A-Za-z_]\w*)\s*=\s*(-?\w+)$/);
+    if (m) {
+      const L = operand(m[2]);
+      if (!L) { errors.push(`第 ${ln} 行：運算元要是名字或整數，「${m[2]}」不是。`); return; }
+      ops.push({ ln, dst: m[1], L, op: null, R: null }); return;
+    }
+    errors.push(`第 ${ln} 行：看不懂「${t}」。格式是 a ← b + c 或 a ← 17。`);
+  });
+  if (ops.length === 0 && errors.length === 0) errors.push('至少要有一條運算。');
+  ops.forEach(op => { op.text = op.op === null ? `${op.dst} ← ${op.L.key}` : `${op.dst} ← ${op.L.key} ${OPS[op.op].sym} ${op.R.key}`; });
+  return { ops, errors };
+}
+
+// ---- constant folding and algebraic identities (extended version only) ----
+function fold(op, a, b) {
+  switch (op) {
+    case '+': return a + b;
+    case '-': return a - b;
+    case '*': return a * b;
+    case '/': return b === 0 ? null : Math.trunc(a / b);
+  }
+}
+function identity(op, L, R, eL, eR) {
+  const lc = eL.c, rc = eR.c, sL = L.key, sR = R.key, same = eL.vn === eR.vn;
+  switch (op) {
+    case '+':
+      if (rc === 0) return { rule: 'a + 0 = a', rhs: sL };
+      if (lc === 0) return { rule: '0 + a = a', rhs: sR };
+      break;
+    case '-':
+      if (rc === 0) return { rule: 'a − 0 = a', rhs: sL };
+      if (same) return { rule: 'a − a = 0', rhs: '0' };
+      break;
+    case '*':
+      if (rc === 1) return { rule: 'a × 1 = a', rhs: sL };
+      if (lc === 1) return { rule: '1 × a = a', rhs: sR };
+      if (rc === 0 || lc === 0) return { rule: 'a × 0 = 0', rhs: '0' };
+      if (rc === 2) return { rule: '2 × a = a + a', rhs: `${sL} + ${sL}` };
+      if (lc === 2) return { rule: '2 × a = a + a', rhs: `${sR} + ${sR}` };
+      break;
+    case '/':
+      if (rc === 1) return { rule: 'a ÷ 1 = a', rhs: sL };
+      if (same) return { rule: 'a ÷ a = 1（假設 a ≠ 0）', rhs: '1' };
+      break;
+  }
+  return null;
+}
+
+// ---- run LVN, snapshotting state after every group of pseudocode lines ----
+function buildTrace(P, ext) {
+  const ops = P.ops, n = ops.length, steps = [];
+  const names = new Map();   // name or literal -> { vn, c, lit }
+  const keys = new Map();    // "⟨#1, +, #2⟩" -> { vn, name, c }
+  const rw = ops.map(() => null);
+  let nextVN = 1;
+  const st = { i: null, V1: null, V2: null, k: null, c: null };
+  const vn = v => v == null ? '–' : `#${v}`;
+  const snap = (lines, x) => steps.push(Object.assign({
+    i: st.i, V1: st.V1, V2: st.V2, k: st.k, c: st.c, nextVN, lines, rw: rw.slice(),
+    names: [...names].map(([nm, e]) => ({ nm, vn: e.vn, c: e.c, lit: e.lit })),
+    keys: [...keys].map(([ks, e]) => ({ ks, vn: e.vn, name: e.name, c: e.c })),
+    chN: [], chK: [], chV: [], say: '', warn: '', note: '',
+  }, x));
+  const getVN = (o, created) => {
+    let e = names.get(o.key);
+    if (!e) { e = { vn: nextVN++, c: o.kind === 'const' ? o.v : null, lit: o.kind === 'const' }; names.set(o.key, e); created.push(o.key); }
+    return e;
+  };
+  const describe = (o, e, created) => created.includes(o.key)
+    ? `${o.key} 第一次出現，給它新的值編號 ${vn(e.vn)}${o.kind === 'const' ? '（常數）' : ''}`
+    : `${o.key} 目前是 ${vn(e.vn)}${ext && e.c !== null && o.kind !== 'const' ? `（已知是常數 ${e.c}）` : ''}`;
+  const orphansOf = (T, newVN) => [...keys].filter(([, e]) => e.name === T && e.vn !== newVN && e.c === null).map(([ks]) => ks);
+  const ensureT = T => {
+    if (!names.has(T)) {
+      names.set(T, { vn: null, c: null, lit: false });
+      snap(['L2', 'L3'], { chN: [T], say: `${T} 還沒有 table entry，先建一個，值編號等最後一行再填。` });
+    } else {
+      snap(['L2'], { say: `${T} 已經有 entry（目前 ${vn(names.get(T).vn)}）。運算元的值編號剛才已經先取好，所以 ${T} 就算同時出現在右邊也不會混淆。` });
+    }
+  };
+  const finish = (T, newVN, extra) => {
+    const te = names.get(T), old = te.vn;
+    te.vn = newVN;
+    const orphan = orphansOf(T, newVN);
+    snap(['L11'], Object.assign({ chN: [T],
+      say: `把 k 的值編號 ${vn(newVN)} 存進 ${T} 的 entry。` + (old !== null && old !== newVN ? `${T} 原本是 ${vn(old)}，被覆寫了。` : ''),
+      note: orphan.length ? `hash 表裡 ${orphan.join('、')} 底下還記著名字 ${T}，但 ${T} 已經不裝那個值了。之後如果有運算命中這個 key，改寫就會出錯。` : '' }, extra || {}));
+  };
+
+  for (let i = 1; i <= n; i++) {
+    const op = ops[i - 1], T = op.dst;
+    st.i = i; st.V1 = st.V2 = st.k = st.c = null;
+
+    if (op.op === null) {
+      const created = [];
+      const e = getVN(op.L, created);
+      st.V1 = e.vn;
+      snap(['L1'], { chN: created, chV: ['i', 'V1'], say: `op<sub>${i}</sub> 是單純賦值，不在書上的虛擬碼裡，這裡當作「右邊是什麼值編號，左邊就是什麼值編號」。${describe(op.L, e, created)}。` });
+      ensureT(T);
+      const te = names.get(T);
+      te.c = e.c;
+      finish(T, e.vn, { say: `把 ${op.L.key} 的值編號 ${vn(e.vn)} 存進 ${T} 的 entry。` + (te.c !== null && ext ? `${T} 也標成常數 ${te.c}。` : '') });
+      continue;
+    }
+
+    const sym = OPS[op.op].sym;
+    const created = [];
+    const eL = getVN(op.L, created), eR = getVN(op.R, created);
+    st.V1 = eL.vn; st.V2 = eR.vn;
+    snap(['L1'], { chN: created, chV: ['i', 'V1', 'V2'], say: `op<sub>${i}</sub>：${op.text}。取運算元的值編號：${describe(op.L, eL, created)}；${describe(op.R, eR, created)}。` });
+    ensureT(T);
+
+    if (ext) {
+      if (OPS[op.op].commutes && st.V1 > st.V2) {
+        [st.V1, st.V2] = [st.V2, st.V1];
+        snap(['C1', 'C2'], { chV: ['V1', 'V2'], say: `${sym} 可交換，而且 V<sub>1</sub> &gt; V<sub>2</sub>，交換成 ⟨${vn(st.V1)}, ${vn(st.V2)}⟩。這樣 x ${sym} y 和 y ${sym} x 會做出同一個 key。` });
+      } else if (OPS[op.op].commutes) {
+        snap(['C1'], { say: `${sym} 可交換，但 V<sub>1</sub> ≤ V<sub>2</sub> 已經是正規順序，不用換。` });
+      } else {
+        snap(['C1'], { say: `${sym} 不可交換，順序必須保留。` });
+      }
+    }
+
+    st.k = `⟨${vn(st.V1)}, ${sym}, ${vn(st.V2)}⟩`;
+    snap(['L4'], { chV: ['k'], say: `組出 hash key k = ${st.k}。key 裡只有值編號和運算子，沒有任何名字。` });
+
+    const hit = keys.get(st.k);
+    if (hit) {
+      let x, kind, say, warn = '';
+      if (ext && hit.c !== null) {
+        x = String(hit.c); kind = 'const';
+        say = `k 已經在表裡，而且它的值是常數 ${hit.c}。改寫成 ${T} ← ${hit.c}。常數不會被覆寫，這種改寫永遠安全。`;
+      } else {
+        x = hit.name; kind = 'reuse';
+        const curX = names.get(x);
+        say = `k 已經在表裡，底下存的名字是 ${x}。改寫成 ${T} ← ${x}，這個值不用再算一次。`;
+        if (!curX || curX.vn !== hit.vn) {
+          kind = 'bad';
+          warn = `但 ${x} 現在的值編號是 ${curX ? vn(curX.vn) : '（無）'}，不是 k 的 ${vn(hit.vn)}：${x} 在這之後被覆寫過，已經不裝這個值了。照虛擬碼寫出的 ${T} ← ${x} 是錯的程式。這就是 naming 問題。`;
+        }
+      }
+      rw[i - 1] = { text: `${T} ← ${x}`, kind };
+      snap(['L5', ext ? 'L6x' : 'L6'], { chK: [st.k], say, warn });
+      finish(T, hit.vn);
+      continue;
+    }
+
+    const v = nextVN++;
+    keys.set(st.k, { vn: v, name: T, c: null });
+    snap(['L7', 'L8', 'L9', 'L10'], { chK: [st.k], chV: ['nextVN'], say: `k 不在表裡：建 entry，發新的值編號 ${vn(v)}，記下名字 ${T}。以後要重用這個值，就去 ${T} 拿。` });
+
+    if (ext) {
+      if (eL.c !== null && eR.c !== null) {
+        const c = fold(op.op, eL.c, eR.c);
+        if (c === null) {
+          snap(['F1', 'F2'], { say: `兩個運算元都是常數，但 ${eL.c} ÷ 0 沒有定義，不摺疊，保留原運算。` });
+        } else {
+          st.c = c;
+          keys.get(st.k).c = c;
+          names.get(T).c = c;
+          rw[i - 1] = { text: `${T} ← ${c}`, kind: 'fold' };
+          snap(['F1', 'F2', 'F3', 'F4'], { chK: [st.k], chN: [T], chV: ['c'], say: `兩個運算元都是常數：編譯期直接算 ${eL.c} ${sym} ${eR.c} = ${c}，改寫成 ${T} ← ${c}。把 ${c} 同時記在 k 和 ${T} 的 entry 上，之後用到 ${T} 的運算也能繼續摺疊。` });
+        }
+      } else {
+        const id = identity(op.op, op.L, op.R, eL, eR);
+        if (id) {
+          rw[i - 1] = { text: `${T} ← ${id.rhs}`, kind: 'simp' };
+          snap(['A1', 'A2'], { say: `符合代數恆等式 ${id.rule}：改寫成 ${T} ← ${id.rhs}。注意表裡 k 的值編號還是剛發的 ${vn(v)}，虛擬碼沒有把它和 ${id.rhs} 的值編號接起來。` });
+        } else {
+          snap(['F1', 'A1'], { say: `運算元不全是常數，也不符合任何恆等式，保留原運算。` });
+        }
+      }
+    }
+    finish(T, v);
+  }
+  st.i = null; st.V1 = st.V2 = st.k = st.c = null;
+  const bad = rw.filter(r => r && r.kind === 'bad').length;
+  snap([], { chV: ['i'], say: `跑完 n = ${n} 條，改寫了 ${rw.filter(Boolean).length} 條。` + (bad ? `其中 ${bad} 條是錯的改寫，見紫色標記。` : '') });
+  return steps;
+}
+
+const INIT = { i: null, V1: null, V2: null, k: null, c: null, nextVN: 1, lines: [], rw: [], names: [], keys: [], chN: [], chK: [], chV: [], say: '', warn: '', note: '' };
+const state = { pi: 0, k: 0, mode: 'basic', parsed: null, trace: [] };
+const total = () => state.trace.length;
+const cur = () => state.k === 0 ? INIT : state.trace[state.k - 1];
+
+function rebuild(keepStep) {
+  state.parsed = parse($('src').value);
+  state.trace = state.parsed.errors.length ? [] : buildTrace(state.parsed, state.mode === 'ext');
+  state.k = keepStep ? Math.min(state.k, total()) : 0;
+}
+
+// ---- rendering ----
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.pi = i; $('src').value = c.src; rebuild(); renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderPseudoShell() {
+  $('pseudo').innerHTML = PSEUDO[state.mode].map((id, k) =>
+    `<span class="pl${k === 0 ? ' head' : ''}${ADDED.has(id) ? ' add' : ''}" data-l="${id}">${LINE[id]}</span>`).join('');
+}
+
+function renderListing(s) {
+  const ops = state.parsed.ops;
+  $('nlabel').textContent = `n = ${ops.length}`;
+  const BADGE = { reuse: '重用', const: '常數', bad: '錯', fold: '摺疊', simp: '化簡' };
+  $('listing').innerHTML = ops.map((op, idx) => {
+    const k = idx + 1, r = s.rw[idx];
+    const done = s.i === null ? state.k > 0 : k < s.i;
+    let cls = 'op' + (s.i === k ? ' cur' : done ? ' done' : ' todo');
+    const body = r
+      ? `<span class="orig gone">${esc(op.text)}</span><span class="arrow">→</span><span class="new${r.kind === 'bad' ? ' bad' : ''}">${esc(r.text)}</span>`
+      : `<span class="orig">${esc(op.text)}</span>`;
+    const badge = r ? `<span class="badge ${r.kind}">${BADGE[r.kind]}</span>` : '';
+    return `<div class="${cls}"><span class="num">${k}</span><span>${body}</span><span>${badge}</span></div>`;
+  }).join('');
+}
+
+function renderPseudo(s) {
+  document.querySelectorAll('#pseudo .pl').forEach(el => el.classList.toggle('on', s.lines.includes(el.dataset.l)));
+  $('phase').textContent = state.mode === 'ext' ? '擴展版' : '基本版';
+}
+
+function renderVars(s) {
+  const ch = new Set(s.chV);
+  const vn = v => v == null ? '–' : `#${v}`;
+  const v = (key, name, val) => `<span class="var${ch.has(key) ? ' chg' : ''}"><span class="k">${name}</span><span class="v">${val}</span></span>`;
+  $('vars').innerHTML = v('n', 'n', state.parsed.ops.length) + v('i', 'i', s.i ?? '–') + v('V1', 'V₁', vn(s.V1)) + v('V2', 'V₂', vn(s.V2))
+    + v('k', 'k', s.k ?? '–') + (state.mode === 'ext' ? v('c', 'c', s.c ?? '–') : '') + v('nextVN', '下一個值編號', vn(s.nextVN));
+}
+
+function renderTables(s) {
+  const ext = state.mode === 'ext';
+  const chN = new Set(s.chN), chK = new Set(s.chK);
+  const vnOf = new Map(s.names.map(r => [r.nm, r.vn]));
+  const vn = v => v == null ? '待定' : `#${v}`;
+  $('tstat').textContent = `${s.names.length} 個名字 · ${s.keys.length} 個 key`;
+  const nameRows = s.names.length ? s.names.map(r =>
+    `<tr class="${chN.has(r.nm) ? 'chg' : ''}"><td>${esc(r.nm)}${r.lit ? ' <span class="c">（字面常數）</span>' : ''}</td><td class="vn">${vn(r.vn)}</td>${ext ? `<td class="c">${r.c !== null ? '= ' + r.c : ''}</td>` : ''}</tr>`).join('')
+    : `<tr><td class="empty" colspan="3">（還是空的）</td></tr>`;
+  const keyRows = s.keys.length ? s.keys.map(r => {
+    const stale = vnOf.get(r.name) !== r.vn;
+    const nm = `<span class="${stale ? 'stale' : ''}">${esc(r.name)}</span>${stale ? '<span class="stale-tag">已失效</span>' : ''}`;
+    const val = ext && r.c !== null ? `常數 ${r.c}<span class="c">（原名 ${esc(r.name)}）</span>` : nm;
+    return `<tr class="${chK.has(r.ks) ? 'chg' : ''}"><td>${esc(r.ks)}</td><td class="vn">${vn(r.vn)}</td><td>${val}</td></tr>`;
+  }).join('') : `<tr><td class="empty" colspan="3">（還是空的）</td></tr>`;
+  $('tables').innerHTML = `
+    <div><h3>名字 → 值編號</h3><table class="tb"><thead><tr><th>名字</th><th>值編號</th>${ext ? '<th>常數</th>' : ''}</tr></thead><tbody>${nameRows}</tbody></table></div>
+    <div><h3>⟨V₁, Op, V₂⟩ → 值編號</h3><table class="tb"><thead><tr><th>key</th><th>值編號</th><th>${ext ? '名字 / 常數' : '名字'}</th></tr></thead><tbody>${keyRows}</tbody></table></div>`;
+}
+
+function renderAll() {
+  const bad = state.parsed.errors.length > 0;
+  const T = total();
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && $('src').value === PRESETS[i].src));
+  $('mode-basic').classList.toggle('chosen', state.mode === 'basic');
+  $('mode-ext').classList.toggle('chosen', state.mode === 'ext');
+  $('errs').innerHTML = state.parsed.errors.map(e => `<span>${esc(e)}</span>`).join('');
+  $('phint').textContent = $('src').value === PRESETS[state.pi].src ? PRESETS[state.pi].hint : '';
+  $('step-range').max = T; $('step-range').value = state.k;
+  $('count').textContent = `第 ${state.k} / ${T} 步`;
+  $('btn-prev').disabled = state.k === 0;
+  $('btn-next').disabled = bad || state.k >= T;
+  $('btn-op').disabled = bad || state.k >= T;
+  $('btn-end').disabled = bad || state.k >= T;
+  const s = bad ? INIT : cur();
+  renderListing(s);
+  renderPseudo(s);
+  renderVars(s);
+  renderTables(s);
+  const say = $('say');
+  if (bad) say.textContent = '程式碼有錯，修好之後再開始。';
+  else if (state.k === 0) say.textContent = `兩張表都是空的。按「下一步」開始跑${state.mode === 'ext' ? '擴展版' : '基本版'}。`;
+  else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '') + (s.note ? `<span class="note">${s.note}</span>` : '');
+}
+
+function setMode(m) {
+  if (state.mode === m) return;
+  state.mode = m;
+  renderPseudoShell();
+  rebuild(true);
+  renderAll();
+}
+
+$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
+$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
+$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
+$('btn-op').addEventListener('click', () => {
+  const now = cur().i;
+  const idx = state.trace.findIndex((s, j) => j >= state.k && s.i !== now);
+  state.k = idx >= 0 ? idx + 1 : total();
+  renderAll();
+});
+$('btn-end').addEventListener('click', () => { state.k = total(); renderAll(); });
+$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
+$('src').addEventListener('input', () => { rebuild(); renderAll(); });
+$('mode-basic').addEventListener('click', () => setMode('basic'));
+$('mode-ext').addEventListener('click', () => setMode('ext'));
+document.addEventListener('keydown', e => {
+  if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
+  if (e.key === 'ArrowRight') $('btn-next').click();
+  if (e.key === 'ArrowLeft') $('btn-prev').click();
+});
+
+renderPresets();
+renderPseudoShell();
+$('src').value = PRESETS[0].src;
+rebuild();
+renderAll();
+</script>
+</body>
+</html>

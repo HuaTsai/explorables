@@ -187,25 +187,18 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; min-width: 40rem; widt
   </div>
   <p class="foot">格式：執行的指令數 / 其中碰記憶體的指令數（x86 算 push、pop、call、ret；AArch64 和 RISC-V 算 load、store，因為 bl、jal、ret 不碰記憶體）。第二個數字才是重點：它反映了慣例讓多少東西非走堆疊不可。</p>
 
-  <section class="prose three">
-    <h2>看完可以帶走的三句話</h2>
-    <ol>
-      <li><strong>Link register 省下的是記憶體存取，但只有葉函式享受得到。</strong>AArch64 和 RISC-V 的 <code>bl</code>／<code>jal</code> 不碰堆疊，所以不再往下呼叫的函式連 sp 都不用動。但一旦要往下呼叫，x30／ra 得先存進堆疊，這一來一回和 x86 的 call／ret 隱含的壓彈其實是一樣的量。</li>
-      <li><strong>參數暫存器多，就少碰堆疊。</strong>x86-64 只給 6 個整數參數暫存器，AArch64 和 RISC-V 給 8 個。多出來的那兩個，正好是「10 個參數」案例裡 x86 要多 push 兩次的原因。callee-saved 暫存器的數量（6 對 10 對 12）也是同一回事：跨呼叫要存活的值越多，x86 越早開始把東西擠到堆疊上。</li>
-      <li><strong>慣例是軟體契約，同一個 ISA 換作業系統就可能換一套。</strong>Windows x64 的參數暫存器是 <code>rcx rdx r8 r9</code> 只有 4 個，而且呼叫者要在堆疊上多留 32 bytes 的 shadow space。同樣的 x86 機器、同樣的指令集，Linux 編的函式和 Windows 編的函式不能直接互相呼叫。</li>
-    </ol>
-  </section>
-
   <section class="prose">
-    <h2>這個模型省略了什麼</h2>
+    <h2>結語</h2>
+    <p>Link register 省下的是記憶體存取，但只有葉函式享受得到：AArch64 和 RISC-V 的 <code>bl</code> 與 <code>jal</code> 不碰堆疊，不再往下呼叫的函式連 sp 都不用動，一旦要往下呼叫，x30 或 ra 得先存進堆疊，和 x86 的 call 與 ret 隱含的壓彈是一樣的量。參數暫存器多就少碰堆疊：x86-64 給 6 個，AArch64 和 RISC-V 給 8 個，callee-saved 的 6 對 10 對 12 也是同一回事。最後，慣例是軟體契約，Windows x64 的參數暫存器只有 <code>rcx rdx r8 r9</code> 4 個，還要留 32 bytes 的 shadow space，同一顆 x86 機器上 Linux 編的函式和 Windows 編的不能直接互相呼叫。</p>
+    <p>慣例裡「哪些暫存器跨 call 要保留」這條規則對程式碼的影響，<a href="../registers/">暫存器</a>那一篇用一個有 N 個存活值的函式量給你看。呼叫和返回指令本身怎麼編碼、跳轉位移放得下多遠，在<a href="../encoding/">指令編碼</a>和<a href="../branches/">條件分支</a>。想看 x86 上堆疊和回傳位址更細的動作，首頁的「函式呼叫與 Stack」那一頁用真實位址一步步走。</p>
+    <p>這一頁只傳整數參數、只看 Linux 上的慣例，省掉的規則不少：</p>
     <ul>
-      <li><strong>浮點參數另有一組暫存器。</strong>x86-64 用 <code>xmm0</code>–<code>xmm7</code>，AArch64 用 <code>v0</code>–<code>v7</code>，RISC-V 用 <code>fa0</code>–<code>fa7</code>。整數和浮點各算各的，混用時規則更細。</li>
-      <li><strong>struct 怎麼傳。</strong>小的 struct 拆進暫存器，大的用記憶體傳；回傳大 struct 時呼叫者先配好空間、把指標當隱藏參數傳進去（sret）。三邊的門檻和拆法都不同。</li>
-      <li><strong>可變參數函式（varargs）</strong>有額外規則，例如 x86-64 要在 <code>al</code> 放浮點參數的個數，RISC-V 的 varargs 一律照 8 bytes 對齊。</li>
-      <li><strong>x86-64 的 red zone。</strong>葉函式可以直接用 rsp 以下 128 bytes 而不調 rsp，所以某些葉函式看起來「沒開框架卻用了堆疊」。</li>
-      <li><strong>AArch64 的保留暫存器。</strong><code>x8</code> 是間接結果位址，<code>x16</code>／<code>x17</code> 給連結器 veneer 用，<code>x18</code> 平台保留，<code>x29</code> 慣例上是 frame pointer。這裡的範例用 <code>-fomit-frame-pointer</code>，所以沒看到 x29。</li>
-      <li><strong>RISC-V 有好幾套 ABI。</strong>這裡是 LP64（整數 64 位元）加 D 擴充的 lp64d；32 位元的 ilp32 系列、沒有浮點硬體的 lp64 變體，傳浮點參數的方式各不相同。</li>
-      <li><strong>Windows x64</strong> 整套不同，這裡只在三句話裡提了一句。</li>
+      <li>浮點參數另有一組暫存器：x86-64 用 <code>xmm0</code> 到 <code>xmm7</code>，AArch64 用 <code>v0</code> 到 <code>v7</code>，RISC-V 用 <code>fa0</code> 到 <code>fa7</code>，整數和浮點各算各的。</li>
+      <li>struct 怎麼傳：小的拆進暫存器，大的用記憶體；回傳大 struct 時呼叫者先配好空間、把指標當隱藏參數傳進去（sret）。三邊的門檻和拆法都不同。</li>
+      <li>可變參數函式有額外規則，例如 x86-64 要在 <code>al</code> 放浮點參數的個數，RISC-V 的 varargs 一律照 8 bytes 對齊。</li>
+      <li>x86-64 的 red zone：葉函式可以直接用 rsp 以下 128 bytes 而不調 rsp，所以某些葉函式看起來沒開框架卻用了堆疊。</li>
+      <li>AArch64 的保留暫存器：<code>x8</code> 是間接結果位址，<code>x16</code> 和 <code>x17</code> 給連結器 veneer 用，<code>x18</code> 平台保留，<code>x29</code> 慣例上是 frame pointer。範例用 <code>-fomit-frame-pointer</code>，所以沒看到 x29。</li>
+      <li>RISC-V 有好幾套 ABI。這裡是 lp64d；32 位元的 ilp32 系列、沒有浮點硬體的 lp64 變體，傳浮點參數的方式各不相同。Windows x64 整套不同，上面只提了一句。</li>
     </ul>
   </section>
 </main>

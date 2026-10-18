@@ -175,23 +175,17 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
   <p class="foot">Zen 4 那欄全部等於指令數，因為 AMD 的計數單位是 macro-op，一個 macro-op 可以包含讀取、運算、寫入，到了執行階段才分給不同單元。Intel 的 Skylake 模型數的是拆開後的 µop。兩家的數字不能直接相減。</p>
 
   <section class="prose">
-    <h2>看完可以帶走的三句話</h2>
-    <ol>
-      <li><strong>ISA 是契約，µop 是實作，CISC 的複雜度被前端吸收掉了。</strong>x86 一條讀改寫指令進了核心，後端看到的和 RISC-V 的四條指令幾乎一樣。這是「x86 跑得慢」這個直覺不成立的原因：執行階段大家做的事差不多。</li>
-      <li><strong>吸收不是免費的。</strong>x86 的解碼器要處理變長指令、前綴、ModRM，面積和功耗明顯大於 ARM 的解碼器，這是 ARM 陣營最常用的論點。Intel 和 AMD 的回答是 µop cache：解過一次的 µop 存起來，迴圈裡的指令不再經過解碼器。Apple 和 ARM 的核心也有類似的結構，但解碼器本身簡單得多。</li>
-      <li><strong>RISC 也會拆、也會合。</strong>AArch64 的 stp 帶 pre-index 拆成 3 個，Apple M1 把帶縮放的定址拆成 2 個，而 cmp + 分支在 x86 和 ARM 上都會合併成 1 個。RISC-V 的 bge 一條就是 1 個 µop，不需要合併，但 call 偽指令本來就是兩條。「指令數等於 µop 數」在三邊都不成立。</li>
-    </ol>
-  </section>
-
-  <section class="prose">
-    <h2>這個模型省略了什麼</h2>
+    <h2>結語</h2>
+    <p>ISA 是契約，µop 是實作，CISC 的複雜度被前端吸收掉了：x86 一條讀改寫指令進了核心，後端看到的和 RISC-V 的四條指令幾乎一樣，所以「x86 跑得慢」這個直覺不成立，執行階段大家做的事差不多。但吸收不是免費的，x86 的解碼器要處理變長指令、前綴、ModRM，面積和功耗明顯大於 ARM 的解碼器，Intel 和 AMD 的回答是 µop cache，解過一次的 µop 存起來，迴圈裡的指令不再經過解碼器。RISC 也會拆、也會合：AArch64 帶 pre-index 的 stp 拆成 3 個，Apple M1 把帶縮放的定址拆成 2 個，cmp 加分支在 x86 和 ARM 上都會合併成 1 個。「指令數等於 µop 數」在三邊都不成立。</p>
+    <p>這一篇是系列的最後一頁，前面幾篇在這裡匯合：解碼器為什麼難，回頭看<a href="../encoding/">指令編碼</a>；會被拆開的讀改寫和帶縮放的 load 來自<a href="../addressing/">定址模式</a>；會被合併的 cmp 加跳轉來自<a href="../branches/">條件分支</a>。想往下看 µop 進了後端之後的事，llvm-mca 的 timeline view 和 uops.info 的實測表是兩個好起點。</p>
+    <p>這裡的數字來自 llvm-mca 的排程模型，不是晶片廠公布的拆法，有幾個地方要打折：</p>
     <ul>
-      <li><strong>µop 的類型是我依指令語意標的。</strong>llvm-mca 只給每條指令的 µop 數量，不說哪個是讀、哪個是寫。頁面上 LOAD、ST-ADDR、ALU 這些標籤是依指令做什麼推斷出來的合理拆法，不是晶片廠公布的。</li>
-      <li><strong>macro-fusion 沒有反映在數字裡。</strong>Intel 從 Core 2、AMD 從 Zen、Apple 從 A 系列起都會把 cmp + 條件跳轉合成 1 個 µop，llvm-mca 的 instruction info 不計算這件事，所以「if (a &lt; b)」案例裡 x86 和 ARM 的 µop 數各多算了 1。</li>
-      <li><strong>Intel 的融合域與未融合域。</strong>Skylake 的 inc [mem] 實際是 4 個未融合 µop（load、ALU、store-address、store-data），前端把 load+ALU、store-address+store-data 各融合成一個，在 µop cache 和重排序緩衝裡算 2 個。llvm-mca 的 Skylake 模型給 3，介於兩者之間。要精確數字請查 uops.info 的實測。</li>
-      <li><strong>µop cache 與 loop stream detector。</strong>這裡每條指令都經過解碼器。真實核心在迴圈裡大部分時間從 µop cache 取指，解碼器閒置，x86 的解碼劣勢在那時候不存在。</li>
-      <li><strong>排程 port 與延遲。</strong>µop 進了佇列之後要分配到哪個執行單元、等多少 cycle，這一頁不講。llvm-mca 的 timeline view 可以看。</li>
-      <li><strong>RISC-V 高效能核心的公開資料很少。</strong>P550 模型裡每條指令都是 1 個 µop、store 不拆，這反映的是 SiFive 沒有公開細節，不代表硬體真的這樣做。</li>
+      <li>µop 的類型是依指令語意標的。llvm-mca 只給每條指令的 µop 數量，LOAD、ST-ADDR、ALU 這些標籤是合理的推斷。</li>
+      <li>macro-fusion 沒有反映在數字裡。Intel 從 Core 2、AMD 從 Zen、Apple 從 A 系列起都會把 cmp 加條件跳轉合成 1 個 µop，所以 <code>if (a &lt; b)</code> 案例裡 x86 和 ARM 各多算了 1。</li>
+      <li>Intel 的融合域與未融合域。Skylake 的 <code>inc [mem]</code> 實際是 4 個未融合 µop，前端融合後在 µop cache 和重排序緩衝裡算 2 個，llvm-mca 給 3，介於兩者之間。要精確數字請查 uops.info。</li>
+      <li>µop cache 與 loop stream detector。這裡每條指令都經過解碼器，真實核心在迴圈裡大部分時間從 µop cache 取指，x86 的解碼劣勢在那時候不存在。</li>
+      <li>排程 port 與延遲。µop 進了佇列之後要分配到哪個執行單元、等多少 cycle，這一頁不講。</li>
+      <li>RISC-V 高效能核心的公開資料很少。P550 模型裡每條指令都是 1 個 µop、store 不拆，反映的是 SiFive 沒有公開細節，不代表硬體真的這樣做。</li>
     </ul>
   </section>
 </main>

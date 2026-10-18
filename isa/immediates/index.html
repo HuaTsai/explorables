@@ -179,22 +179,16 @@ i.miss { color: var(--miss); }
   </div>
 
   <section class="prose">
-    <h2>看完可以帶走的三句話</h2>
-    <ol>
-      <li><strong>定長編碼的立即值欄位一定比指令短，大常數永遠要拆。</strong>4 bytes 的指令扣掉 opcode 和暫存器，剩下 12 到 20 bits。這不是 ARM 或 RISC-V 設計不好，是定長的必然代價。</li>
-      <li><strong>x86 用變長編碼直接塞 8 bytes。</strong>一條 10 bytes 的 <code>movabs</code> 換一次做完，解碼器要多吃幾個 byte，但不用多條指令。這是 CISC 在立即值上占到的便宜。</li>
-      <li><strong>ARM 用 16 bits 分四段拼，RISC-V 用 20 + 12 拼 32 位元。</strong>ARM 的 <code>movk</code> 每條只改自己那 16 bits，所以最多四條、順序無所謂；RISC-V 的 <code>addi</code> 是加法，低 12 bits 的符號會往上借位，所以 <code>lui</code> 要先補 1。超過 32 位元後 RISC-V 只能接力或查表，這是 RISC-V 被批評「指令數多」最常見的例子之一。</li>
-    </ol>
-  </section>
-
-  <section class="prose">
-    <h2>這個模型省略了什麼</h2>
+    <h2>結語</h2>
+    <p>定長編碼的立即值欄位一定比指令短，大常數永遠要拆：4 bytes 扣掉 opcode 和暫存器，剩下 12 到 20 bits，這是定長的必然代價，不是設計不好。x86 用變長編碼直接塞 8 bytes，一條 10 bytes 的 <code>movabs</code> 一次做完，是 CISC 在立即值上占到的便宜。ARM 用 16 bits 分四段拼，<code>movk</code> 每條只改自己那 16 bits，最多四條、順序無所謂；RISC-V 用 20 + 12 拼 32 位元，<code>addi</code> 是加法，低 12 bits 的符號會往上借位，所以 <code>lui</code> 要先補 1，超過 32 位元後只能接力或查表，這是 RISC-V 被批評「指令數多」最常見的例子。</p>
+    <p>立即值欄位為什麼只有那麼寬，答案在<a href="../encoding/">指令編碼</a>：欄位是從固定的 32 bits 裡扣出來的。常數最常出現的地方是位址算式裡的位移，<a href="../addressing/">定址模式</a>那一篇看 12 bits 的位移怎麼限制住 RISC-V。</p>
+    <p>這一頁每次都從零開始物化常數，而且只做了最主要的幾條路徑：</p>
     <ul>
-      <li><strong>常數池與 PC-relative load。</strong>RISC-V 超過兩條時 clang 預設改成 <code>lui</code> + <code>ld</code> 從附近的資料區讀；AArch64 也有 <code>ldr x0, =imm</code> 偽指令走常數池。這裡 RISC-V 只標註，沒有把記憶體存取的代價畫出來。</li>
-      <li><strong>AArch64 bitmask immediate 的完整規則。</strong>這裡實作了 LLVM 的編碼檢查，但只用一句話解釋「重複的連續 1」。實際規則是：元素大小 2 到 64 bits，元素內是連續的 1 經過旋轉，再重複填滿暫存器。</li>
-      <li><strong>LLVM 的其他組合技巧。</strong>AArch64 還有「兩個邏輯立即值做 AND 或 EOR」等兩條的組合；RISC-V 在上下 32 位元相同時會用第二個暫存器做 <code>slli</code> + <code>add</code>。這些在模擬裡沒做，碰到時頁面會標出來。開 Zba、Zbs 擴充後 RISC-V 還有更多短路徑。</li>
-      <li><strong>浮點常數</strong>完全是另一套：AArch64 有 8 bits 的 <code>fmov</code> 立即值，x86 和 RISC-V 都要從記憶體或整數暫存器搬。</li>
-      <li><strong>編譯器會把重複的常數留在暫存器裡</strong>（rematerialization 與 CSE），真實程式裡一個常數不會每次用都重新物化。這裡每次都從零開始算。</li>
+      <li>常數池與 PC-relative load。RISC-V 超過兩條時 clang 預設改成 <code>lui</code> + <code>ld</code> 從附近的資料區讀，AArch64 也有 <code>ldr x0, =imm</code> 偽指令走常數池。這裡 RISC-V 只標註，沒有把記憶體存取的代價畫出來。</li>
+      <li>AArch64 bitmask immediate 的完整規則是：元素大小 2 到 64 bits，元素內是連續的 1 經過旋轉，再重複填滿暫存器。這裡實作了 LLVM 的編碼檢查，但只用一句話解釋。</li>
+      <li>LLVM 的其他組合技巧：AArch64 的「兩個邏輯立即值做 AND 或 EOR」，RISC-V 在上下 32 位元相同時用第二個暫存器做 <code>slli</code> + <code>add</code>，以及 Zba、Zbs 擴充的短路徑。模擬裡沒做，碰到時頁面會標出來。</li>
+      <li>浮點常數完全是另一套：AArch64 有 8 bits 的 <code>fmov</code> 立即值，x86 和 RISC-V 都要從記憶體或整數暫存器搬。</li>
+      <li>編譯器會把重複的常數留在暫存器裡（rematerialization 與 CSE），真實程式裡一個常數不會每次用都重新物化。</li>
     </ul>
   </section>
 </main>

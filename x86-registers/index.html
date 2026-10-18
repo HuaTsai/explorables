@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>x86-64 暫存器地圖</title>
-<meta name="description" content="點開每一個 x86-64 暫存器,看它的別名怎麼疊、在 SysV 和 Win64 下各扮演什麼角色,再用幾個 C 函式逐步看參數怎麼進暫存器。">
+<meta name="description" content="點開每一個 x86-64 暫存器，看它的別名怎麼疊、在 SysV 和 Win64 下各扮演什麼角色，再用幾個 C 函式逐步看參數怎麼進暫存器。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
 <style>
 /* Layout: one reading column. Two workbenches — the register map (click a register, see
@@ -44,7 +44,7 @@ h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-w
 h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
 h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
 h3 { font-size: 1rem; margin: 0; }
-p { margin: 0; max-width: 38em; }
+p { margin: 0; }
 .lead { color: var(--muted); margin-top: 0.75rem; }
 .prose { display: flex; flex-direction: column; gap: 0.75rem; }
 code, .mono { font-family: var(--font-mono); }
@@ -198,13 +198,13 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
   <header>
     <a class="back" href="../">← Explorables</a>
     <h1><span class="mono">x86-64</span> 暫存器地圖</h1>
-    <p class="lead">CPU 只認得指令,它不知道哪個暫存器該放參數。那些是 ABI 的約定。點開每一個暫存器看它的別名怎麼疊、兩套 ABI 各給它什麼角色,再用幾個 C 函式逐步看參數怎麼進去。</p>
+    <p class="lead">CPU 只認得指令，它不知道哪個暫存器該放參數。那些是 ABI 的約定。點開每一個暫存器看它的別名怎麼疊、兩套 ABI 各給它什麼角色，再用幾個 C 函式逐步看參數怎麼進去。</p>
   </header>
 
   <section class="prose">
-    <h2>硬體給的是格子,ABI 決定格子怎麼用</h2>
-    <p>x86-64 有 16 個 64 位元通用暫存器,每一個對 CPU 來說地位相同。<code>mov rdi, 5</code> 和 <code>mov rcx, 5</code> 都是合法指令,CPU 不會偏好哪一個。</p>
-    <p>但編譯器需要一個約定,讓 caller 和 callee 對得上:參數放哪、回傳值放哪、呼叫過後哪些暫存器還能信。最後這一點把 <code>rsp</code> 以外的每個暫存器分成兩類:<i class="k">callee-saved</i> 是被呼叫的函式要負責還原的,<i class="l">caller-saved</i> 是呼叫方自己要先存好的。參數和回傳值暫存器都屬於後者。Linux、macOS、BSD 用 <strong>System V AMD64 psABI</strong>,Windows 用自己的 <strong>Microsoft x64</strong>。下面的地圖可以切換兩套標籤,同一批暫存器會換上不同顏色。</p>
+    <h2>硬體給的是格子，ABI 決定格子怎麼用</h2>
+    <p>x86-64 有 16 個 64 位元通用暫存器，每一個對 CPU 來說地位相同。<code>mov rdi, 5</code> 和 <code>mov rcx, 5</code> 都是合法指令，CPU 不會偏好哪一個。</p>
+    <p>但編譯器需要一個約定，讓 caller 和 callee 對得上：參數放哪、回傳值放哪、呼叫過後哪些暫存器還能信。最後這一點把 <code>rsp</code> 以外的每個暫存器分成兩類：<i class="k">callee-saved</i> 是被呼叫的函式要負責還原的，<i class="l">caller-saved</i> 是呼叫方自己要先存好的。參數和回傳值暫存器都屬於後者。Linux、macOS、BSD 用 <strong>System V AMD64 psABI</strong>,Windows 用自己的 <strong>Microsoft x64</strong>。下面的地圖可以切換兩套標籤，同一批暫存器會換上不同顏色。</p>
   </section>
 
   <section class="bench" aria-label="暫存器地圖">
@@ -227,21 +227,21 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
       <div class="grid" id="grid-gpr"></div>
       <p class="grid-title">控制</p>
       <div class="grid" id="grid-ctl"></div>
-      <p class="grid-title">向量 / 浮點 · 128-bit · 16 個(AVX-512 下 32 個)</p>
+      <p class="grid-title">向量 / 浮點 · 128-bit · 16 個（AVX-512 下 32 個）</p>
       <div class="grid" id="grid-xmm"></div>
     </div>
     <div class="row detail" id="detail"></div>
   </section>
 
   <section class="prose">
-    <h2>別名不是副本,是同一塊的一部分</h2>
-    <p><code>eax</code> 就是 <code>rax</code> 的低 32 位元,<code>ax</code> 是低 16 位元,<code>al</code> 是最低 8 位元。寫 <code>al</code> 會直接改到 <code>rax</code> 的最低一個 byte。這是 8086 → 80386 → x86-64 三代擴充留下來的疊層。</p>
-    <p>唯一一條不對稱的規則:<strong>寫 32 位元別名會把高 32 位元清零</strong>,寫 16 或 8 位元別名則保留高位元不動。所以 <code>mov eax, 1</code> 之後整個 <code>rax</code> 就是 1,編譯器也因此常用 <code>xor eax, eax</code> 來清空 <code>rax</code>,省一個 byte。</p>
+    <h2>別名不是副本，是同一塊的一部分</h2>
+    <p><code>eax</code> 就是 <code>rax</code> 的低 32 位元，<code>ax</code> 是低 16 位元，<code>al</code> 是最低 8 位元。寫 <code>al</code> 會直接改到 <code>rax</code> 的最低一個 byte。這是 8086 → 80386 → x86-64 三代擴充留下來的疊層。</p>
+    <p>唯一一條不對稱的規則：<strong>寫 32 位元別名會把高 32 位元清零</strong>，寫 16 或 8 位元別名則保留高位元不動。所以 <code>mov eax, 1</code> 之後整個 <code>rax</code> 就是 1，編譯器也因此常用 <code>xor eax, eax</code> 來清空 <code>rax</code>，省一個 byte。</p>
   </section>
 
   <section class="prose">
     <h2>用 C 函式看參數怎麼進暫存器</h2>
-    <p>下面四個函式都用 <code>clang -O1</code> 編譯,一次指定 <code>--target=x86_64-linux-gnu</code>、一次 <code>--target=x86_64-pc-windows-msvc</code>。C 原始碼一模一樣,只有 ABI 不同。按「下一步」逐條執行,<i class="l">粉色</i>是這一步讀到的暫存器,<i class="r">綠色</i>是寫入的。</p>
+    <p>下面四個函式都用 <code>clang -O1</code> 編譯，一次指定 <code>--target=x86_64-linux-gnu</code>、一次 <code>--target=x86_64-pc-windows-msvc</code>。C 原始碼一模一樣，只有 ABI 不同。按「下一步」逐條執行，<i class="l">粉色</i>是這一步讀到的暫存器，<i class="r">綠色</i>是寫入的。</p>
   </section>
 
   <section class="bench" aria-label="逐步執行">
@@ -283,7 +283,7 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
 
   <section class="prose">
     <h2>其他架構怎麼約定</h2>
-    <p>換一顆 CPU,格子的數量和名字都不同,但「參數放哪、回傳放哪、誰負責保存」這三個問題一樣要有人回答。RISC-V 乾脆把 ABI 角色烙進名字裡,組語寫 <code>a0</code> 而不是 <code>x10</code>。NVPTX 更極端,它根本不是真的暫存器,而是給後端分配用的無上限虛擬名字。</p>
+    <p>換一顆 CPU，格子的數量和名字都不同，但「參數放哪、回傳放哪、誰負責保存」這三個問題一樣要有人回答。RISC-V 乾脆把 ABI 角色烙進名字裡，組語寫 <code>a0</code> 而不是 <code>x10</code>。NVPTX 更極端，它根本不是真的暫存器，而是給後端分配用的無上限虛擬名字。</p>
     <div class="table-wrap">
       <table>
         <thead><tr><th>目標</th><th>通用暫存器</th><th>整數參數</th><th>整數回傳</th><th>浮點參數</th><th>callee-saved</th></tr></thead>
@@ -292,21 +292,28 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
           <tr><td>x86-64 Win64</td><td>16</td><td class="mono">rcx rdx r8 r9</td><td class="mono">rax</td><td class="mono">xmm0–3(按位置)</td><td class="mono">rbx rbp rsi rdi r12–r15 xmm6–15</td></tr>
           <tr><td>AArch64 AAPCS64</td><td>31 + sp</td><td class="mono">x0–x7</td><td class="mono">x0 (x1)</td><td class="mono">v0–v7</td><td class="mono">x19–x28 x29(fp) x30(lr)</td></tr>
           <tr><td>RISC-V LP64D</td><td>32</td><td class="mono">a0–a7 (x10–x17)</td><td class="mono">a0 (a1)</td><td class="mono">fa0–fa7</td><td class="mono">s0–s11 sp</td></tr>
-          <tr><td>NVPTX</td><td>無上限虛擬 %r %rd %f %fd</td><td colspan="4">kernel 參數放 param space,由 <code>ld.param</code> 讀入;device 函式呼叫多半被 inline,真正的實體暫存器由 ptxas 分配</td></tr>
+          <tr><td>NVPTX</td><td>無上限虛擬 %r %rd %f %fd</td><td colspan="4">kernel 參數放 param space，由 <code>ld.param</code> 讀入；device 函式呼叫多半被 inline，真正的實體暫存器由 ptxas 分配</td></tr>
         </tbody>
       </table>
     </div>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>十六個通用暫存器對 CPU 是平等的，參數、回傳值、callee-saved 這些角色都是 ABI 的約定，所以同一份 C 原始碼在 SysV 和 Win64 下會編出不同的暫存器用法。別名是同一塊的一部分，不是副本；寫 32 位元別名會清掉高 32 位元，寫 16 或 8 位元不會。</p>
+    <p><code>call</code> 和 <code>ret</code> 怎麼搬動 <code>rsp</code> 和 <code>rip</code>、frame 怎麼疊，在<a href="../call-stack/">函式呼叫與 stack</a> 那一頁；暫存器數量和呼叫慣例在三個 ISA 之間怎麼取捨，在 <a href="../isa/">ISA 比較</a>系列。</p>
+    <p>範例只用整數和指標參數，沒有浮點、struct 傳值和可變參數的規則；地圖只畫通用、控制和向量暫存器，其餘的列在下面的「地圖上沒畫的暫存器」裡。</p>
   </section>
 
   <details>
     <summary>地圖上沒畫的暫存器</summary>
     <ul>
       <li><strong>區段暫存器</strong> <code>cs ds es ss fs gs</code>:64-bit 模式下前四個基底固定為 0。<code>fs</code>、<code>gs</code> 保留 base,Linux 用 <code>fs</code> 指向 thread-local storage,Windows 用 <code>gs</code> 指向 TEB。</li>
-      <li><strong>x87 / MMX</strong> <code>st0–st7</code>、<code>mm0–mm7</code>:80-bit 浮點堆疊,<code>long double</code> 才會用到。MMX 和 x87 共用同一塊實體空間。</li>
-      <li><strong>AVX-512 遮罩</strong> <code>k0–k7</code>:向量指令的 per-lane 開關,<code>k0</code> 代表不遮罩。</li>
-      <li><strong>APX</strong> <code>r16–r31</code>:2024 年起 Intel 新增的 16 個通用暫存器,需要 CPU 與 OS 支援,還不在 SysV 預設 ABI 內。</li>
-      <li><strong>AMX</strong> <code>tmm0–tmm7</code>:每個最大 1 KB 的矩陣 tile。</li>
-      <li><strong>只有 kernel 能碰的</strong>:控制暫存器 <code>cr0 cr2 cr3 cr4 cr8</code>、除錯暫存器 <code>dr0–dr7</code>、描述表 <code>gdtr idtr ldtr tr</code>、以及用 <code>rdmsr</code>/<code>wrmsr</code> 存取的上千個 MSR(例如 <code>IA32_EFER</code>、<code>IA32_LSTAR</code>)。</li>
+      <li><strong>x87 / MMX</strong> <code>st0–st7</code>、<code>mm0–mm7</code>:80-bit 浮點堆疊，<code>long double</code> 才會用到。MMX 和 x87 共用同一塊實體空間。</li>
+      <li><strong>AVX-512 遮罩</strong> <code>k0–k7</code>：向量指令的 per-lane 開關，<code>k0</code> 代表不遮罩。</li>
+      <li><strong>APX</strong> <code>r16–r31</code>:2024 年起 Intel 新增的 16 個通用暫存器，需要 CPU 與 OS 支援，還不在 SysV 預設 ABI 內。</li>
+      <li><strong>AMX</strong> <code>tmm0–tmm7</code>：每個最大 1 KB 的矩陣 tile。</li>
+      <li><strong>只有 kernel 能碰的</strong>：控制暫存器 <code>cr0 cr2 cr3 cr4 cr8</code>、除錯暫存器 <code>dr0–dr7</code>、描述表 <code>gdtr idtr ldtr tr</code>、以及用 <code>rdmsr</code>/<code>wrmsr</code> 存取的上千個 MSR(例如 <code>IA32_EFER</code>、<code>IA32_LSTAR</code>)。</li>
     </ul>
   </details>
 </main>
@@ -330,22 +337,22 @@ function aliasesOf(r) {
 }
 
 const NOTES = {
-  rax: ['乘除法的隱含運算元:<code>mul</code>/<code>div</code> 用 <code>rdx:rax</code> 當 128 位元的被乘數或被除數。', 'Linux syscall 編號放這裡,回來後也從這裡拿回傳值。', 'SysV 呼叫可變參數函式(如 <code>printf</code>)時,<code>al</code> 要先填入用了幾個 xmm 暫存器。'],
-  rbx: ['最早的「base」暫存器,現在沒有特殊硬體用途。', '兩套 ABI 都列為 callee-saved,所以常被編譯器拿來放要跨越 <code>call</code> 的值。'],
-  rcx: ['<code>shl</code>/<code>shr</code> 的可變位移量只能放 <code>cl</code>。', '<code>rep movsb</code> 這類字串指令用 <code>rcx</code> 當計數。', '<code>syscall</code> 指令會覆寫它(存返回位址),所以 SysV 把它排在第 4 個參數,避開 syscall 的前三個參數。'],
-  rdx: ['乘除法的高 64 位元;<code>cqo</code> 把 <code>rax</code> 的符號擴充進來。', '<code>in</code>/<code>out</code> 的 I/O port 編號。', 'SysV 回傳 128 位元值(如 <code>__int128</code>)時當第 2 個回傳暫存器。'],
-  rsi: ['Source Index:字串指令 <code>movs</code>/<code>lods</code> 的來源指標。', 'SysV 當第 2 個參數,Win64 卻是 callee-saved,兩套 ABI 的角色完全相反。'],
-  rdi: ['Destination Index:字串指令 <code>movs</code>/<code>stos</code> 的目的指標。', 'SysV 的第 1 個參數,Win64 的 callee-saved。'],
-  rbp: ['傳統上是 frame pointer,指向目前 stack frame 的底。', '開 <code>-fomit-frame-pointer</code>(<code>-O1</code> 以上預設)後就是一個普通的 callee-saved 暫存器。'],
-  rsp: ['<code>push</code>/<code>pop</code>/<code>call</code>/<code>ret</code> 都會隱含修改它。', 'SysV 要求執行 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數,所以常看到看似多餘的 <code>push rax</code> 或 <code>sub rsp, 8</code>。', '定址時不能當 index 暫存器,只能當 base。'],
-  r8: ['x86-64 新增,用到需要 REX prefix,指令多 1 byte。'],
-  r9: ['x86-64 新增,用到需要 REX prefix,指令多 1 byte。'],
-  r10: ['SysV 下是 caller-saved,但不傳參數;編譯器用來放 static chain(巢狀函式)。', 'Linux syscall 的第 4 個參數用 <code>r10</code> 而不是 <code>rcx</code>,因為 <code>rcx</code> 會被 <code>syscall</code> 指令覆寫。'],
-  r11: ['<code>syscall</code> 指令會把 <code>rflags</code> 存進來,所以兩套 ABI 都當它是 caller-saved。', 'PLT 跳板也會用它當暫時暫存器。'],
+  rax: ['乘除法的隱含運算元：<code>mul</code>/<code>div</code> 用 <code>rdx:rax</code> 當 128 位元的被乘數或被除數。', 'Linux syscall 編號放這裡，回來後也從這裡拿回傳值。', 'SysV 呼叫可變參數函式(如 <code>printf</code>)時，<code>al</code> 要先填入用了幾個 xmm 暫存器。'],
+  rbx: ['最早的「base」暫存器，現在沒有特殊硬體用途。', '兩套 ABI 都列為 callee-saved，所以常被編譯器拿來放要跨越 <code>call</code> 的值。'],
+  rcx: ['<code>shl</code>/<code>shr</code> 的可變位移量只能放 <code>cl</code>。', '<code>rep movsb</code> 這類字串指令用 <code>rcx</code> 當計數。', '<code>syscall</code> 指令會覆寫它（存返回位址），所以 SysV 把它排在第 4 個參數，避開 syscall 的前三個參數。'],
+  rdx: ['乘除法的高 64 位元；<code>cqo</code> 把 <code>rax</code> 的符號擴充進來。', '<code>in</code>/<code>out</code> 的 I/O port 編號。', 'SysV 回傳 128 位元值(如 <code>__int128</code>)時當第 2 個回傳暫存器。'],
+  rsi: ['Source Index：字串指令 <code>movs</code>/<code>lods</code> 的來源指標。', 'SysV 當第 2 個參數，Win64 卻是 callee-saved，兩套 ABI 的角色完全相反。'],
+  rdi: ['Destination Index：字串指令 <code>movs</code>/<code>stos</code> 的目的指標。', 'SysV 的第 1 個參數，Win64 的 callee-saved。'],
+  rbp: ['傳統上是 frame pointer，指向目前 stack frame 的底。', '開 <code>-fomit-frame-pointer</code>(<code>-O1</code> 以上預設)後就是一個普通的 callee-saved 暫存器。'],
+  rsp: ['<code>push</code>/<code>pop</code>/<code>call</code>/<code>ret</code> 都會隱含修改它。', 'SysV 要求執行 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數，所以常看到看似多餘的 <code>push rax</code> 或 <code>sub rsp, 8</code>。', '定址時不能當 index 暫存器，只能當 base。'],
+  r8: ['x86-64 新增，用到需要 REX prefix，指令多 1 byte。'],
+  r9: ['x86-64 新增，用到需要 REX prefix，指令多 1 byte。'],
+  r10: ['SysV 下是 caller-saved，但不傳參數；編譯器用來放 static chain(巢狀函式)。', 'Linux syscall 的第 4 個參數用 <code>r10</code> 而不是 <code>rcx</code>，因為 <code>rcx</code> 會被 <code>syscall</code> 指令覆寫。'],
+  r11: ['<code>syscall</code> 指令會把 <code>rflags</code> 存進來，所以兩套 ABI 都當它是 caller-saved。', 'PLT 跳板也會用它當暫時暫存器。'],
   r12: ['定址時當 base 需要額外的 SIB byte(和 <code>rsp</code> 編碼衝突)。'],
   r13: ['定址時沒有位移量也要補一個 0 位移(和 <code>rbp</code> 編碼衝突)。'],
-  r14: ['x86-64 新增,callee-saved。'],
-  r15: ['x86-64 新增,callee-saved;PIC 程式碼在 32-bit 時代用 <code>ebx</code> 放 GOT,64-bit 改用 <code>rip</code> 相對定址後不再需要。'],
+  r14: ['x86-64 新增，callee-saved。'],
+  r15: ['x86-64 新增，callee-saved;PIC 程式碼在 32-bit 時代用 <code>ebx</code> 放 GOT,64-bit 改用 <code>rip</code> 相對定址後不再需要。'],
 };
 
 const ROLES = {
@@ -378,7 +385,7 @@ const ABI_NAME = { sysv: 'SysV', win64: 'Win64' };
 
 function roleOf(abi, r) {
   const o = r.startsWith('xmm') ? ROLES[abi].xmm(Number(r.slice(3))) : (ROLES[abi][r] || { k: 'caller', t: '一般用途' });
-  // 參數、回傳值都是 caller-saved 的子集合;rsp 兩邊都不是
+  // 參數、回傳值都是 caller-saved 的子集合；rsp 兩邊都不是
   const save = o.k === 'callee' ? 'callee-saved' : o.k === 'sp' ? '—' : 'caller-saved';
   return { ...o, save };
 }
@@ -426,42 +433,42 @@ function renderDetail() {
   if (GPR.includes(r)) {
     const al = aliasesOf(r);
     html = `<div><h3>${r}<small>64-bit 通用暫存器</small></h3>
-      <p class="empty">同一塊 64 位元,從不同寬度看就有不同名字。寫 <code>${al[1].n}</code> 會把高 32 位元清零;寫 <code>${al[2].n}</code>、<code>${al[3].n}</code>${al[4] ? `、<code>${al[4].n}</code>` : ''} 則保留其他位元。</p>
+      <p class="empty">同一塊 64 位元，從不同寬度看就有不同名字。寫 <code>${al[1].n}</code> 會把高 32 位元清零；寫 <code>${al[2].n}</code>、<code>${al[3].n}</code>${al[4] ? `、<code>${al[4].n}</code>` : ''} 則保留其他位元。</p>
       ${aliasDiagram(al, 64)}
-      ${al[4] ? `<p class="empty" style="margin-top:0.5rem"><code>${al[4].n}</code> 是 8086 留下的「高 8 位元」。同一條指令裡不能同時用它和 <code>sil</code>、<code>dil</code>、<code>bpl</code>、<code>spl</code>、<code>r8b</code>–<code>r15b</code>,因為後者需要 REX prefix,而 REX 一出現,原本代表 <code>${al[4].n}</code> 的編碼就變成 <code>${al[0].n.slice(1) === 'ax' ? 'spl' : al[0].n.slice(1) === 'cx' ? 'bpl' : al[0].n.slice(1) === 'dx' ? 'sil' : 'dil'}</code>。</p>` : ''}
+      ${al[4] ? `<p class="empty" style="margin-top:0.5rem"><code>${al[4].n}</code> 是 8086 留下的「高 8 位元」。同一條指令裡不能同時用它和 <code>sil</code>、<code>dil</code>、<code>bpl</code>、<code>spl</code>、<code>r8b</code>–<code>r15b</code>，因為後者需要 REX prefix，而 REX 一出現，原本代表 <code>${al[4].n}</code> 的編碼就變成 <code>${al[0].n.slice(1) === 'ax' ? 'spl' : al[0].n.slice(1) === 'cx' ? 'bpl' : al[0].n.slice(1) === 'dx' ? 'sil' : 'dil'}</code>。</p>` : ''}
     </div>
     <div><h3>ABI 角色</h3>${roleCards(r)}
       <ul class="notes">${(NOTES[r] || []).map(n => `<li>${n}</li>`).join('')}</ul></div>`;
   } else if (r.startsWith('xmm')) {
     const i = r.slice(3);
     html = `<div><h3>${r}<small>128-bit 向量暫存器</small></h3>
-      <p class="empty">SSE 看到的是 128 位元 <code>xmm${i}</code>,AVX 把它延伸成 256 位元 <code>ymm${i}</code>,AVX-512 再延伸成 512 位元 <code>zmm${i}</code>,同時多出 <code>xmm16</code>–<code>xmm31</code>。純量 <code>double</code> 只用最低 64 位元,<code>float</code> 只用最低 32 位元。</p>
+      <p class="empty">SSE 看到的是 128 位元 <code>xmm${i}</code>,AVX 把它延伸成 256 位元 <code>ymm${i}</code>,AVX-512 再延伸成 512 位元 <code>zmm${i}</code>，同時多出 <code>xmm16</code>–<code>xmm31</code>。純量 <code>double</code> 只用最低 64 位元，<code>float</code> 只用最低 32 位元。</p>
       ${aliasDiagram([{ n: 'zmm' + i, b: 512 }, { n: 'ymm' + i, b: 256 }, { n: 'xmm' + i, b: 128 }], 512)}
     </div>
     <div><h3>ABI 角色</h3>${roleCards(r)}
       <ul class="notes">
-        <li>SysV:前 8 個傳浮點參數,<code>xmm0</code>/<code>xmm1</code> 回傳,全部 caller-saved,呼叫過後一個都不能信。</li>
-        <li>Win64:只有 4 個傳參數,而且按參數「位置」對應,第 2 個參數若是浮點就用 <code>xmm1</code>,不管前面有沒有浮點。<code>xmm6</code>–<code>xmm15</code> 的低 128 位元是 callee-saved。</li>
+        <li>SysV：前 8 個傳浮點參數，<code>xmm0</code>/<code>xmm1</code> 回傳，全部 caller-saved，呼叫過後一個都不能信。</li>
+        <li>Win64：只有 4 個傳參數，而且按參數「位置」對應，第 2 個參數若是浮點就用 <code>xmm1</code>，不管前面有沒有浮點。<code>xmm6</code>–<code>xmm15</code> 的低 128 位元是 callee-saved。</li>
         <li>向量化後的 <code>memcpy</code>、<code>strlen</code> 以及所有 SIMD 運算都在這裡。</li>
       </ul></div>`;
   } else if (r === 'rip') {
     html = `<div><h3>rip<small>指令指標</small></h3>
-      <p class="empty">下一條要執行的指令位址。不能直接 <code>mov</code> 它,只能靠 <code>jmp</code>、<code>call</code>、<code>ret</code>、分支間接改變。</p></div>
+      <p class="empty">下一條要執行的指令位址。不能直接 <code>mov</code> 它，只能靠 <code>jmp</code>、<code>call</code>、<code>ret</code>、分支間接改變。</p></div>
     <div><h3>備註</h3><ul class="notes">
-      <li>x86-64 新增 <code>rip</code> 相對定址:<code>mov rax, [rip + foo]</code>,讓位置無關程式碼(PIC)不需要 GOT 暫存器。你在 <code>-O2</code> 的組語裡看到的 <code>lea rdi, [rip + .L.str]</code> 就是這個。</li>
+      <li>x86-64 新增 <code>rip</code> 相對定址：<code>mov rax, [rip + foo]</code>，讓位置無關程式碼（PIC）不需要 GOT 暫存器。你在 <code>-O2</code> 的組語裡看到的 <code>lea rdi, [rip + .L.str]</code> 就是這個。</li>
       <li><code>call</code> 把下一條指令的位址(也就是當時的 <code>rip</code>)push 到 stack,<code>ret</code> 再 pop 回來。</li>
-      <li>ABI 不給它角色,因為沒有人能直接指定它。</li></ul></div>`;
+      <li>ABI 不給它角色，因為沒有人能直接指定它。</li></ul></div>`;
   } else if (r === 'rflags') {
     html = `<div><h3>rflags<small>狀態與控制旗標</small></h3>
-      <p class="empty">算術指令會更新它,條件跳躍讀它。<code>cmp a, b</code> 其實就是做 <code>a - b</code> 然後只留旗標。</p>
+      <p class="empty">算術指令會更新它，條件跳躍讀它。<code>cmp a, b</code> 其實就是做 <code>a - b</code> 然後只留旗標。</p>
       <div class="flags">
         <span>CF<small>進位</small></span><span>PF<small>同位</small></span><span>AF<small>輔助進位</small></span><span>ZF<small>為零</small></span>
         <span>SF<small>符號</small></span><span>TF<small>單步</small></span><span>IF<small>中斷</small></span><span>DF<small>字串方向</small></span><span>OF<small>溢位</small></span>
       </div></div>
     <div><h3>備註</h3><ul class="notes">
-      <li>兩套 ABI 都規定:函式進入與離開時 <code>DF</code> 必須是 0,其他算術旗標不保證,算 caller-saved。</li>
-      <li><code>lea</code> 不更新旗標,<code>add</code> 會。所以編譯器喜歡用 <code>lea rax, [rdi + rsi]</code> 做加法,不會打亂前面 <code>cmp</code> 留下的結果。</li>
-      <li><code>pushfq</code>/<code>popfq</code> 可以整個存取;<code>IF</code>、<code>IOPL</code> 這些只有 kernel 能改。</li></ul></div>`;
+      <li>兩套 ABI 都規定：函式進入與離開時 <code>DF</code> 必須是 0，其他算術旗標不保證，算 caller-saved。</li>
+      <li><code>lea</code> 不更新旗標，<code>add</code> 會。所以編譯器喜歡用 <code>lea rax, [rdi + rsi]</code> 做加法，不會打亂前面 <code>cmp</code> 留下的結果。</li>
+      <li><code>pushfq</code>/<code>popfq</code> 可以整個存取；<code>IF</code>、<code>IOPL</code> 這些只有 kernel 能改。</li></ul></div>`;
   }
   $('detail').innerHTML = html;
 }
@@ -477,16 +484,16 @@ const PRESETS = [
       win64: ['lea rax, [rcx + rdx]', 'add rax, r8', 'ret'],
     },
     entry: {
-      sysv: 'caller 已經把 a、b、c 依序放進 rdi、rsi、rdx,然後 call 進來。[rsp] 是 call 留下的返回位址。',
-      win64: '同一份 C,caller 改放 rcx、rdx、r8。Win64 還要求 caller 在返回位址上方預留 32 bytes 的 shadow space,即使只有 3 個參數。',
+      sysv: 'caller 已經把 a、b、c 依序放進 rdi、rsi、rdx，然後 call 進來。[rsp] 是 call 留下的返回位址。',
+      win64: '同一份 C,caller 改放 rcx、rdx、r8。Win64 還要求 caller 在返回位址上方預留 32 bytes 的 shadow space，即使只有 3 個參數。',
     },
     notes: {
-      sysv: { 0: 'lea 本來是算位址的指令,這裡拿來當一條不影響旗標的加法,結果直接寫進回傳用的 rax。', 2: 'ret 從 [rsp] 取回返回位址跳回 caller。caller 會到 rax 拿結果。' },
-      win64: { 0: 'CPU 指令一模一樣,只是暫存器名字從 rdi、rsi 換成 rcx、rdx。這就是 ABI 的全部:約定,不是硬體。' },
+      sysv: { 0: 'lea 本來是算位址的指令，這裡拿來當一條不影響旗標的加法，結果直接寫進回傳用的 rax。', 2: 'ret 從 [rsp] 取回返回位址跳回 caller。caller 會到 rax 拿結果。' },
+      win64: { 0: 'CPU 指令一模一樣，只是暫存器名字從 rdi、rsi 換成 rcx、rdx。這就是 ABI 的全部：約定，不是硬體。' },
     },
   },
   {
-    id: 'sum8', label: 'sum8', title: '八個參數,暫存器不夠',
+    id: 'sum8', label: 'sum8', title: '八個參數，暫存器不夠',
     c: ['long long sum8(long long a, long long b, long long c, long long d,', '               long long e, long long f, long long g, long long h) {', '  return a + b + c + d + e + f + g + h;', '}'],
     args: [['a', 1], ['b', 2], ['c', 3], ['d', 4], ['e', 5], ['f', 6], ['g', 7], ['h', 8]],
     asm: {
@@ -494,12 +501,12 @@ const PRESETS = [
       win64: ['add rcx, rdx', 'lea rax, [r8 + r9]', 'add rax, rcx', 'add rax, qword ptr [rsp + 40]', 'add rax, qword ptr [rsp + 48]', 'add rax, qword ptr [rsp + 56]', 'add rax, qword ptr [rsp + 64]', 'ret'],
     },
     entry: {
-      sysv: 'SysV 給 6 個整數參數暫存器:rdi rsi rdx rcx r8 r9。第 7、8 個參數 g、h 由 caller 先 push 到 stack,所以 g 在 [rsp+8]、h 在 [rsp+16],[rsp] 是返回位址。',
-      win64: 'Win64 只有 4 個參數暫存器,e f g h 全部在 stack。加上 32 bytes shadow space 在 [rsp+8]~[rsp+32],e 要從 [rsp+40] 才開始。',
+      sysv: 'SysV 給 6 個整數參數暫存器：rdi rsi rdx rcx r8 r9。第 7、8 個參數 g、h 由 caller 先 push 到 stack，所以 g 在 [rsp+8]、h 在 [rsp+16],[rsp] 是返回位址。',
+      win64: 'Win64 只有 4 個參數暫存器，e f g h 全部在 stack。加上 32 bytes shadow space 在 [rsp+8]~[rsp+32],e 要從 [rsp+40] 才開始。',
     },
     notes: {
-      sysv: { 0: '編譯器可以直接把參數暫存器當暫時變數用,因為它們是 caller-saved,改了不用還原。', 5: '暫存器用完了,第 7 個參數 g 要從 stack 讀。記憶體存取比暫存器慢,所以 ABI 才盡量把參數塞進暫存器。' },
-      win64: { 3: '第 5 個參數 e 在 [rsp+40]:8 bytes 返回位址 + 32 bytes shadow space。shadow space 是給 callee 需要時把 rcx rdx r8 r9 存回 stack 用的,這個函式用不到就空著。' },
+      sysv: { 0: '編譯器可以直接把參數暫存器當暫時變數用，因為它們是 caller-saved，改了不用還原。', 5: '暫存器用完了，第 7 個參數 g 要從 stack 讀。記憶體存取比暫存器慢，所以 ABI 才盡量把參數塞進暫存器。' },
+      win64: { 3: '第 5 個參數 e 在 [rsp+40]:8 bytes 返回位址 + 32 bytes shadow space。shadow space 是給 callee 需要時把 rcx rdx r8 r9 存回 stack 用的，這個函式用不到就空著。' },
     },
   },
   {
@@ -511,12 +518,12 @@ const PRESETS = [
       win64: ['add rcx, r8', 'cvtsi2sd xmm0, rcx', 'subsd xmm1, xmm3', 'mulsd xmm0, xmm1', 'ret'],
     },
     entry: {
-      sysv: 'SysV 把整數和浮點排成兩條獨立的隊伍:n、m 依序拿 rdi、rsi,x、y 依序拿 xmm0、xmm1。型別交錯不影響各自的順位。',
-      win64: 'Win64 不分隊伍,而是按「位置」編號:第 1 個參數佔 slot 0,第 2 個佔 slot 1,依此類推。n→rcx(slot 0)、x→xmm1(slot 1)、m→r8(slot 2)、y→xmm3(slot 3)。xmm0、xmm2、rdx、r9 都空著。',
+      sysv: 'SysV 把整數和浮點排成兩條獨立的隊伍：n、m 依序拿 rdi、rsi,x、y 依序拿 xmm0、xmm1。型別交錯不影響各自的順位。',
+      win64: 'Win64 不分隊伍，而是按「位置」編號：第 1 個參數佔 slot 0，第 2 個佔 slot 1，依此類推。n→rcx(slot 0)、x→xmm1(slot 1)、m→r8(slot 2)、y→xmm3(slot 3)。xmm0、xmm2、rdx、r9 都空著。',
     },
     notes: {
-      sysv: { 1: '整數轉成 double,放進沒被參數佔用的 xmm2。', 3: '浮點回傳值放 xmm0,不是 rax。' },
-      win64: { 1: 'xmm0 沒被參數用到,正好當暫時變數。', 2: 'x 在 xmm1、y 在 xmm3,中間的 xmm2 是空的,因為位置 2 給了整數 m。' },
+      sysv: { 1: '整數轉成 double，放進沒被參數佔用的 xmm2。', 3: '浮點回傳值放 xmm0，不是 rax。' },
+      win64: { 1: 'xmm0 沒被參數用到，正好當暫時變數。', 2: 'x 在 xmm1、y 在 xmm3，中間的 xmm2 是空的，因為位置 2 給了整數 m。' },
     },
   },
   {
@@ -529,26 +536,26 @@ const PRESETS = [
       win64: ['push rsi', 'push rdi', 'sub rsp, 40', 'mov rsi, rcx', 'call helper', 'mov rdi, rax', 'inc rsi', 'mov rcx, rsi', 'call helper', 'add rax, rdi', 'add rsp, 40', 'pop rdi', 'pop rsi', 'ret'],
     },
     entry: {
-      sysv: 'a 在 rdi。這個函式中間要 call 兩次 helper。每一次 call 都可能破壞所有 caller-saved 暫存器,所以需要能跨越 call 存活的 callee-saved 暫存器來放 a 和第一次的結果。這裡假設 helper(v) = v × 10。',
-      win64: 'a 在 rcx。Win64 把 rsi、rdi 列為 callee-saved,所以編譯器拿它們當保險箱,跟 SysV 把它們當參數暫存器完全相反。這裡假設 helper(v) = v × 10。',
+      sysv: 'a 在 rdi。這個函式中間要 call 兩次 helper。每一次 call 都可能破壞所有 caller-saved 暫存器，所以需要能跨越 call 存活的 callee-saved 暫存器來放 a 和第一次的結果。這裡假設 helper(v) = v × 10。',
+      win64: 'a 在 rcx。Win64 把 rsi、rdi 列為 callee-saved，所以編譯器拿它們當保險箱，跟 SysV 把它們當參數暫存器完全相反。這裡假設 helper(v) = v × 10。',
     },
     notes: {
       sysv: {
-        0: '借用 r14 之前先把 caller 的 r14 存進 stack。這是 callee-saved 的義務:離開前要還原。',
-        2: '這不是為了保存 rax 的值。SysV 要求 call 時 rsp 必須 16 對齊,進來時差 8(返回位址),push 兩次後又差 8,所以再 push 一次湊數,比 sub rsp, 8 短 3 個 byte。',
-        3: 'a 搬進 rbx,因為 rdi 會被 helper 破壞。',
-        4: 'helper(5) 回來後 rax 是結果。rdi rsi rdx rcx r8–r11 全部視為被破壞(問號)。rbx、r14 由 helper 保證不變。',
-        5: '第一個結果先存到 r14,否則下一次 call 會覆蓋 rax。',
+        0: '借用 r14 之前先把 caller 的 r14 存進 stack。這是 callee-saved 的義務：離開前要還原。',
+        2: '這不是為了保存 rax 的值。SysV 要求 call 時 rsp 必須 16 對齊，進來時差 8(返回位址),push 兩次後又差 8，所以再 push 一次湊數，比 sub rsp, 8 短 3 個 byte。',
+        3: 'a 搬進 rbx，因為 rdi 會被 helper 破壞。',
+        4: 'helper(5) 回來後 rax 是結果。rdi rsi rdx rcx r8–r11 全部視為被破壞（問號）。rbx、r14 由 helper 保證不變。',
+        5: '第一個結果先存到 r14，否則下一次 call 會覆蓋 rax。',
         7: '第二次呼叫的參數 a+1 要重新放進 rdi。',
         10: '撤掉對齊用的 8 bytes。',
-        11: '照相反順序還原。離開時 rbx、r14 和進來時一模一樣,caller 完全感覺不到它們被借用過。',
+        11: '照相反順序還原。離開時 rbx、r14 和進來時一模一樣，caller 完全感覺不到它們被借用過。',
       },
       win64: {
-        2: '預留 32 bytes shadow space 給等一下要 call 的 helper,再加 8 湊 16 對齊,一共 40。',
-        3: 'a 搬進 rsi。在 SysV 下 rsi 是第 2 個參數暫存器,呼叫就會被破壞;在 Win64 下它是 callee-saved,可以放心跨越 call。',
-        4: 'helper(5) 回來後 rax 是結果。rcx rdx r8–r11 視為被破壞,rsi rdi 保證不變。',
+        2: '預留 32 bytes shadow space 給等一下要 call 的 helper，再加 8 湊 16 對齊，一共 40。',
+        3: 'a 搬進 rsi。在 SysV 下 rsi 是第 2 個參數暫存器，呼叫就會被破壞；在 Win64 下它是 callee-saved，可以放心跨越 call。',
+        4: 'helper(5) 回來後 rax 是結果。rcx rdx r8–r11 視為被破壞，rsi rdi 保證不變。',
         7: '第二次呼叫的參數 a+1 放回 rcx。',
-        11: '還原 rdi、rsi,離開時和進來時一模一樣。',
+        11: '還原 rdi、rsi，離開時和進來時一模一樣。',
       },
     },
   },
@@ -607,16 +614,16 @@ function execLine(state, line, preset, abi) {
   const pop = () => { const off = regs.rsp - state.RSP0; memRd.add(off); const s = mem.get(off); mem.delete(off); regs.rsp += 8; wr.add('rsp'); return s ? s.v : null; };
   let say = '';
   switch (mn) {
-    case 'lea': { const a = addrOf(ops[1]); set(ops[0].n, a); say = `把 ${ops[1].terms.join(' + ')} 的「位址」算出來放進 ${ops[0].n},實際上就是加法。`; break; }
+    case 'lea': { const a = addrOf(ops[1]); set(ops[0].n, a); say = `把 ${ops[1].terms.join(' + ')} 的「位址」算出來放進 ${ops[0].n}，實際上就是加法。`; break; }
     case 'add': { const b = val(ops[1]); rd.add(ops[0].n); set(ops[0].n, regs[ops[0].n] + b); say = `${ops[0].n} += ${fmtOp(ops[1])}。`; break; }
     case 'sub': { const b = val(ops[1]); rd.add(ops[0].n); set(ops[0].n, regs[ops[0].n] - b); say = `${ops[0].n} -= ${fmtOp(ops[1])}。`; break; }
     case 'inc': { rd.add(ops[0].n); set(ops[0].n, regs[ops[0].n] + 1); say = `${ops[0].n} += 1。`; break; }
     case 'mov': { const b = val(ops[1]); set(ops[0].n, b); say = `複製 ${fmtOp(ops[1])} 到 ${ops[0].n}。`; break; }
-    case 'push': { rd.add(ops[0].n); push(regs[ops[0].n], `saved ${ops[0].n}`); say = `rsp 減 8,把 ${ops[0].n} 的值存到 [rsp]。`; break; }
+    case 'push': { rd.add(ops[0].n); push(regs[ops[0].n], `saved ${ops[0].n}`); say = `rsp 減 8，把 ${ops[0].n} 的值存到 [rsp]。`; break; }
     case 'pop': { set(ops[0].n, pop()); say = `從 [rsp] 取回值放進 ${ops[0].n},rsp 加 8。`; break; }
     case 'cvtsi2sd': { const b = val(ops[1]); set(ops[0].n, Number(b)); say = `把整數 ${ops[1].n} 轉成 double 放進 ${ops[0].n}。`; break; }
-    case 'subsd': { rd.add(ops[0].n); const b = val(ops[1]); set(ops[0].n, regs[ops[0].n] - b); say = `${ops[0].n} -= ${ops[1].n}(純量 double)。`; break; }
-    case 'mulsd': { rd.add(ops[0].n); const b = val(ops[1]); set(ops[0].n, regs[ops[0].n] * b); say = `${ops[0].n} *= ${ops[1].n}(純量 double)。`; break; }
+    case 'subsd': { rd.add(ops[0].n); const b = val(ops[1]); set(ops[0].n, regs[ops[0].n] - b); say = `${ops[0].n} -= ${ops[1].n}（純量 double）。`; break; }
+    case 'mulsd': { rd.add(ops[0].n); const b = val(ops[1]); set(ops[0].n, regs[ops[0].n] * b); say = `${ops[0].n} *= ${ops[1].n}（純量 double）。`; break; }
     case 'call': {
       const argReg = ROLES[abi].intArgs[0];
       rd.add(argReg);
@@ -625,7 +632,7 @@ function execLine(state, line, preset, abi) {
       for (const r of ROLES[abi].clobber) if (r in regs) regs[r] = undefined;
       ROLES[abi].clobber.forEach(r => { if (r in regs) wr.add(r); });
       set('rax', result);
-      say = `呼叫 helper(${arg}),它從 ${argReg} 拿參數,結果 ${result} 放在 rax。`;
+      say = `呼叫 helper(${arg})，它從 ${argReg} 拿參數，結果 ${result} 放在 rax。`;
       break;
     }
     case 'ret': {
@@ -679,7 +686,7 @@ function renderStepper() {
   const top = st.state.regs.rsp - st.state.RSP0;
   const offs = [...st.state.mem.keys()].filter(o => o >= top).sort((a, b) => b - a);   // 低於 rsp 的已是死區
   const lowest = offs.length ? offs[offs.length - 1] : 8;
-  const reserved = lowest > top ? `<div class="slot top ${st.wr.has('rsp') ? 'wr' : ''}"><span class="addr">[entry rsp${top}] ← rsp</span><span class="shadow">預留 ${lowest - top} bytes:shadow space 給下一個 call,加上 16 對齊</span></div>` : '';
+  const reserved = lowest > top ? `<div class="slot top ${st.wr.has('rsp') ? 'wr' : ''}"><span class="addr">[entry rsp${top}] ← rsp</span><span class="shadow">預留 ${lowest - top} bytes:shadow space 給下一個 call，加上 16 對齊</span></div>` : '';
   $('stack').innerHTML = offs.map(o => {
     const s = st.state.mem.get(o);
     const cls = [o === top ? 'top' : '', st.memRd.has(o) ? 'rd' : '', st.memWr.has(o) ? 'wr' : ''].join(' ');
@@ -687,9 +694,9 @@ function renderStepper() {
     return `<div class="slot ${cls}"><span class="addr">[entry rsp${o >= 0 ? '+' : ''}${o}]${o === top ? ' ← rsp' : ''}</span><span>${body}</span></div>`;
   }).join('') + reserved || '<span class="empty">空</span>';
   if (st.state.done) {
-    $('stack').innerHTML += `<div class="slot"><span class="addr">[entry rsp+0]</span><span class="shadow">返回位址已被 ret 取走,rsp 回到 entry+8</span></div>`;
+    $('stack').innerHTML += `<div class="slot"><span class="addr">[entry rsp+0]</span><span class="shadow">返回位址已被 ret 取走，rsp 回到 entry+8</span></div>`;
   }
-  $('retline').innerHTML = st.state.done ? `<span class="r">回傳 ${fmt(st.state.retv[1])}</span>,透過 <code>${st.state.retv[0]}</code>` : '';
+  $('retline').innerHTML = st.state.done ? `<span class="r">回傳 ${fmt(st.state.retv[1])}</span>，透過 <code>${st.state.retv[0]}</code>` : '';
 
   $('say').textContent = st.say;
   $('btn-prev').disabled = cur === 0;

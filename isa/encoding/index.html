@@ -190,23 +190,17 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
   </div>
   <p class="foot">格式：bytes / 指令數。這四個函式太小，數字只能看趨勢；真實程式的 code density 統計大約是 x86-64 和 RV64GC 相近，AArch64 大 10% 到 20%，而 RV64G（關掉 C）會再大 25% 到 30%。</p>
 
-  <section class="prose three">
-    <h2>看完可以帶走的三句話</h2>
-    <ol>
-      <li><strong>變長編碼換的是密度。</strong>x86 的 <code>ret</code> 1 byte、小指令 2 到 3 bytes，常用的短、少用的長，像霍夫曼編碼。代價是解碼器讀到 ModRM 之前都不知道這條有多長，想同時解碼多條就得猜邊界、猜錯重來。現代 x86 核心靠 µop cache 把解過的結果存起來，才繞過這個瓶頸。</li>
-      <li><strong>定長編碼換的是解碼平行度。</strong>AArch64 的解碼器拿到 32 bytes 就知道有 8 條，每條的暫存器欄位都在固定位置，可以同時切。代價是 <code>ret</code> 也要 4 bytes，程式會胖一些，對快取和記憶體頻寬是壓力。</li>
-      <li><strong>RISC-V 用兩種長度折衷。</strong>只看 2 bits 就知道長度，解碼器依然簡單；常用指令壓到 2 bytes，密度和 x86 差不多。但 16 位元放不下三個 5 bit 暫存器編號，所以壓縮指令只能用 8 個熱門暫存器、或讓目的和來源共用同一個。</li>
-    </ol>
-  </section>
-
   <section class="prose">
-    <h2>這個模型省略了什麼</h2>
+    <h2>結語</h2>
+    <p>三種編碼換的是不同的東西。x86 的變長編碼換密度：常用的短、少用的長，像霍夫曼編碼，代價是解碼器讀到 ModRM 之前不知道這條有多長，想同時解碼多條就得猜邊界，現代核心靠 µop cache 繞過這個瓶頸。AArch64 的定長編碼換解碼平行度：拿到 32 bytes 就知道有 8 條，欄位位置固定，代價是 <code>ret</code> 也要 4 bytes。RISC-V 用兩種長度折衷：看 2 bits 就知道長度，常用指令壓到 2 bytes，但 16 位元放不下三個 5 bit 的暫存器編號，壓縮指令只能用 8 個熱門暫存器或讓目的和來源共用。</p>
+    <p>編碼長度直接決定了兩件事：指令裡放得下幾個暫存器編號，以及放得下多大的常數。前者是<a href="../registers/">暫存器</a>那一篇，後者是<a href="../immediates/">立即值</a>那一篇。解碼器拆出來的東西進了核心之後會變成什麼，見 <a href="../micro-ops/">micro-op</a>。</p>
+    <p>這一頁一次解一個 byte，而且只碰到最簡單的前綴，和真實解碼器差了幾件事：</p>
     <ul>
-      <li><strong>x86 的前綴遠不止 REX。</strong>這裡只碰到 REX（64 位元運算）。還有 operand-size、segment、LOCK、REP 等舊前綴，以及 SIMD 用的 VEX（2 到 3 bytes）和 EVEX（4 bytes）前綴。一條 AVX-512 指令輕易超過 10 bytes。</li>
-      <li><strong>真實解碼器不是一次一個 byte。</strong>x86 核心一個 cycle 抓 16 或 32 bytes，用平行的長度預測器同時猜好幾個起點，再丟掉猜錯的。這裡一步一 byte 是為了讓「什麼時候才知道長度」看得見。</li>
-      <li><strong>AArch64 有個變長的親戚。</strong>32 位元 ARM 的 Thumb-2 混用 2 和 4 bytes，想法和 RISC-V C 擴充接近。AArch64 設計時刻意拿掉它，換取解碼簡單。</li>
-      <li><strong>RISC-V 預留了更長的編碼。</strong>最低 5 bits 是 <code>11111</code> 的話是 48 位元或更長的指令，目前沒有標準擴充使用。這裡只處理 2 和 4 bytes。</li>
-      <li><strong>對齊與 fetch 邊界。</strong>變長指令會跨越快取行和 fetch 區塊，第二半要等下一次抓取。RISC-V 開 C 擴充後 4 byte 指令也可能落在 2 byte 對齊的位置，有同樣問題。這裡假設每條都抓得完整。</li>
+      <li>x86 的前綴遠不止 REX。還有 operand-size、segment、LOCK、REP 等舊前綴，以及 SIMD 用的 VEX（2 到 3 bytes）和 EVEX（4 bytes），一條 AVX-512 指令輕易超過 10 bytes。</li>
+      <li>真實解碼器一個 cycle 抓 16 或 32 bytes，用平行的長度預測器同時猜好幾個起點再丟掉猜錯的。一步一 byte 只是為了讓「什麼時候才知道長度」看得見。</li>
+      <li>32 位元 ARM 的 Thumb-2 混用 2 和 4 bytes，想法和 RISC-V 的 C 擴充接近；AArch64 設計時刻意拿掉它，換取解碼簡單。</li>
+      <li>RISC-V 預留了 48 位元或更長的編碼（最低 5 bits 是 <code>11111</code>），目前沒有標準擴充使用。</li>
+      <li>變長指令會跨越快取行和 fetch 區塊，第二半要等下一次抓取；RISC-V 開 C 擴充後 4 byte 指令也可能落在 2 byte 對齊的位置。這裡假設每條都抓得完整。</li>
     </ul>
   </section>
 </main>

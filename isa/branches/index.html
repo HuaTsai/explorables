@@ -241,23 +241,17 @@ ret</pre>
     <p>反過來看，flags 是一個<strong>所有算術指令都在寫的共用暫存器</strong>。亂序執行的核心要把它當成一個真正的暫存器來改名（rename），不然每條 <code>add</code> 都要等前一條 <code>add</code> 寫完 flags。更麻煩的是 x86 有些指令只改部分 flags（<code>inc</code> 不碰 CF），讀 flags 的指令就得把兩個來源合併，早年的 Pentium 4 為此付出過停頓。RISC-V 選擇不要這個暫存器，多字長算術多付兩條指令，換取每條指令的依賴關係都明明白白寫在暫存器編號裡。</p>
   </section>
 
-  <section class="prose three">
-    <h2>看完可以帶走的三句話</h2>
-    <ol>
-      <li><strong>flags 是一個隱藏的共用暫存器。</strong>它不出現在組語的運算元裡，但 cmp 寫它、jcc 讀它、add 也寫它。硬體要追蹤這個看不見的依賴，編譯器排程時要小心別在中間插入會改它的指令。</li>
-      <li><strong>RISC-V 把比較和跳轉綁在一起，用編碼空間換掉一整個狀態暫存器。</strong>分支指令多塞兩個 5 bit 的暫存器欄位，位移縮到 12 bits，但每條指令的輸入輸出都在暫存器編號裡，沒有隱藏狀態。</li>
-      <li><strong>有號和無號的差別只在看哪個 flag。</strong>同一條 cmp，看 SF 和 OF 是有號比較，看 CF 是無號比較。C 語言裡 <code>long</code> 和 <code>unsigned long</code> 的 <code>&lt;</code> 編出來的 cmp 一模一樣，只有後面的跳轉指令不同。</li>
-    </ol>
-  </section>
-
   <section class="prose">
-    <h2>這個模型省略了什麼</h2>
+    <h2>結語</h2>
+    <p>flags 是一個隱藏的共用暫存器：它不出現在組語的運算元裡，但 cmp 寫它、jcc 讀它、add 也寫它，硬體要追蹤這個看不見的依賴，編譯器排程時要小心別在中間插入會改它的指令。RISC-V 把比較和跳轉綁在一起，用編碼空間換掉一整個狀態暫存器：分支指令多塞兩個 5 bit 的暫存器欄位，位移縮到 12 bits，但每條指令的輸入輸出都在暫存器編號裡。有號和無號的差別只在看哪個 flag：同一條 cmp，看 SF 和 OF 是有號，看 CF 是無號，C 語言裡 <code>long</code> 和 <code>unsigned long</code> 的 <code>&lt;</code> 編出來的 cmp 一模一樣，只有跳轉指令不同。</p>
+    <p>RISC-V 為了塞進兩個暫存器欄位而縮短的位移，和 x86 可長可短的跳轉位移，是<a href="../encoding/">指令編碼</a>那一篇的主題。cmp 加條件跳轉進了核心會被合成一個 µop，三邊在這裡又變得相似，見 <a href="../micro-ops/">micro-op</a>。</p>
+    <p>這一頁故意讓編譯器產生真正的分支，而且只看四個 flag：</p>
     <ul>
-      <li><strong>條件搬移。</strong>短的 if 常被編成不跳轉的形式：x86 的 <code>cmov</code> 和 <code>setcc</code>、ARM 的 <code>csel</code> 和 <code>cset</code>、RISC-V 的 <code>slt</code> 加算術或 Zicond 擴充的 <code>czero</code>。這一頁用 <code>*p = 1</code> 這種有副作用的寫法逼編譯器產生真正的分支。</li>
-      <li><strong>其他會寫 flags 的指令。</strong>x86 的 <code>test</code>（做 AND 只留 flags）、ARM 的 <code>tst</code> 和 <code>ccmp</code>（條件比較，可以把兩個條件串成一次跳轉），以及所有算術指令。</li>
-      <li><strong>分支預測。</strong>三邊的硬體都在跳轉指令執行前就猜方向、先跑下去，猜錯再回頭。這一頁的「跳或不跳」是最終結果，不是硬體當下的猜測。</li>
-      <li><strong>專用的零比較。</strong>AArch64 有 <code>cbz</code> / <code>cbnz</code>（暫存器是不是零就跳）和 <code>tbz</code> / <code>tbnz</code>（某個 bit 是不是零就跳），不經過 flags。RISC-V 的 <code>beqz</code>、<code>bnez</code>、<code>bltz</code> 是偽指令，展開成和 x0 比較。</li>
-      <li><strong>x86 的 flags 不只四個。</strong>還有 PF（parity）、AF（輔助進位，BCD 用）、DF（字串方向）等，以及控制中斷和特權的位元。這裡只看分支會用到的四個。</li>
+      <li>短的 if 常被編成不跳轉的形式：x86 的 <code>cmov</code> 和 <code>setcc</code>、ARM 的 <code>csel</code> 和 <code>cset</code>、RISC-V 的 <code>slt</code> 加算術或 Zicond 擴充的 <code>czero</code>。這裡用 <code>*p = 1</code> 這種有副作用的寫法逼出分支。</li>
+      <li>其他會寫 flags 的指令：x86 的 <code>test</code>、ARM 的 <code>tst</code> 和 <code>ccmp</code>（可以把兩個條件串成一次跳轉），以及所有算術指令。</li>
+      <li>分支預測。三邊的硬體都在跳轉指令執行前就猜方向、先跑下去，猜錯再回頭。這裡的「跳或不跳」是最終結果，不是硬體當下的猜測。</li>
+      <li>專用的零比較：AArch64 的 <code>cbz</code>、<code>cbnz</code>、<code>tbz</code>、<code>tbnz</code> 不經過 flags；RISC-V 的 <code>beqz</code>、<code>bnez</code>、<code>bltz</code> 是偽指令，展開成和 x0 比較。</li>
+      <li>x86 的 flags 不只四個，還有 PF、AF、DF 等，以及控制中斷和特權的位元。這裡只看分支會用到的四個。</li>
     </ul>
   </section>
 </main>

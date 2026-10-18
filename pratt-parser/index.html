@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pratt Parser 逐步圖解</title>
-<meta name="description" content="逐步執行 Pratt parser,看每一步怎麼比較 l_bp 和 min_bp。">
+<meta name="description" content="逐步執行 Pratt parser，看每一步怎麼比較 l_bp 和 min_bp。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
 <style>
 /* Layout: one reading column; the stepper is a single workbench — token tape on top,
@@ -39,7 +39,7 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f
 h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
 h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
 h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; max-width: 38em; }
+p { margin: 0; }
 .lead { color: var(--muted); margin-top: 0.75rem; }
 .prose { display: flex; flex-direction: column; gap: 0.75rem; }
 code, .mono { font-family: var(--font-mono); }
@@ -153,13 +153,13 @@ td input { width: 4.5rem; font-family: var(--font-mono); font-size: 0.95rem; pad
   <header>
     <a class="back" href="../">← Explorables</a>
     <h1><span class="mono">Pratt Parser</span> 逐步圖解</h1>
-    <p class="lead">一個遞迴函式加一個迴圈,靠比較兩個數字決定運算元歸誰。按「下一步」看它怎麼解析一個式子。</p>
+    <p class="lead">一個遞迴函式加一個迴圈，靠比較兩個數字決定運算元歸誰。按「下一步」看它怎麼解析一個式子。</p>
   </header>
 
   <section class="prose">
     <h2>結合力怎麼比</h2>
-    <p>每個二元運算子有兩個數字:<i class="l">左側結合力 l_bp</i> 和 <i class="r">右側結合力 r_bp</i>,寫在下方紙帶的運算子兩側。運算元夾在兩個運算子中間時,左邊的運算子用右側結合力拉它,右邊的用左側結合力拉它,數字大的搶到。</p>
-    <p>程式裡的 <i class="r">min_bp</i> 就是「左邊那個運算子的右側結合力」。迴圈每遇到一個新運算子只做一件事:拿它的 <i class="l">l_bp</i> 跟 <i class="r">min_bp</i> 比。</p>
+    <p>每個二元運算子有兩個數字：<i class="l">左側結合力 l_bp</i> 和 <i class="r">右側結合力 r_bp</i>，寫在下方紙帶的運算子兩側。運算元夾在兩個運算子中間時，左邊的運算子用右側結合力拉它，右邊的用左側結合力拉它，數字大的搶到。</p>
+    <p>程式裡的 <i class="r">min_bp</i> 就是「左邊那個運算子的右側結合力」。迴圈每遇到一個新運算子只做一件事：拿它的 <i class="l">l_bp</i> 跟 <i class="r">min_bp</i> 比。</p>
   </section>
 
   <section class="bench" aria-label="逐步執行">
@@ -191,7 +191,7 @@ td input { width: 4.5rem; font-family: var(--font-mono); font-size: 0.95rem; pad
         <pre class="code"><code id="code"></code></pre>
       </div>
       <div class="panel">
-        <p class="panel-title">呼叫堆疊(最下面是目前這一層)</p>
+        <p class="panel-title">呼叫堆疊（最下面是目前這一層）</p>
         <div class="stack" id="stack"></div>
       </div>
     </div>
@@ -206,7 +206,7 @@ td input { width: 4.5rem; font-family: var(--font-mono); font-size: 0.95rem; pad
   <section class="tune">
     <div class="prose">
       <h2>改結合力試試看</h2>
-      <p>同一個運算子的右側比左側大就是左結合,反過來是右結合。不同層級的數字範圍通常不重疊。改下面的數字,上面的結果會立刻重算。</p>
+      <p>同一個運算子的右側比左側大就是左結合，反過來是右結合。不同層級的數字範圍通常不重疊。改下面的數字，上面的結果會立刻重算。</p>
     </div>
     <div class="table-wrap">
       <table>
@@ -215,10 +215,16 @@ td input { width: 4.5rem; font-family: var(--font-mono); font-size: 0.95rem; pad
       </table>
     </div>
     <div class="tune-actions">
-      <button id="btn-interleave" type="button">套用交錯範例:+ (10, 20)、* (11, 21)</button>
+      <button id="btn-interleave" type="button">套用交錯範例：+ (10, 20)、* (11, 21)</button>
       <button id="btn-defaults" type="button">還原預設值</button>
     </div>
-    <p class="empty">交錯範例的結果是全部由左往右結合:+ 和 * 變成同一層,數字的差距沒有意義。</p>
+    <p class="empty">交錯範例的結果是全部由左往右結合：+ 和 * 變成同一層，數字的差距沒有意義。</p>
+  </section>
+  <section class="prose">
+    <h2>結語</h2>
+    <p>Pratt parser 只有一個遞迴函式加一個迴圈：先取一個運算元當 <code>lhs</code>，然後每遇到一個運算子就拿它的 <code>l_bp</code> 和 <code>min_bp</code> 比，比不過就把 <code>lhs</code> 交回上一層，比得過就用它的 <code>r_bp</code> 當新的 <code>min_bp</code> 遞迴解析右邊。優先級和結合性都只是這兩個數字的大小關係，沒有另外的文法規則。</p>
+    <p>把結合力表換成一個語言真正的運算子表，再把 <code>(tok, lhs, rhs)</code> 換成語法樹節點，就是一個可用的運算式剖析器；Rust 的 <code>rustc</code> 和許多手寫剖析器的運算式部分都是這個結構。</p>
+    <p>這一頁有前綴運算子和括號，但沒有後綴運算子、三元運算子 <code>a ? b : c</code> 這類 mixfix 的寫法，也沒有錯誤回復：式子有錯就直接停下來報一個位置。</p>
   </section>
 </main>
 
@@ -308,7 +314,7 @@ function buildTrace(toks, bp) {
   });
 
   function parse(minBp, minSrc, why) {
-    const minLabel = why.type === 'top' ? '起點,左邊沒有運算子'
+    const minLabel = why.type === 'top' ? '起點，左邊沒有運算子'
       : why.type === 'paren' ? '括號起點'
       : why.type === 'prefix' ? `前綴 ${why.op} 的結合力`
       : `${why.op} 的右側結合力`;
@@ -317,7 +323,7 @@ function buildTrace(toks, bp) {
     snap({ kind: 'call', lines: [1], why });
 
     const t = toks[pos];
-    if (!t) throw new ParseError('式子到這裡就結束了,但還需要一個運算元。', pos);
+    if (!t) throw new ParseError('式子到這裡就結束了，但還需要一個運算元。', pos);
     if (t.text === '(') {
       roles[pos] = 'paren';
       const open = pos++;
@@ -346,7 +352,7 @@ function buildTrace(toks, bp) {
       frame.lhs = { atom: t.text };
       snap({ kind: 'atom', lines: [2, 9], cur: pos - 1, tok: t.text });
     } else {
-      throw new ParseError(`這裡需要一個運算元,卻看到 ${t.text}。`, pos);
+      throw new ParseError(`這裡需要一個運算元，卻看到 ${t.text}。`, pos);
     }
 
     for (;;) {
@@ -377,7 +383,7 @@ function buildTrace(toks, bp) {
   }
 
   const ast = parse(0, null, { type: 'top' });
-  if (pos < toks.length) throw new ParseError(`多出來的 ${toks[pos].text},沒有對應的左括號或運算子。`, pos);
+  if (pos < toks.length) throw new ParseError(`多出來的 ${toks[pos].text}，沒有對應的左括號或運算子。`, pos);
   return { steps, ast, roles };
 }
 
@@ -385,20 +391,20 @@ function narrate(s) {
   const top = s.stack[s.stack.length - 1];
   switch (s.kind) {
     case 'call':
-      if (s.why.type === 'top') return '從最外層開始:parse_expr(min_bp = 0)。0 表示左邊沒有運算子在拉。';
-      if (s.why.type === 'paren') return '括號裡重新開一局:parse_expr(min_bp = 0)。括號外的運算子拉不到裡面。';
-      if (s.why.type === 'prefix') return `解析前綴 ${s.why.op} 的右邊:parse_expr(min_bp = ${s.why.bp})。後面的運算子左側要 ≥ ${s.why.bp} 才搶得走運算元。`;
-      return `解析 ${s.why.op} 的右邊:把 ${s.why.op} 的右側結合力 ${s.why.bp} 當成 min_bp 傳下去。`;
-    case 'atom': return `讀到 ${s.tok},它就是這一層的 lhs。`;
-    case 'paren': return '讀到 (,先解析括號內的整個式子。';
-    case 'parenClose': return `括號內回傳 ${top.lhs},吃掉 )。整個括號當成一個運算元。`;
-    case 'prefix': return `讀到前綴 ${s.op}(結合力 ${s.bp}),它需要右邊的運算元。`;
-    case 'prefixDone': return `右邊回來了,組成 lhs = ${top.lhs}。`;
-    case 'stop': return s.tok === null ? '後面沒有 token 了,離開迴圈。' : '下一個是 ),不是二元運算子,離開迴圈。';
-    case 'win': return `${s.op} 的左側 ${s.l} ≥ min_bp ${top.minBp},${s.op} 搶到 ${top.lhs}。吃掉 ${s.op},接著解析它的右邊。`;
-    case 'lose': return `${s.op} 的左側 ${s.l} < min_bp ${top.minBp},搶不到 ${top.lhs}。break,把 ${s.op} 留給外層處理。`;
-    case 'combine': return `右邊回來了,組成 lhs = ${top.lhs}。回到迴圈開頭,看下一個運算子。`;
-    case 'return': return s.stack.length > 1 ? `回傳 ${top.lhs} 給上一層。` : `最外層回傳,解析完成:${top.lhs}`;
+      if (s.why.type === 'top') return '從最外層開始：parse_expr(min_bp = 0)。0 表示左邊沒有運算子在拉。';
+      if (s.why.type === 'paren') return '括號裡重新開一局：parse_expr(min_bp = 0)。括號外的運算子拉不到裡面。';
+      if (s.why.type === 'prefix') return `解析前綴 ${s.why.op} 的右邊：parse_expr(min_bp = ${s.why.bp})。後面的運算子左側要 ≥ ${s.why.bp} 才搶得走運算元。`;
+      return `解析 ${s.why.op} 的右邊：把 ${s.why.op} 的右側結合力 ${s.why.bp} 當成 min_bp 傳下去。`;
+    case 'atom': return `讀到 ${s.tok}，它就是這一層的 lhs。`;
+    case 'paren': return '讀到 (，先解析括號內的整個式子。';
+    case 'parenClose': return `括號內回傳 ${top.lhs}，吃掉 )。整個括號當成一個運算元。`;
+    case 'prefix': return `讀到前綴 ${s.op}（結合力 ${s.bp}），它需要右邊的運算元。`;
+    case 'prefixDone': return `右邊回來了，組成 lhs = ${top.lhs}。`;
+    case 'stop': return s.tok === null ? '後面沒有 token 了，離開迴圈。' : '下一個是 )，不是二元運算子，離開迴圈。';
+    case 'win': return `${s.op} 的左側 ${s.l} ≥ min_bp ${top.minBp},${s.op} 搶到 ${top.lhs}。吃掉 ${s.op}，接著解析它的右邊。`;
+    case 'lose': return `${s.op} 的左側 ${s.l} < min_bp ${top.minBp}，搶不到 ${top.lhs}。break，把 ${s.op} 留給外層處理。`;
+    case 'combine': return `右邊回來了，組成 lhs = ${top.lhs}。回到迴圈開頭，看下一個運算子。`;
+    case 'return': return s.stack.length > 1 ? `回傳 ${top.lhs} 給上一層。` : `最外層回傳，解析完成：${top.lhs}`;
   }
   return '';
 }
@@ -482,7 +488,7 @@ function renderTree() {
   const { trace } = state;
   if (!trace) {
     $('result-expr').textContent = '—';
-    $('tree-wrap').innerHTML = '<span class="empty">式子可以解析時,這裡會畫出語法樹。</span>';
+    $('tree-wrap').innerHTML = '<span class="empty">式子可以解析時，這裡會畫出語法樹。</span>';
     return;
   }
   $('result-expr').textContent = show(trace.ast);
@@ -505,7 +511,7 @@ function renderTree() {
   const boxW = Math.max(36, maxLen * 10 + 16), cw = boxW + 24, rh = 60;
   const W = leaf * cw, H = (maxDepth + 1) * rh;
   const px = n => n.x * cw + cw / 2, py = n => n.depth * rh + rh / 2;
-  let h = `<svg class="tree" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="語法樹:${esc(show(trace.ast))}">`;
+  let h = `<svg class="tree" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="語法樹：${esc(show(trace.ast))}">`;
   for (const [a, b] of edges) h += `<line x1="${px(a)}" y1="${py(a)}" x2="${px(b)}" y2="${py(b)}"></line>`;
   for (const n of nodes) {
     const w = n.op ? 36 : boxW;
@@ -524,7 +530,7 @@ function renderStep() {
   renderCode(s);
   const say = $('say');
   say.classList.toggle('err', !!error);
-  say.textContent = error ? `無法解析:${error.message}` : narrate(s);
+  say.textContent = error ? `無法解析：${error.message}` : narrate(s);
   const last = trace ? trace.steps.length - 1 : 0;
   $('btn-reset').disabled = !trace || state.step === 0;
   $('btn-prev').disabled = !trace || state.step === 0;

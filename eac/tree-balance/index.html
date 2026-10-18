@@ -1,0 +1,907 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>樹高平衡：把長鏈運算式變成矮樹</title>
+<meta name="description" content="把 Engineering a Compiler 第八章的 tree-height balancing 一步步跑給你看：第一階段怎麼找出每棵運算式樹的根，Balance、Flatten、Rebuild 怎麼把一條長鏈攤平成葉子佇列再按等級重建成矮樹。原樹和重建樹並排畫出來，可以自己改程式碼和 live 集合。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the workbench has presets, the editable block and the step controls
+   on top, then three panels (listing, pseudocode + call stack, queues), then two panels (trees, output). */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 這一步動到的東西 */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* 根、警告 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;         /* 目前這一條 */
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+sub { font-size: 0.72em; line-height: 0; }
+i.hit, i.miss { font-style: normal; font-weight: 700; }
+i.hit { color: var(--hit); }
+i.miss { color: var(--miss); }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.foot { color: var(--muted); font-size: 0.85rem; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* static pseudocode in prose */
+.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow-x: auto; white-space: pre; }
+.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.col p { font-size: 0.88rem; color: var(--muted); margin-top: 0.4rem; }
+.fig { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start; justify-content: center; }
+.fig figure { margin: 0; text-align: center; font-size: 0.85rem; color: var(--muted); }
+.fig svg { display: block; margin: 0 auto 0.3rem; font-family: var(--font-mono); }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.88rem; }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
+@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
+textarea { width: 100%; min-height: 14rem; resize: vertical; font: inherit; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; tab-size: 4; }
+.errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+.jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.jumps button { font-size: 0.82rem; padding: 0.15rem 0.6rem; }
+.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+.say { font-size: 0.95rem; min-height: 3.2em; }
+.say .warn { display: block; margin-top: 0.35rem; color: var(--miss); }
+.say .warn::before { content: "⚠ "; }
+.say .note { display: block; margin-top: 0.35rem; color: var(--muted); font-size: 0.9rem; }
+
+/* panels */
+.work { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.4fr) minmax(0, 0.9fr); gap: 1rem; }
+.work2 { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 1rem; }
+@media (max-width: 980px) { .work, .work2 { grid-template-columns: minmax(0, 1fr); } }
+.panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
+.panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+
+/* listing */
+.listing { padding: 0.5rem; background: var(--bg); overflow-x: auto; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; display: flex; flex-direction: column; gap: 0.15rem; flex: 1; }
+.op { display: grid; grid-template-columns: 1.4rem minmax(max-content, 1fr) max-content; align-items: center; gap: 0.5rem; padding: 0.12rem 0.45rem; border-radius: 3px; border: 1px solid transparent; border-left-width: 3px; white-space: nowrap; }
+.op .num { color: var(--muted); font-size: 0.72rem; text-align: right; }
+.op.cur { background: var(--mark); border-color: var(--line); border-left-color: var(--ink); }
+.op.focus { border-left-color: var(--miss); }
+.op .gone { color: var(--muted); text-decoration: line-through; }
+.op .new { color: var(--hit); font-weight: 600; }
+.op .tail { color: var(--muted); font-family: var(--font-body); font-size: 0.72rem; }
+.op.sub { padding-left: 1.4rem; }
+.op.hd { color: var(--muted); font-family: var(--font-body); font-size: 0.72rem; }
+.badges { display: flex; gap: 0.25rem; align-items: center; }
+.badge { font-family: var(--font-body); font-size: 0.66rem; font-weight: 700; line-height: 1.4; padding: 0 0.35rem; border-radius: 3px; white-space: nowrap; }
+.badge.root { background: var(--miss); color: var(--surface); }
+.badge.inner { border: 1px solid var(--muted); color: var(--muted); }
+.badge.leaf { background: var(--muted); color: var(--surface); }
+.badge.rank { font-family: var(--font-mono); font-weight: 400; color: var(--muted); border: 1px solid var(--line); }
+.badge.done { background: var(--hit); color: var(--surface); }
+.live { padding: 0.35rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.78rem; color: var(--muted); font-family: var(--font-mono); }
+
+/* pseudocode + stack */
+.pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.7rem; line-height: 1.6; white-space: pre; overflow-x: auto; background: var(--bg); max-height: 30rem; overflow-y: auto; }
+.pseudo .pl { display: block; padding: 0 0.3rem; border-radius: 3px; }
+.pseudo .pl.on { background: var(--mark); font-weight: 600; }
+.pseudo .pl.head { font-weight: 600; }
+.pseudo .proc { display: block; opacity: 0.5; }
+.pseudo .proc.active { opacity: 1; }
+.pseudo .proc + .proc { margin-top: 0.5rem; }
+.vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.scalars { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.var { display: inline-flex; align-items: baseline; gap: 0.3rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+.var .k { color: var(--muted); font-size: 0.72rem; }
+.var .v { font-weight: 600; min-width: 1em; }
+.stack { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+.stack .k { color: var(--muted); font-size: 0.72rem; margin-right: 0.2rem; }
+.frame { padding: 0 0.4rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); font-size: 0.74rem; }
+.frame.top { border-color: var(--ink); font-weight: 600; }
+.frame.bal { color: var(--miss); }
+.stack .arrow { color: var(--muted); font-size: 0.7rem; }
+
+/* queues */
+.queues { padding: 0.5rem 0.6rem; background: var(--bg); flex: 1; display: flex; flex-direction: column; gap: 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; }
+.queues h3 { margin: 0 0 0.25rem; font-family: var(--font-body); font-size: 0.75rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; }
+.qrow { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+.qrow .empty { color: var(--muted); font-family: var(--font-body); font-size: 0.78rem; }
+.ent { display: inline-flex; align-items: baseline; gap: 0.25rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); }
+.ent .r { color: var(--muted); font-size: 0.72rem; }
+.ent.chg { border-color: var(--hit); background: var(--hit-soft); }
+.ent.gone { opacity: 0.45; text-decoration: line-through; }
+.qnote { color: var(--muted); font-family: var(--font-body); font-size: 0.75rem; margin-top: 0.2rem; }
+
+/* trees */
+.trees { padding: 0.5rem; background: var(--bg); flex: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+@media (max-width: 600px) { .trees { grid-template-columns: minmax(0, 1fr); } }
+.tree { min-width: 0; }
+.tree h3 { margin: 0 0 0.25rem; font-family: var(--font-body); font-size: 0.75rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; }
+.tree svg { width: 100%; height: auto; max-height: 18rem; font-family: var(--font-mono); display: block; }
+.tree .nothing { color: var(--muted); font-size: 0.8rem; }
+.tree .node circle, .tree .node rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.tree .node.rootnode rect { stroke: var(--miss); }
+.tree .node.seen circle, .tree .node.seen rect { stroke: var(--hit); stroke-width: 2; }
+.tree .node.now circle, .tree .node.now rect { fill: var(--mark); stroke: var(--ink); stroke-width: 2; }
+.tree .node text { fill: var(--ink); font-size: 12px; text-anchor: middle; dominant-baseline: central; }
+.tree .node text.lab { fill: var(--muted); font-size: 9px; text-anchor: start; dominant-baseline: auto; }
+.tree .node text.rk { fill: var(--hit); font-size: 9px; font-weight: 600; text-anchor: start; dominant-baseline: auto; }
+.tree .node.const text { fill: var(--muted); }
+.tree .edge { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+.tree .node.newest circle, .tree .node.newest rect { stroke: var(--hit); stroke-width: 2.2; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Engineering a Compiler 筆記</a>
+    <h1><span class="mono">Balance</span> 樹高平衡：把長鏈運算式變成矮樹</h1>
+    <p class="lead">前端把 <code>a + b + c + d</code> 翻成三條相依的加法，一條接一條，像一根長鏈。能同時發兩條指令的機器只能乾等。tree-height balancing 利用加法可交換、可結合，把長鏈改排成矮樹，讓獨立的子運算式可以平行算。這一頁把 Engineering a Compiler 第八章的兩階段演算法一步步跑給你看：第一階段找出每棵樹的根，第二階段用 Flatten 把樹攤成葉子佇列、再用 Rebuild 照等級重新配對。原樹和重建樹並排畫出來。</p>
+  </header>
+
+  <section class="prose">
+    <h2>鏈和樹的差別</h2>
+    <p>同一個運算式 <code>a + b + c + d + e + f + g + h</code>，左邊是前端自然產出的形狀，每一條加法都要等前一條；右邊是平衡過的形狀，第一層四條加法彼此獨立。兩種形狀都是 7 次加法，差的是關鍵路徑：7 層對 3 層。</p>
+  </section>
+  <div class="fig">
+    <figure><svg viewBox="0 0 230 240" width="230" height="240" aria-label="高度 7 的左傾鏈"><g fill="none" stroke="currentColor" stroke-opacity="0.45"><path d="M30 22 L52 44 M52 44 L74 66 M74 66 L96 88 M96 88 L118 110 M118 110 L140 132 M140 132 L162 154 M162 154 L184 176"/><path d="M30 22 L16 44 M52 44 L38 66 M74 66 L60 88 M96 88 L82 110 M118 110 L104 132 M140 132 L126 154 M162 154 L148 176 M184 176 L170 198 M184 176 L198 198"/></g><g font-size="11" text-anchor="middle" fill="currentColor"><text x="30" y="18">+</text><text x="52" y="40">+</text><text x="74" y="62">+</text><text x="96" y="84">+</text><text x="118" y="106">+</text><text x="140" y="128">+</text><text x="162" y="150">+</text><text x="184" y="172">+</text><text x="16" y="56">h</text><text x="38" y="78">g</text><text x="60" y="100">f</text><text x="82" y="122">e</text><text x="104" y="144">d</text><text x="126" y="166">c</text><text x="148" y="188">b</text><text x="170" y="210">a</text><text x="198" y="210">·</text></g></svg><figcaption>長鏈：高度 7</figcaption></figure>
+    <figure><svg viewBox="0 0 260 150" width="260" height="150" aria-label="高度 3 的平衡樹"><g fill="none" stroke="currentColor" stroke-opacity="0.45"><path d="M130 20 L70 56 M130 20 L190 56 M70 56 L40 92 M70 56 L100 92 M190 56 L160 92 M190 56 L220 92 M40 92 L26 128 M40 92 L54 128 M100 92 L86 128 M100 92 L114 128 M160 92 L146 128 M160 92 L174 128 M220 92 L206 128 M220 92 L234 128"/></g><g font-size="11" text-anchor="middle" fill="currentColor"><text x="130" y="16">+</text><text x="70" y="52">+</text><text x="190" y="52">+</text><text x="40" y="88">+</text><text x="100" y="88">+</text><text x="160" y="88">+</text><text x="220" y="88">+</text><text x="26" y="140">a</text><text x="54" y="140">b</text><text x="86" y="140">c</text><text x="114" y="140">d</text><text x="146" y="140">e</text><text x="174" y="140">f</text><text x="206" y="140">g</text><text x="234" y="140">h</text></g></svg><figcaption>平衡樹：高度 3</figcaption></figure>
+  </div>
+
+  <section class="prose">
+    <h2>三個觀念</h2>
+    <ul>
+      <li><strong>候選樹。</strong>只有可交換又可結合的運算子（這一頁支援 <code>+</code> 和 <code>×</code>）才能重排。減法和除法不行，它們的結果在樹裡只能當葉子。</li>
+      <li><strong>根。</strong>一棵樹能重排到多大，取決於哪些中間值「非算出來不可」。書上叫這種值<strong>暴露值</strong>（exposed）：離開 block 時還活著、在 block 裡被用超過一次、或被不同運算子的運算用到。暴露值就是樹的根，別棵樹看到它只能當葉子，不能穿過去繼續攤平。</li>
+      <li><strong>等級。</strong>Flatten 給每片葉子一個等級（rank）：常數 0、外面來的名字 1、別棵樹的根是它自己的等級。內部節點的等級是兩個子節點相加，差不多就是子樹的葉子數。Rebuild 每次從佇列拿<strong>等級最小的兩個</strong>配對，和 Huffman 編碼一樣的手法，矮的子樹先合，樹自然平衡。</li>
+    </ul>
+  </section>
+
+  <section class="prose">
+    <h2>虛擬碼</h2>
+    <p>照書上的寫法。Roots 和 q 都是優先佇列：Roots 按運算子優先級由低到高出列，q 按等級由低到高出列。書上沒有明說同等級時誰先；這一頁用後進先出，因為這樣能重現書上 Roots 的順序和大多數圖例。</p>
+  </section>
+  <div class="cols">
+    <div class="col">
+<pre class="code">// Phase 1: build a queue, Roots, of the candidate trees
+Roots ← new empty queue
+for i ← 0 to n − 1 do
+  Rank(T<sub>i</sub>) ← −1
+  if Op<sub>i</sub> is commutative and associative
+      and T<sub>i</sub> is exposed then
+    mark T<sub>i</sub> as a root
+    Enqueue(Roots, T<sub>i</sub>, precedence of Op<sub>i</sub>)
+
+// Phase 2: remove a tree from Roots and rebalance it
+while (Roots is not empty) do
+  var ← Dequeue(Roots)
+  Balance(var)
+
+Balance(root)
+  if Rank(root) ≥ 0 then return   // already processed
+  q ← new empty queue
+  Rank(root) ← Flatten(L<sub>i</sub>, q) + Flatten(R<sub>i</sub>, q)
+  Rebuild(root, q, Op<sub>i</sub>)</pre>
+      <p>Balance 的第一行讓同一棵樹只處理一次：不管是從 Roots 拿到，還是別棵樹的 Flatten 遞迴碰到。</p>
+    </div>
+    <div class="col">
+<pre class="code">Flatten(node, q)
+  if node is a constant then
+    Rank(node) ← 0; Enqueue(q, node, Rank(node))
+  else if node is upward exposed then
+    Rank(node) ← 1; Enqueue(q, node, Rank(node))
+  else if node is a root then
+    Balance(node); Enqueue(q, node, Rank(node))
+  else   // interior node for T<sub>j</sub> ← L<sub>j</sub> Op<sub>j</sub> R<sub>j</sub>
+    Rank(node) ← Flatten(L<sub>j</sub>, q) + Flatten(R<sub>j</sub>, q)
+  return Rank(node)
+
+Rebuild(root, q, op)
+  while (q is not empty) do
+    NewL ← Dequeue(q); NewR ← Dequeue(q)
+    if NewL and NewR are both constants then
+      NewT ← Fold(op, NewL, NewR)
+      if q is empty then
+        create the op "root ← NewT"; Rank(root) ← 0
+      else
+        Enqueue(q, NewT, 0); Rank(NewT) ← 0
+    else
+      if q is empty then NewT ← root
+      else NewT ← new name
+      create the op "NewT ← NewL op NewR"
+      Rank(NewT) ← Rank(NewL) + Rank(NewR)
+      if q is not empty then Enqueue(q, NewT, Rank(NewT))</pre>
+      <p>Flatten 只把葉子放進 q，內部節點只算等級。Rebuild 每一圈從 q 取兩個、放回一個，q 每圈少一個，剛好在剩兩個時收尾成 root。</p>
+    </div>
+  </div>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">basic block（可以改）</p>
+        <textarea id="src" spellcheck="false" aria-label="basic block 的三位址碼"></textarea>
+        <div class="errs" id="errs"></div>
+        <p class="hint">每行一條 <code>t ← a + b</code>，運算子 <code>+ × − ÷</code>（也可以打 <code>* /</code>），運算元是名字或整數，每個名字只能定義一次。最後一行 <code>live: t6, t10</code> 列出離開 block 時還活著的名字，沒寫就當作都不活。</p>
+      </div>
+      <div>
+        <p class="panel-title">執行</p>
+        <div class="controls">
+          <button id="btn-reset" type="button">重來</button>
+          <button id="btn-prev" type="button">上一步</button>
+          <button id="btn-next" type="button" class="primary">下一步</button>
+          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count" id="count"></span>
+        </div>
+        <div class="jumps">
+          <button id="btn-p2" type="button">跳到第二階段</button>
+          <button id="btn-root" type="button">跳到下一個根</button>
+          <button id="btn-end" type="button">跑完</button>
+        </div>
+        <p class="hint" id="phint"></p>
+        <p class="hint">運算列表裡 <i class="miss">紫色</i> 是根，<i class="hit">綠色</i> 是重建出來的新運算。樹裡 <i class="hit">綠框</i> 是 Flatten 已經走過的節點，葉子旁邊的數字是等級。鍵盤 ← → 也可以步進。</p>
+      </div>
+    </div>
+
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span>運算列表</span><span class="sub" id="nlabel"></span></div>
+        <div class="listing" id="listing"></div>
+        <div class="live" id="livebox"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>虛擬碼</span><span class="sub" id="phase"></span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+        <div class="vars" id="vars"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>佇列</span><span class="sub" id="qstat"></span></div>
+        <div class="queues" id="queues"></div>
+      </div>
+    </div>
+
+    <div class="row work2">
+      <div class="panel">
+        <div class="panel-head"><span>樹</span><span class="sub" id="tstat"></span></div>
+        <div class="trees" id="trees"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>輸出</span><span class="sub" id="ostat"></span></div>
+        <div class="listing" id="output"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>根、等級、配對：三個決定的理由</h2>
+    <ul>
+      <li><strong>「被用超過一次」為什麼要當根。</strong>如果 t<sub>3</sub> 被兩棵樹用到，又讓兩棵樹各自把它攤平，t<sub>3</sub> 的加法會被算兩次。當成根就只算一次，兩棵樹拿現成的值。代價是 t<sub>3</sub> 的子樹不能和外面的葉子混著重排。</li>
+      <li><strong>Roots 為什麼按優先級由低到高。</strong>大例子裡 t<sub>11</sub>（加法）先處理，Flatten 碰到 t<sub>3</sub>、t<sub>7</sub> 時順手把它們也平衡了；後來 Roots 再拿到 t<sub>3</sub>、t<sub>7</sub>，Balance 第一行直接返回。順序其實不影響正確性，遞迴保證子樹先完成，但低優先級先做能讓最後的輸出順序比較自然。</li>
+      <li><strong>Flatten 回傳的等級不是高度。</strong>它是葉子等級的總和，常數算 0，所以一棵全是常數的子樹等級是 0，會被最先配對、最先摺疊掉。這就是 Balance 順便做常數聚集的原因：大例子裡 13 和 4 隔著兩層，照樣被湊在一起變成 17。</li>
+      <li><strong>Rebuild 的常數分支。</strong>兩個常數配對後不產生運算，只把摺疊結果以等級 0 放回 q。只有 q 剛好空了才會寫出 <code>root ← 常數</code>。</li>
+      <li><strong>減法和除法的結果當葉子。</strong>虛擬碼只說 upward exposed 的名字當葉子，但一個由 <code>−</code> 算出來、只被用一次的名字既不是根也不能攤平。這一頁把它當等級 1 的葉子，原來的減法照樣留在輸出裡。</li>
+      <li><strong>按等級貪婪配對不保證最矮。</strong>大例子裡 t<sub>6</sub> 那棵原本高度 3，重建後還是 3，書上的圖 8-11 也是如此。因為 t<sub>3</sub> 的等級是 2，比 u、v 大，演算法先把 3、u、v 湊在一起，最後才和 t<sub>3</sub> 合，結果是一條鏈。手動配成 <code>(3 × u) × (v × t<sub>3</sub>)</code> 可以到高度 2。等級是葉子數的近似，不是高度。</li>
+      <li><strong>每個名字只定義一次。</strong>這一頁要求輸入是 SSA 式的。書上的例子也是如此，演算法本身沒有處理重新賦值。</li>
+    </ul>
+  </section>
+
+  <section class="prose">
+    <h2>書上的圖和虛擬碼對不起來的地方</h2>
+    <ul>
+      <li><strong>小例子裡 t<sub>2</sub> 的等級。</strong>書上說 Rebuild 收到 n 的四個運算元時「每個等級都是 1」。但照 Flatten 的寫法，t<sub>2</sub> 是另一棵樹的根，先呼叫 Balance(t<sub>2</sub>)，回來的等級是 3（葉子 a、b、c）。照虛擬碼跑，Rebuild 會先把 e、f 配對，再配 g，最後才和 t<sub>2</sub> 合，和書上畫的 (t<sub>2</sub> × e) × (f × g) 不同。這一頁照虛擬碼跑，兩種結果高度一樣。</li>
+      <li><strong>同等級的出列順序。</strong>書上沒有明說。這一頁用後進先出，能重現書上的 Roots 順序、t<sub>3</sub>、t<sub>7</sub>、t<sub>10</sub> 的全部新運算，以及 t<sub>11</sub> 的配對方式。剩下的差異只有運算元左右對調：t<sub>6</sub> 那棵書上先配 v 這裡先配 u，t<sub>11</sub> 最後一條書上寫 <code>n<sub>2</sub> + t<sub>3</sub></code> 這裡是 <code>t<sub>3</sub> + n<sub>2</sub></code>。書上 t<sub>6</sub> 那棵其實是先進先出，兩種順序書上自己也混著用。</li>
+    </ul>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>先決定哪些值非算不可，再在這些值之間自由重排：根是邊界，Flatten 攤到根就停。等級小的先配對，樹就平衡，常數也順便湊在一起，和 Huffman 編碼是同一個直覺。平衡不是免費的，矮樹同時活著的中間值比長鏈多，暫存器壓力上升，在真實編譯器裡這個 pass 要和排程器、配置器一起看；LLVM 的 Reassociate pass 做的就是這件事，也用等級。</p>
+    <p>這個 pass 把長鏈變矮，是為了給指令排程更多可以並行的機會，書上第十二章的 list scheduling 就是吃這種樹；它製造的暫存器壓力則由第十三章的暫存器配置承受。同一章的 <a href="../lvn/">區域值編號</a>是另一種 block 內的變換，兩者都假設每個名字只定義一次，從線性 IR 切出 block 的方法在 <a href="../cfg/">CFG</a> 那一頁。</p>
+    <p>浮點加法不滿足結合律，這個變換會改變結果，編譯器只在 fast-math 之類的旗標下對浮點做這件事。常數摺疊照 JavaScript 的整數算，真的編譯器要照目標機器的位寬和溢位語意。<code>&amp;</code>、<code>|</code>、<code>^</code> 也是可交換運算子，這裡只做 <code>+</code> 和 <code>×</code>。既沒人用又不活著的候選運算不會成為根，這一頁原樣保留在輸出裡，真的編譯器會把它刪掉。書上提醒平衡後的樹會增加同時活著的值，這一頁不計算這件事。</p>
+  </section>
+
+  <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, Chapter 8, Section 8.4.2（Tree-Height Balancing）。虛擬碼照書上的寫法；中譯本（第二版）裡是圖 8-7 到 8-9，例子是圖 8-10 和 8-11。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const OPS = {
+  '+': { sym: '+', cand: true, prec: 1 },
+  '*': { sym: '×', cand: true, prec: 2 },
+  '-': { sym: '−', cand: false },
+  '/': { sym: '÷', cand: false },
+};
+
+const PRESETS = [
+  { title: '書上的大例子', hint: '圖 8-10 的 block。五個根：t6、t10、t11 活著，t3、t7 被用兩次。先看第一階段怎麼挑出它們，再看 t11 的 Flatten 怎麼遞迴把 t3 和 t7 一起處理掉。',
+    src: `t1 ← 13 + s
+t2 ← t1 + t
+t3 ← t2 + 4
+t4 ← t3 × u
+t5 ← 3 × t4
+t6 ← v × t5
+t7 ← w + x
+t8 ← t7 + y
+t9 ← t8 + z
+t10 ← t3 × t7
+t11 ← t3 + t9
+live: t6, t10, t11` },
+  { title: '書上的小例子', hint: '依書上的圖重建。t2 被 m 和 n 共用，所以是根。注意 n 重建時 t2 的等級是 3，不是書上說的 1。',
+    src: `t1 ← a + b
+t2 ← t1 + c
+m ← t2 + d
+t3 ← t2 × e
+t4 ← t3 × f
+n ← t4 × g
+live: m, n` },
+  { title: '一條長鏈', hint: '八個葉子的左傾鏈，只有一個根。看 Flatten 怎麼把 7 層攤成 8 片等級 1 的葉子，Rebuild 怎麼配成 3 層。',
+    src: `t1 ← a + b
+t2 ← t1 + c
+t3 ← t2 + d
+t4 ← t3 + e
+t5 ← t4 + f
+t6 ← t5 + g
+t7 ← t6 + h
+live: t7` },
+  { title: '隔開的常數', hint: '4 和 13 隔著兩層，前端沒辦法摺疊。等級 0 讓它們最先出列，Rebuild 直接湊成 17。',
+    src: `t1 ← a + 4
+t2 ← t1 + b
+t3 ← t2 + 13
+t4 ← t3 + c
+live: t4` },
+  { title: '減法擋路', hint: 't1 由減法算出，只能當葉子。t3 被乘法用到，所以是根；t4 的樹把 t3 當葉子。',
+    src: `t1 ← a − b
+t2 ← t1 + c
+t3 ← t2 + d
+t4 ← t3 × e
+t5 ← t4 × f
+live: t5` },
+];
+
+const PSEUDO = {
+  phase: [
+    ['P0', '// Phase 1: build Roots'],
+    ['P1', 'Roots ← new empty queue'],
+    ['P2', 'for i ← 0 to n − 1 do'],
+    ['P3', '  Rank(T<sub>i</sub>) ← −1'],
+    ['P4', '  if Op<sub>i</sub> is commutative and associative and T<sub>i</sub> is exposed then'],
+    ['P5', '    mark T<sub>i</sub> as a root'],
+    ['P6', '    Enqueue(Roots, T<sub>i</sub>, precedence of Op<sub>i</sub>)'],
+    ['P7', '// Phase 2: rebalance each tree'],
+    ['P8', 'while (Roots is not empty) do'],
+    ['P9', '  var ← Dequeue(Roots)'],
+    ['P10', '  Balance(var)'],
+  ],
+  balance: [
+    ['B0', 'Balance(root)'],
+    ['B1', '  if Rank(root) ≥ 0 then return'],
+    ['B2', '  q ← new empty queue'],
+    ['B3', '  Rank(root) ← Flatten(L<sub>i</sub>, q) + Flatten(R<sub>i</sub>, q)'],
+    ['B4', '  Rebuild(root, q, Op<sub>i</sub>)'],
+  ],
+  flatten: [
+    ['F0', 'Flatten(node, q)'],
+    ['F1', '  if node is a constant then'],
+    ['F2', '    Rank(node) ← 0; Enqueue(q, node, Rank(node))'],
+    ['F3', '  else if node is upward exposed then'],
+    ['F4', '    Rank(node) ← 1; Enqueue(q, node, Rank(node))'],
+    ['F5', '  else if node is a root then'],
+    ['F6', '    Balance(node); Enqueue(q, node, Rank(node))'],
+    ['F7', '  else'],
+    ['F8', '    Rank(node) ← Flatten(L<sub>j</sub>, q) + Flatten(R<sub>j</sub>, q)'],
+    ['F9', '  return Rank(node)'],
+  ],
+  rebuild: [
+    ['R0', 'Rebuild(root, q, op)'],
+    ['R1', '  while (q is not empty) do'],
+    ['R2', '    NewL ← Dequeue(q); NewR ← Dequeue(q)'],
+    ['R3', '    if NewL and NewR are both constants then'],
+    ['R4', '      NewT ← Fold(op, NewL, NewR)'],
+    ['R5', '      if q is empty then'],
+    ['R6', '        create the op "root ← NewT"; Rank(root) ← 0'],
+    ['R7', '      else'],
+    ['R8', '        Enqueue(q, NewT, 0); Rank(NewT) ← 0'],
+    ['R9', '    else'],
+    ['R10', '      if q is empty then NewT ← root else NewT ← new name'],
+    ['R11', '      create the op "NewT ← NewL op NewR"'],
+    ['R12', '      Rank(NewT) ← Rank(NewL) + Rank(NewR)'],
+    ['R13', '      if q is not empty then Enqueue(q, NewT, Rank(NewT))'],
+  ],
+};
+
+// ---- parser ----
+const isConstKey = k => /^-?\d+$/.test(k);
+function parse(src) {
+  const ops = [], errors = [];
+  let live = [];
+  const operand = s => /^-?\d+$/.test(s) ? { kind: 'const', key: String(Number(s)) }
+    : /^[A-Za-z_]\w*$/.test(s) ? { kind: 'name', key: s } : null;
+  src.split('\n').forEach((raw, idx) => {
+    const ln = idx + 1;
+    const t = raw.replace(/(#|\/\/).*$/, '').trim();
+    if (!t) return;
+    const lm = t.match(/^live\s*(?::|：)\s*(.*)$/i);
+    if (lm) { live = lm[1].split(/(?:,|，|\s)+/).filter(Boolean); return; }
+    const norm = t.replace(/←|:=|<-/g, '=').replace(/−/g, '-').replace(/×/g, '*').replace(/÷/g, '/');
+    const m = norm.match(/^([A-Za-z_]\w*)\s*=\s*(-?\w+)\s*([-+*\/])\s*(-?\w+)$/);
+    if (!m) { errors.push(`第 ${ln} 行：看不懂「${t}」。格式是 t ← a + b，或最後一行 live: t1, t2。`); return; }
+    const L = operand(m[2]), R = operand(m[4]);
+    if (!L || !R) { errors.push(`第 ${ln} 行：運算元要是名字或整數，「${!L ? m[2] : m[4]}」不是。`); return; }
+    ops.push({ ln, i: ops.length, dst: m[1], L, op: m[3], R });
+  });
+  const defs = new Map();
+  ops.forEach(op => {
+    if (defs.has(op.dst)) errors.push(`第 ${op.ln} 行：${op.dst} 定義了兩次。這個演算法假設每個名字只定義一次。`);
+    defs.set(op.dst, op);
+  });
+  live.forEach(nm => { if (!defs.has(nm)) errors.push(`live 裡的 ${nm} 沒有在 block 裡定義。`); });
+  if (ops.length === 0 && errors.length === 0) errors.push('至少要有一條運算。');
+  ops.forEach(op => { op.text = `${op.dst} ← ${op.L.key} ${OPS[op.op].sym} ${op.R.key}`; });
+  return { ops, errors, live };
+}
+
+// ---- static facts the algorithm's "exposed" test needs ----
+function analyze(P) {
+  const defOf = new Map(P.ops.map(op => [op.dst, op]));
+  const uses = new Map(), otherOp = new Map();
+  P.ops.forEach(op => [op.L, op.R].forEach(o => {
+    if (o.kind !== 'name') return;
+    uses.set(o.key, (uses.get(o.key) || 0) + 1);
+    const d = defOf.get(o.key);
+    if (d && (!OPS[op.op].cand || d.op !== op.op)) otherOp.set(o.key, op);
+  }));
+  const live = new Set(P.live);
+  const why = T => {
+    const r = [];
+    if (live.has(T)) r.push('離開 block 時還活著');
+    if ((uses.get(T) || 0) >= 2) r.push(`被用了 ${uses.get(T)} 次`);
+    if (otherOp.has(T)) r.push(`被 ${otherOp.get(T).dst} 的 ${OPS[otherOp.get(T).op].sym} 用到，運算子不同`);
+    return r;
+  };
+  return { defOf, uses, otherOp, live, why };
+}
+
+// ---- run the algorithm, snapshotting at every event ----
+function buildTrace(P) {
+  const A = analyze(P);
+  const ops = P.ops, n = ops.length;
+  const steps = [];
+  const S = {
+    phase: 'p1', i: null, rank: {}, isRoot: {}, rootsQ: [], processed: [], stack: [],
+    created: {}, absorbed: {}, visited: {}, status: {}, vars: { v: null, node: null, NewL: null, NewR: null, NewT: null },
+    nextName: 0, focus: null, hl: { q: null, roots: null, created: null, op: null, newest: null },
+  };
+  const snap = (lines, say, x) => {
+    const s = structuredClone(S);
+    s.lines = lines; s.say = say; s.note = (x && x.note) || ''; s.warn = (x && x.warn) || '';
+    steps.push(s);
+    S.hl = { q: null, roots: null, created: null, op: null, newest: null };
+  };
+  // Priority queue, smallest key first; ties are last in, first out, which is what the book's figures do.
+  const pq = (arr, item, key) => { let k = 0; while (k < arr.length && arr[k][key] < item[key]) k++; arr.splice(k, 0, item); };
+  const balanceFrame = () => { for (let k = S.stack.length - 1; k >= 0; k--) if (S.stack[k].kind === 'Balance' && S.stack[k].q) return S.stack[k]; return null; };
+  const rk = nm => S.rank[nm];
+  const vn = nm => `Rank(${nm})`;
+
+  // Phase 1
+  snap(['P1'], 'Roots 是空的優先佇列，之後按運算子的優先級出列：+ 是 1，× 是 2，小的先；同優先級時後進先出。');
+  for (const op of ops) {
+    S.i = op.i; S.rank[op.dst] = -1; S.hl.op = op.dst;
+    const o = OPS[op.op], T = op.dst;
+    if (!o.cand) {
+      snap(['P2', 'P3', 'P4'], `op<sub>${op.i}</sub>：${op.text}。${vn(T)} ← −1。${o.sym} 不滿足交換律和結合律，不能當樹的根；${T} 在別棵樹裡只能是葉子。`);
+      continue;
+    }
+    const why = A.why(T);
+    if (!why.length) {
+      const u = A.uses.get(T) || 0;
+      snap(['P2', 'P3', 'P4'], `op<sub>${op.i}</sub>：${op.text}。${vn(T)} ← −1。${T} ${u ? `只被同樣是 ${o.sym} 的運算用了一次` : '沒有人用，也不活著'}，不是暴露值，${u ? '它會是某棵樹的內部節點' : '這條其實是死碼'}。`);
+      continue;
+    }
+    S.isRoot[T] = true; S.status[T] = 'pending';
+    pq(S.rootsQ, { name: T, prec: o.prec }, 'prec');
+    S.hl.roots = T;
+    snap(['P2', 'P3', 'P4', 'P5', 'P6'], `op<sub>${op.i}</sub>：${op.text}。${vn(T)} ← −1。${T} 是暴露值（${why.join('、')}），而且 ${o.sym} 可交換可結合：標成根，以 ${o.sym} 的優先級 ${o.prec} 入 Roots。`);
+  }
+  S.i = null; S.phase = 'p2';
+  snap(['P8'], `第一階段結束，找到 ${Object.keys(S.isRoot).length} 個根。Roots 按優先級排好：${S.rootsQ.map(e => `⟨${e.name}, ${e.prec}⟩`).join('、')}。接著逐一取出來 Balance。`);
+
+  function balance(root) {
+    S.stack.push({ kind: 'Balance', name: root, q: null });
+    if (S.rank[root] >= 0) {
+      snap(['B1'], `Balance(${root})：${vn(root)} = ${S.rank[root]} ≥ 0，這棵樹已經在前面被處理過了，直接返回。`);
+      S.stack.pop();
+      return;
+    }
+    const fr = S.stack[S.stack.length - 1];
+    fr.q = [];
+    S.status[root] = 'processing'; S.focus = root; S.visited[root] = {}; S.created[root] = [];
+    const op = A.defOf.get(root);
+    snap(['B2'], `Balance(${root})：${root} ← ${op.L.key} ${OPS[op.op].sym} ${op.R.key}。q 是新的空佇列，接下來 Flatten 會把這棵 ${OPS[op.op].sym} 樹的葉子都收進 q。`);
+    const rl = flatten(op.L, root, op.op), rr = flatten(op.R, root, op.op);
+    S.focus = root; S.vars.node = null;
+    S.rank[root] = rl + rr;
+    snap(['B3'], `${vn(root)} ← ${rl} + ${rr} = ${S.rank[root]}。q 裡有 ${fr.q.length} 個葉子：${fr.q.map(e => `⟨${e.name}, ${e.rank}⟩`).join('、')}。進入 Rebuild。`);
+    rebuild(root, op.op, fr.q);
+    S.status[root] = 'done';
+    S.stack.pop();
+    const outer = balanceFrame();
+    S.focus = outer ? outer.name : root;
+  }
+
+  function flatten(o, root, rootOp) {
+    const key = o.key, q = balanceFrame().q;
+    S.stack.push({ kind: 'Flatten', name: key, q: null });
+    S.vars.node = key;
+    let r;
+    if (o.kind === 'const') {
+      S.rank[key] = 0; r = 0;
+      pq(q, { name: key, rank: 0 }, 'rank'); S.visited[root][key] = 0; S.hl.q = key;
+      snap(['F1', 'F2'], `Flatten(${key})：常數是葉子，等級 0，⟨${key}, 0⟩ 入 q。`);
+    } else {
+      const d = A.defOf.get(key);
+      if (S.isRoot[key]) {
+        const already = S.rank[key] >= 0;
+        snap(['F5', 'F6'], `Flatten(${key})：${key} 是另一棵樹的根。${already ? `它已經處理過了（${vn(key)} = ${S.rank[key]}），Balance 會直接返回。` : `先遞迴呼叫 Balance(${key}) 把那棵樹平衡好，再把它當成這棵樹的葉子。`}`);
+        balance(key);
+        S.focus = root; S.vars.node = key;
+        r = S.rank[key];
+        pq(q, { name: key, rank: r }, 'rank'); S.visited[root][key] = r; S.hl.q = key;
+        snap(['F6'], `回到 Flatten(${key})：${vn(key)} = ${r}，⟨${key}, ${r}⟩ 入 ${root} 的 q。它是葉子，不會再往下攤。`);
+      } else if (!d || !OPS[d.op].cand || d.op !== rootOp) {
+        S.rank[key] = 1; r = 1;
+        pq(q, { name: key, rank: 1 }, 'rank'); S.visited[root][key] = 1; S.hl.q = key;
+        const reason = !d ? `${key} 不是這個 block 算出來的，是 upward exposed 的葉子` : `${key} 由 ${OPS[d.op].sym} 算出來，不能穿過去，當葉子`;
+        snap(['F3', 'F4'], `Flatten(${key})：${reason}，等級 1，⟨${key}, 1⟩ 入 q。`);
+      } else {
+        S.absorbed[key] = root;
+        snap(['F7', 'F8'], `Flatten(${key})：${key} ← ${d.L.key} ${OPS[d.op].sym} ${d.R.key} 是內部節點，同樣是 ${OPS[d.op].sym}，只被用一次。往下攤平它的兩個運算元；這條運算之後不會再出現。`);
+        const rl = flatten(d.L, root, rootOp), rr = flatten(d.R, root, rootOp);
+        S.vars.node = key;
+        S.rank[key] = rl + rr; r = rl + rr; S.visited[root][key] = r;
+        snap(['F8', 'F9'], `${vn(key)} ← ${rl} + ${rr} = ${r}。內部節點只算等級，不入 q。`);
+      }
+    }
+    S.stack.pop();
+    return r;
+  }
+
+  function rebuild(root, opch, q) {
+    S.stack.push({ kind: 'Rebuild', name: root, q: null });
+    const sym = OPS[opch].sym;
+    const fold = (a, b) => opch === '+' ? a + b : a * b;
+    while (q.length) {
+      const L = q.shift(), R = q.shift();
+      S.vars.NewL = L.name; S.vars.NewR = R.name;
+      if (isConstKey(L.name) && isConstKey(R.name)) {
+        const c = String(fold(Number(L.name), Number(R.name)));
+        S.vars.NewT = c;
+        if (q.length === 0) {
+          S.created[root].push({ t: root, c }); S.rank[root] = 0; S.hl.created = root; S.hl.newest = root;
+          snap(['R2', 'R3', 'R4', 'R5', 'R6'], `取出 ⟨${L.name}, 0⟩ 和 ⟨${R.name}, 0⟩，都是常數，摺疊成 ${c}。q 空了，直接寫 ${root} ← ${c}，${vn(root)} ← 0。`);
+        } else {
+          pq(q, { name: c, rank: 0 }, 'rank'); S.rank[c] = 0; S.hl.q = c;
+          snap(['R2', 'R3', 'R4', 'R7', 'R8'], `取出 ⟨${L.name}, 0⟩ 和 ⟨${R.name}, 0⟩，都是常數，摺疊成 ${c}。q 還有東西，不產生運算，把 ⟨${c}, 0⟩ 放回 q 等著配對。`);
+        }
+        continue;
+      }
+      const T = q.length === 0 ? root : `n${S.nextName++}`;
+      S.vars.NewT = T;
+      const r = rk(L.name) + rk(R.name);
+      S.created[root].push({ t: T, l: L.name, op: opch, r: R.name });
+      S.rank[T] = r; S.hl.created = root; S.hl.newest = T;
+      if (q.length) { pq(q, { name: T, rank: r }, 'rank'); S.hl.q = T; }
+      snap(['R2', 'R3', 'R9', 'R10', 'R11', 'R12', q.length ? 'R13' : 'R10'],
+        `取出等級最小的兩個 ⟨${L.name}, ${rk(L.name)}⟩ 和 ⟨${R.name}, ${rk(R.name)}⟩，建新運算 ${T} ← ${L.name} ${sym} ${R.name}，等級 ${rk(L.name)} + ${rk(R.name)} = ${r}。` +
+        (q.length ? `q 還沒空，${T} 用新名字，⟨${T}, ${r}⟩ 入 q。` : `q 空了，這是最後一條，結果直接寫進 ${root}。Balance(${root}) 完成。`));
+    }
+    S.vars.NewL = S.vars.NewR = S.vars.NewT = null;
+    S.stack.pop();
+  }
+
+  while (S.rootsQ.length) {
+    const e = S.rootsQ.shift();
+    S.processed.push(e.name); S.vars.v = e.name; S.hl.roots = e.name;
+    snap(['P8', 'P9', 'P10'], `從 Roots 取出 ⟨${e.name}, ${e.prec}⟩，呼叫 Balance(${e.name})。`);
+    balance(e.name);
+    S.vars.v = null;
+  }
+  S.phase = 'done';
+  const created = Object.values(S.created).reduce((a, c) => a + c.length, 0);
+  const dropped = Object.keys(S.absorbed).length;
+  snap([], `跑完了。${Object.keys(S.isRoot).length} 棵樹重建成 ${created} 條運算，原本 ${n} 條裡有 ${dropped} 條內部節點被吸收。右下角是新的 block。`);
+  return { steps, A };
+}
+
+// ---- state ----
+const INIT = { phase: 'p0', i: null, rank: {}, isRoot: {}, rootsQ: [], processed: [], stack: [], created: {}, absorbed: {}, visited: {}, status: {}, vars: { v: null, node: null, NewL: null, NewR: null, NewT: null }, nextName: 0, focus: null, hl: {}, lines: [], say: '', note: '', warn: '' };
+const state = { pi: 0, k: 0, parsed: null, trace: [], A: null };
+const total = () => state.trace.length;
+const cur = () => state.k === 0 ? INIT : state.trace[state.k - 1];
+
+function rebuild() {
+  state.parsed = parse($('src').value);
+  if (state.parsed.errors.length) { state.trace = []; state.A = null; }
+  else { const r = buildTrace(state.parsed); state.trace = r.steps; state.A = r.A; }
+  state.k = 0;
+}
+
+// ---- rendering ----
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.pi = i; $('src').value = c.src; rebuild(); renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderPseudoShell() {
+  $('pseudo').innerHTML = ['phase', 'balance', 'flatten', 'rebuild'].map(proc =>
+    `<span class="proc" data-p="${proc}">` + PSEUDO[proc].map(([id, txt], k) =>
+      `<span class="pl${k === 0 || id === 'P7' ? ' head' : ''}" data-l="${id}">${txt}</span>`).join('') + '</span>').join('');
+}
+
+function renderListing(s) {
+  const ops = state.parsed.ops;
+  $('nlabel').textContent = `n = ${ops.length}`;
+  $('listing').innerHTML = ops.map(op => {
+    const T = op.dst;
+    let cls = 'op';
+    if (s.i === op.i) cls += ' cur';
+    if (s.focus === T && s.status[T] === 'processing') cls += ' focus';
+    const badges = [];
+    if (s.isRoot[T]) badges.push(`<span class="badge root">根</span>`);
+    else if (s.absorbed[T]) badges.push(`<span class="badge inner">併入 ${esc(s.absorbed[T])}</span>`);
+    else if (s.rank[T] !== undefined && !OPS[op.op].cand) badges.push(`<span class="badge leaf">葉</span>`);
+    if (s.status[T] === 'done') badges.push(`<span class="badge done">已平衡</span>`);
+    if (s.rank[T] !== undefined) badges.push(`<span class="badge rank">rank ${s.rank[T]}</span>`);
+    const txt = s.absorbed[T] ? `<span class="gone">${esc(op.text)}</span>` : esc(op.text);
+    return `<div class="${cls}"><span class="num">${op.i}</span><span>${txt}</span><span class="badges">${badges.join('')}</span></div>`;
+  }).join('');
+  $('livebox').textContent = state.parsed.live.length ? `live: ${state.parsed.live.join(', ')}` : '（live 是空的）';
+}
+
+function renderPseudo(s) {
+  document.querySelectorAll('#pseudo .pl').forEach(el => el.classList.toggle('on', s.lines.includes(el.dataset.l)));
+  const top = s.stack[s.stack.length - 1];
+  const active = top ? top.kind.toLowerCase() : 'phase';
+  document.querySelectorAll('#pseudo .proc').forEach(el => el.classList.toggle('active', s.phase === 'done' || el.dataset.p === active));
+  $('phase').textContent = s.phase === 'p1' ? 'Phase 1' : s.phase === 'p2' ? (top ? top.kind : 'Phase 2') : s.phase === 'done' ? '完成' : '';
+}
+
+function renderVars(s) {
+  const v = (name, val) => `<span class="var"><span class="k">${name}</span><span class="v">${val ?? '–'}</span></span>`;
+  const frames = s.stack.map((f, k) => `<span class="frame${k === s.stack.length - 1 ? ' top' : ''}${f.kind === 'Balance' ? ' bal' : ''}">${f.kind}(${esc(f.name)})</span>`).join('<span class="arrow">→</span>');
+  $('vars').innerHTML = `
+    <div class="scalars">${v('i', s.i)}${v('var', s.vars.v)}${v('node', s.vars.node)}${v('NewL', s.vars.NewL)}${v('NewR', s.vars.NewR)}${v('NewT', s.vars.NewT)}${v('下一個新名字', 'n' + s.nextName)}</div>
+    <div class="stack"><span class="k">呼叫堆疊</span>${frames || '<span class="frame">（空）</span>'}</div>`;
+}
+
+function renderQueues(s) {
+  const hl = s.hl || {};
+  const ent = (e, key, chg) => `<span class="ent${chg ? ' chg' : ''}"><span>${esc(e.name)}</span><span class="r">${key}</span></span>`;
+  const roots = s.rootsQ.length ? s.rootsQ.map(e => ent(e, e.prec, hl.roots === e.name)).join('') : '<span class="empty">（空）</span>';
+  const done = s.processed.length ? `<p class="qnote">已取出：${s.processed.map(esc).join('、')}</p>` : '';
+  let bf = null;
+  for (let k = s.stack.length - 1; k >= 0; k--) if (s.stack[k].kind === 'Balance' && s.stack[k].q) { bf = s.stack[k]; break; }
+  const q = bf ? (bf.q.length ? bf.q.map(e => ent(e, e.rank, hl.q === e.name)).join('') : '<span class="empty">（空）</span>') : '<span class="empty">（還沒進入 Balance）</span>';
+  const deeper = s.stack.filter(f => f.kind === 'Balance' && f.q).length - 1;
+  $('qstat').textContent = bf ? `q 屬於 ${bf.name}` : '';
+  $('queues').innerHTML = `
+    <div><h3>Roots：⟨T, p⟩，p 是優先級，小的先出</h3><div class="qrow">${roots}</div>${done}</div>
+    <div><h3>q：⟨T, r⟩，r 是等級，小的先出</h3><div class="qrow">${q}</div>${deeper > 0 ? `<p class="qnote">外層還有 ${deeper} 個 Balance 各自的 q 在等。</p>` : ''}</div>`;
+}
+
+// ---- trees ----
+function origTree(name, root, rootOp, s) {
+  const A = state.A;
+  if (isConstKey(name)) return { label: name, kind: 'const' };
+  const d = A.defOf.get(name);
+  if (name !== root && s.isRoot[name]) return { label: name, kind: 'root' };
+  if (!d || !OPS[d.op].cand || d.op !== rootOp) return { label: name, kind: 'leaf' };
+  return { label: name, kind: 'op', sym: OPS[d.op].sym, children: [origTree(d.L.key, root, rootOp, s), origTree(d.R.key, root, rootOp, s)] };
+}
+function newForest(root, s) {
+  const made = new Map((s.created[root] || []).map(c => [c.t, c]));
+  const used = new Set(); made.forEach(c => { if (c.l !== undefined) { used.add(c.l); used.add(c.r); } });
+  const build = name => {
+    const c = made.get(name);
+    if (!c) return { label: name, kind: isConstKey(name) ? 'const' : (s.isRoot[name] && name !== root) ? 'root' : 'leaf' };
+    if (c.c !== undefined) return { label: name, kind: 'op', sym: '=', children: [{ label: c.c, kind: 'const' }] };
+    return { label: name, kind: 'op', sym: OPS[c.op].sym, children: [build(c.l), build(c.r)] };
+  };
+  return [...made.keys()].filter(t => !used.has(t)).map(build);
+}
+function layout(node, depth, x) {
+  node.y = depth;
+  if (!node.children) { node.x = x + 0.5; node.w = 1; return 1; }
+  let w = 0;
+  node.children.forEach(ch => { w += layout(ch, depth + 1, x + w); });
+  node.x = (node.children[0].x + node.children[node.children.length - 1].x) / 2; node.w = w;
+  return w;
+}
+function depthOf(node) { return node.children ? 1 + Math.max(...node.children.map(depthOf)) : 0; }
+function drawForest(forest, opts) {
+  if (!forest.length) return `<p class="nothing">${opts.empty}</p>`;
+  const U = 46, V = 50, PAD = 14, TOP = 24;
+  let x = 0, maxD = 0;
+  forest.forEach(t => { x += layout(t, 0, x) + 0.4; maxD = Math.max(maxD, depthOf(t)); });
+  const W = x * U + PAD * 2, H = (maxD + 1) * V + TOP;
+  const px = n => PAD + n.x * U, py = n => TOP + n.y * V;
+  let out = '';
+  const walk = n => {
+    (n.children || []).forEach(ch => { out += `<path class="edge" d="M ${px(n)} ${py(n)} L ${px(ch)} ${py(ch)}"/>`; walk(ch); });
+  };
+  forest.forEach(walk);
+  const node = n => {
+    const cx = px(n), cy = py(n);
+    const seen = opts.seen && opts.seen[n.label] !== undefined, now = opts.now === n.label, newest = opts.newest === n.label;
+    const cls = `node ${n.kind}${seen ? ' seen' : ''}${now ? ' now' : ''}${newest ? ' newest' : ''}${n.label === opts.root ? ' rootnode' : ''}`;
+    let g = `<g class="${cls}">`;
+    if (n.kind === 'op') {
+      g += `<circle cx="${cx}" cy="${cy}" r="13"/><text x="${cx}" y="${cy}">${esc(n.sym)}</text><text class="lab" x="${cx + 15}" y="${cy - 10}">${esc(n.label)}</text>`;
+      if (opts.rank && opts.rank[n.label] !== undefined && opts.rank[n.label] >= 0 && (seen || opts.rankAll)) g += `<text class="rk" x="${cx + 15}" y="${cy + 16}">r${opts.rank[n.label]}</text>`;
+    } else {
+      const w = Math.max(26, 9 * String(n.label).length + 12);
+      g += `<rect x="${cx - w / 2}" y="${cy - 12}" width="${w}" height="24" rx="${n.kind === 'root' ? 3 : 12}"/><text x="${cx}" y="${cy}">${esc(n.label)}</text>`;
+      const rk = opts.seen ? opts.seen[n.label] : (opts.rank ? opts.rank[n.label] : undefined);
+      if (rk !== undefined && rk >= 0 && (seen || opts.rankAll)) g += `<text class="rk" x="${cx + w / 2 + 2}" y="${cy + 16}">r${rk}</text>`;
+    }
+    g += '</g>';
+    (n.children || []).forEach(ch => { g += node(ch); });
+    return g;
+  };
+  forest.forEach(t => { out += node(t); });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${opts.aria}">${out}</svg>`;
+}
+function renderTrees(s) {
+  const f = s.focus;
+  if (!f || !state.A) {
+    $('tstat').textContent = '';
+    $('trees').innerHTML = `<div class="tree"><h3>原樹</h3><p class="nothing">第二階段開始後，這裡會畫出正在處理的那棵樹。</p></div><div class="tree"><h3>重建樹</h3><p class="nothing"></p></div>`;
+    return;
+  }
+  const d = state.A.defOf.get(f);
+  const orig = origTree(f, f, d.op, s);
+  const top = s.stack[s.stack.length - 1];
+  const now = top && top.kind === 'Flatten' ? top.name : null;
+  const forest = newForest(f, s);
+  $('tstat').textContent = `${f} 的樹` + (s.rank[f] >= 0 ? `，等級 ${s.rank[f]}` : '');
+  const origH = depthOf(orig), newH = forest.length ? Math.max(...forest.map(depthOf)) : null;
+  $('trees').innerHTML = `
+    <div class="tree"><h3>原樹（高度 ${origH}）</h3>${drawForest([orig], { seen: s.visited[f] || {}, now, root: f, rank: s.rank, aria: `${f} 的原始運算式樹`, empty: '' })}</div>
+    <div class="tree"><h3>重建樹${newH !== null ? `（高度 ${newH}）` : ''}</h3>${drawForest(forest, { rank: s.rank, rankAll: true, newest: s.hl && s.hl.newest, root: f, aria: `${f} 重建後的運算式樹`, empty: s.status[f] === 'done' ? '' : 'Rebuild 還沒開始。' })}</div>`;
+}
+
+function renderOutput(s) {
+  const ops = state.parsed.ops;
+  const rows = [];
+  let count = 0;
+  ops.forEach(op => {
+    const T = op.dst;
+    if (s.isRoot[T]) {
+      const list = s.created[T] || [];
+      if (s.status[T] === 'done' || list.length) {
+        rows.push(`<div class="op hd"><span class="num"></span><span>${esc(T)} 的樹${s.status[T] === 'done' ? '' : '（重建中）'}</span><span></span></div>`);
+        list.forEach(c => {
+          const txt = c.c !== undefined ? `${c.t} ← ${c.c}` : `${c.t} ← ${c.l} ${OPS[c.op].sym} ${c.r}`;
+          const nw = s.hl && s.hl.newest === c.t;
+          rows.push(`<div class="op sub"><span class="num">${++count}</span><span class="${nw ? 'new' : ''}">${esc(txt)}</span><span class="badges"><span class="badge rank">rank ${s.rank[c.t]}</span></span></div>`);
+        });
+      } else {
+        rows.push(`<div class="op"><span class="num">${++count}</span><span>${esc(op.text)}</span><span class="badges"><span class="badge root">根，待重建</span></span></div>`);
+      }
+    } else if (s.absorbed[T]) {
+      rows.push(`<div class="op"><span class="num"></span><span class="gone">${esc(op.text)}</span><span class="tail">併入 ${esc(s.absorbed[T])}</span></div>`);
+    } else {
+      rows.push(`<div class="op"><span class="num">${++count}</span><span>${esc(op.text)}</span><span class="tail">${s.phase === 'done' ? '原樣保留' : (!OPS[op.op].cand && s.rank[T] !== undefined) ? '葉' : ''}</span></div>`);
+    }
+  });
+  $('ostat').textContent = `${count} 條`;
+  $('output').innerHTML = rows.join('');
+}
+
+function renderAll() {
+  const bad = state.parsed.errors.length > 0;
+  const T = total();
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && $('src').value === PRESETS[i].src));
+  $('errs').innerHTML = state.parsed.errors.map(e => `<span>${esc(e)}</span>`).join('');
+  $('phint').textContent = $('src').value === PRESETS[state.pi].src ? PRESETS[state.pi].hint : '';
+  $('step-range').max = T; $('step-range').value = state.k;
+  $('count').textContent = `第 ${state.k} / ${T} 步`;
+  $('btn-prev').disabled = state.k === 0;
+  $('btn-next').disabled = bad || state.k >= T;
+  $('btn-p2').disabled = bad;
+  $('btn-root').disabled = bad || state.k >= T;
+  $('btn-end').disabled = bad || state.k >= T;
+  const s = bad ? INIT : cur();
+  if (bad) {
+    $('listing').innerHTML = ''; $('livebox').textContent = ''; $('vars').innerHTML = ''; $('queues').innerHTML = ''; $('trees').innerHTML = ''; $('output').innerHTML = '';
+    $('nlabel').textContent = $('phase').textContent = $('qstat').textContent = $('tstat').textContent = $('ostat').textContent = '';
+    document.querySelectorAll('#pseudo .pl').forEach(el => el.classList.remove('on'));
+    $('say').textContent = '程式碼有錯，修好之後再開始。';
+    return;
+  }
+  renderListing(s);
+  renderPseudo(s);
+  renderVars(s);
+  renderQueues(s);
+  renderTrees(s);
+  renderOutput(s);
+  const say = $('say');
+  if (state.k === 0) say.textContent = '按「下一步」開始第一階段：逐條檢查哪些運算是樹的根。';
+  else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '') + (s.note ? `<span class="note">${s.note}</span>` : '');
+}
+
+$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
+$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
+$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
+$('btn-p2').addEventListener('click', () => { const idx = state.trace.findIndex(s => s.phase === 'p2'); if (idx >= 0) { state.k = idx + 1; renderAll(); } });
+$('btn-root').addEventListener('click', () => {
+  const idx = state.trace.findIndex((s, j) => j >= state.k && s.lines.includes('P9'));
+  state.k = idx >= 0 ? idx + 1 : total();
+  renderAll();
+});
+$('btn-end').addEventListener('click', () => { state.k = total(); renderAll(); });
+$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
+$('src').addEventListener('input', () => { rebuild(); renderAll(); });
+document.addEventListener('keydown', e => {
+  if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
+  if (e.key === 'ArrowRight') $('btn-next').click();
+  if (e.key === 'ArrowLeft') $('btn-prev').click();
+});
+
+renderPresets();
+renderPseudoShell();
+$('src').value = PRESETS[0].src;
+rebuild();
+renderAll();
+</script>
+</body>
+</html>
