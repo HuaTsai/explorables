@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heap 與 heapsort：一個陣列怎麼假裝成一棵樹</title>
+<meta name="description" content="把 Introduction to Algorithms 第六章的 heap 一步步跑給你看：陣列和樹並排，MAX-HEAPIFY 怎麼把一個節點沉下去、BUILD-MAX-HEAP 為什麼從中間倒著走、HEAPSORT 怎麼靠縮 heap-size 把排好的部分藏起來，以及同一個 heap 當 max-priority queue 時 insert、extract-max、increase-key 做了什麼。可以自己改陣列和操作。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the workbench has presets, the editable input, the mode switch
+   and the step controls on top, then the array strip, then two panels: tree and pseudocode + variables. */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 這一步比較或交換到的節點 */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* 警告、錯誤 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;         /* 目前的 i */
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+sub { font-size: 0.72em; line-height: 0; }
+i.hit, i.miss { font-style: normal; font-weight: 700; }
+i.hit { color: var(--hit); }
+i.miss { color: var(--miss); }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.foot { color: var(--muted); font-size: 0.85rem; }
+details { border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 1.1rem; background: var(--surface); }
+summary { cursor: pointer; font-weight: 700; }
+details > :not(summary) { margin-top: 0.6rem; }
+details p + p { margin-top: 0.6rem; }
+details ol, details ul { margin: 0.6rem 0 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+details .m { font-family: var(--font-mono); font-size: 0.9em; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* static pseudocode in prose */
+.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow-x: auto; white-space: pre; }
+.code b { color: var(--hit); font-weight: 600; }
+.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.col { display: flex; flex-direction: column; gap: 0.6rem; }
+.col p { font-size: 0.88rem; color: var(--muted); }
+
+/* a small static figure: array on top, tree below */
+.fig { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 1rem 1.25rem; }
+@media (max-width: 640px) { .fig { grid-template-columns: minmax(0, 1fr); } }
+.fig p { font-size: 0.88rem; color: var(--muted); }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.88rem; }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
+@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
+textarea, input[type="number"] { font: inherit; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; }
+textarea { width: 100%; resize: vertical; }
+#src { min-height: 3.2rem; }
+#ops { min-height: 6rem; }
+input[type="number"] { width: 5rem; padding-block: 0.25rem; }
+.field { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.75rem; }
+.field .lbl { font-size: 0.85rem; color: var(--muted); }
+.field.inline { flex-direction: row; align-items: center; gap: 0.6rem; }
+.errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.modes { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+.modes .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.modes button { font-size: 0.88rem; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+.jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.jumps button { font-size: 0.82rem; padding: 0.15rem 0.6rem; }
+.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+.say { font-size: 0.95rem; min-height: 3.2em; }
+.say .warn { display: block; margin-top: 0.35rem; color: var(--miss); }
+.say .warn::before { content: "⚠ "; }
+.say .note { display: block; margin-top: 0.35rem; color: var(--muted); font-size: 0.9rem; }
+
+/* array strip */
+.strip { display: flex; flex-direction: column; gap: 0.4rem; }
+.strip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; font-size: 0.9rem; font-weight: 700; }
+.strip-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; font-family: var(--font-mono); }
+.cells { display: flex; gap: 0.25rem; overflow-x: auto; padding-bottom: 0.25rem; font-family: var(--font-mono); }
+.cell { flex: 0 0 auto; min-width: 2.6rem; display: flex; flex-direction: column; align-items: center; border: 1.5px solid var(--line); border-radius: 4px; background: var(--bg); padding: 0.15rem 0.3rem 0.25rem; }
+.cell .ix { font-size: 0.66rem; color: var(--muted); line-height: 1.3; }
+.cell .val { font-size: 1rem; font-weight: 600; line-height: 1.3; }
+.cell.out { border-style: dashed; opacity: 0.55; }
+.cell.cmp { border-color: var(--hit); border-style: dashed; }
+.cell.best { border-color: var(--hit); box-shadow: inset 0 0 0 1px var(--hit); }
+.cell.cur { background: var(--mark); border-color: var(--ink); }
+.cell.swap { background: var(--hit-soft); border-color: var(--hit); box-shadow: inset 0 0 0 1px var(--hit); }
+.cell.bad { background: var(--miss-soft); border-color: var(--miss); }
+
+/* two panels */
+.work { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 1rem; }
+@media (max-width: 900px) { .work { grid-template-columns: minmax(0, 1fr); } }
+.panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
+.panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+
+/* tree */
+.treebox { padding: 0.5rem; background: var(--bg); flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow-x: auto; }
+.tree { width: 100%; max-width: 40rem; height: auto; display: block; }
+.tree line { stroke: var(--muted); stroke-width: 1.5; }
+.tree line.out { stroke: var(--line); stroke-dasharray: 3 3; }
+.nd circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; }
+.nd text { font-family: var(--font-mono); font-size: 13px; font-weight: 600; text-anchor: middle; dominant-baseline: central; fill: var(--ink); }
+.nd text.ix { font-size: 9px; font-weight: 400; fill: var(--muted); dominant-baseline: auto; }
+.nd.out circle { fill: var(--bg); stroke: var(--line); stroke-dasharray: 3 3; }
+.nd.out text { fill: var(--muted); }
+.nd.cmp circle { stroke: var(--hit); stroke-width: 2; stroke-dasharray: 4 2; }
+.nd.best circle { stroke: var(--hit); stroke-width: 2.5; }
+.nd.cur circle { fill: var(--mark); stroke: var(--ink); stroke-width: 2; }
+.nd.swap circle { fill: var(--hit-soft); stroke: var(--hit); stroke-width: 2.5; }
+.nd.bad circle { fill: var(--miss-soft); stroke: var(--miss); stroke-width: 2.5; }
+.tree .empty { font-family: var(--font-body); font-size: 13px; fill: var(--muted); text-anchor: middle; }
+
+/* pseudocode + variables */
+.pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.65; white-space: pre; overflow-x: auto; background: var(--bg); flex: 1; }
+.pseudo .pl { display: block; padding: 0 0.3rem; border-radius: 3px; }
+.pseudo .pl.on { background: var(--mark); font-weight: 600; }
+.pseudo .pl.head { font-weight: 600; }
+.pseudo .gap { display: block; height: 0.6em; }
+.vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.78rem; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.var { display: inline-flex; align-items: baseline; gap: 0.3rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+.var .k { color: var(--muted); font-size: 0.72rem; }
+.var .v { font-weight: 600; min-width: 1em; }
+.var.chg { border-color: var(--hit); background: var(--hit-soft); }
+.stack { padding: 0.4rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); line-height: 1.6; }
+.stack b { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Introduction to Algorithms 筆記</a>
+    <h1><span class="mono">Heap</span> 與 heapsort：一個陣列怎麼假裝成一棵樹</h1>
+    <p class="lead">Heap 是一個普通的陣列，只是我們用「第 i 格的小孩在第 2i 和 2i + 1 格」這條規則把它讀成一棵幾乎填滿的二元樹，再要求每個父節點都不小於小孩。Introduction to Algorithms 第六章用它做兩件事：原地排序，和一個每次都能在 O(lg n) 內拿出最大值的 priority queue。這一頁把書上的虛擬碼一步步跑給你看，陣列和樹並排，可以自己改輸入。</p>
+  </header>
+
+  <section class="prose">
+    <h2>陣列裡藏著一棵樹</h2>
+    <p>書上的陣列從 1 開始編號。<code>A[1]</code> 是根，第 i 格的左小孩在 <code>2i</code>，右小孩在 <code>2i + 1</code>，父節點在 <code>⌊i/2⌋</code>。這三個運算在二進位裡就是左移、左移加一、右移，所以「找父子」不用存任何指標。這樣讀出來的樹一定是<strong>完全二元樹</strong>：每一層都填滿，只有最底層可能缺右邊幾個。</p>
+    <div class="fig">
+      <div>
+<pre class="code">PARENT(i)
+    return ⌊i/2⌋
+LEFT(i)
+    return 2i
+RIGHT(i)
+    return 2i + 1</pre>
+        <p>第 i 格是不是葉子，看 2i 有沒有超過 heap-size 就知道。n 個元素的 heap，葉子正好是第 ⌊n/2⌋ + 1 到 n 格，高度是 ⌊lg n⌋。</p>
+      </div>
+      <div>
+        <svg class="tree" id="fig-tree" viewBox="0 0 320 170" aria-label="十個元素的 max-heap 畫成樹"></svg>
+        <p>圖 6.1 的 heap：陣列 16 14 10 8 7 9 3 2 4 1，每個節點下面的小字是它在陣列裡的位置。</p>
+      </div>
+    </div>
+    <p><strong>Max-heap property</strong>：除了根以外，每個節點都滿足 <code>A[PARENT(i)] ≥ A[i]</code>。這條規則只管父子，不管兄弟，所以左小孩不一定比右小孩大。它的直接推論是：任何子樹的根都是那棵子樹裡最大的值，特別是 <code>A[1]</code> 永遠是全場最大。</p>
+    <p>陣列有兩個長度。<code>A.length</code> 是陣列本身的格數，<code>A.heap-size</code> 是前面多少格算在 heap 裡。後面會看到 heapsort 靠的就是這兩個數字分開：heap 一格一格縮小，縮掉的那一格留給排好的最大值。</p>
+  </section>
+
+  <section class="prose">
+    <h2>三段虛擬碼，一個核心動作</h2>
+    <p>整章只有一個真正的動作：<code>MAX-HEAPIFY</code> 把一個「可能比小孩小」的節點沉到該去的位置。前提是它的兩棵子樹已經各自是 max-heap，所以只要沿著一條路徑往下修就好：每一層看三個值，挑最大的，只往被換下去的那一邊走，不回頭檢查另一邊。時間是 O(h) = O(lg n)。前提不成立的話結果就不保證是 heap，「單次 MAX-HEAPIFY」模式會提醒你。建 heap 和排序都是在不同地方呼叫它。</p>
+    <details>
+      <summary>證明：MAX-HEAPIFY 是 O(lg n)</summary>
+      <p>設 T(n) 是對一棵 n 個節點的子樹呼叫 MAX-HEAPIFY 的時間。除了遞迴呼叫以外的工作是 Θ(1)，遞迴只會進入其中一棵子樹，所以要問的是：子樹最大能有多大？</p>
+      <p>最壞的情況是最底層剛好填滿一半：左子樹比右子樹多一整層。設樹高 h，左子樹是高 h − 1 的滿樹，有 2<sup>h</sup> − 1 個節點；右子樹是高 h − 2 的滿樹，有 2<sup>h−1</sup> − 1 個；全部 n = 3 · 2<sup>h−1</sup> − 1。左子樹佔 (2<sup>h</sup> − 1)/(3 · 2<sup>h−1</sup> − 1)，h 越大越接近 2/3，而且永遠不超過 2/3。所以 T(n) ≤ T(2n/3) + Θ(1)，套 master theorem 的第二種情況（a = 1、b = 3/2、f(n) = Θ(1) = Θ(n<sup>log<sub>b</sub> a</sup>)）得到 T(n) = O(lg n)。用高度說就是 O(h)。</p>
+    </details>
+  </section>
+  <div class="cols">
+    <div class="col">
+<pre class="code">MAX-HEAPIFY(A, i)
+ 1  l = LEFT(i)
+ 2  r = RIGHT(i)
+ 3  if l ≤ A.heap-size and A[l] &gt; A[i]
+ 4      largest = l
+ 5  else largest = i
+ 6  if r ≤ A.heap-size and A[r] &gt; A[largest]
+ 7      largest = r
+ 8  if largest ≠ i
+ 9      exchange A[i] with A[largest]
+10      MAX-HEAPIFY(A, largest)</pre>
+      <p>第 3 到 7 行在 i、l、r 三個裡挑最大的，超過 heap-size 的小孩不算，比較用的是嚴格大於，相等不交換。第 8 到 10 行：如果最大的不是 i，交換，然後到被換下去的那個位置繼續。最後一行是尾遞迴，習題 6.2-5 要你改成 while 迴圈；workbench 右下的「呼叫」那一行會顯示遞迴永遠只是一條鏈。</p>
+<pre class="code">BUILD-MAX-HEAP(A)
+ 1  A.heap-size = A.length
+ 2  for i = ⌊A.length/2⌋ downto 1
+ 3      MAX-HEAPIFY(A, i)</pre>
+      <p>從最後一個非葉節點倒著走到根。倒著走是為了滿足 MAX-HEAPIFY 的前提（習題 6.3-2）：處理 i 的時候，它的兩個小孩已經處理過了。第 ⌊n/2⌋ + 1 到 n 格是葉子，對葉子呼叫 MAX-HEAPIFY 什麼都不會發生（習題 6.2-4），所以不用管。</p>
+    </div>
+    <div class="col">
+<pre class="code">HEAPSORT(A)
+ 1  BUILD-MAX-HEAP(A)
+ 2  for i = A.length downto 2
+ 3      exchange A[1] with A[i]
+ 4      A.heap-size = A.heap-size − 1
+ 5      MAX-HEAPIFY(A, 1)</pre>
+      <p>每一輪把最大值換到 heap 的最後一格，把那一格劃出 heap，再修根。n − 1 輪之後整個陣列由小到大，而且沒有多用一格空間：排好的部分就藏在 heap-size 之外。</p>
+      <details>
+        <summary>證明：HEAPSORT 的正確性（習題 6.4-2）</summary>
+        <p>Loop invariant：每一輪開始時，<code>A[1..i]</code> 是一個 max-heap，裝著 A 裡最小的 i 個元素；<code>A[i+1..n]</code> 裝著最大的 n − i 個，而且已經排好。</p>
+        <ol>
+          <li>初始：BUILD-MAX-HEAP 之後 <code>A[1..n]</code> 是 max-heap，<code>A[n+1..n]</code> 是空的，invariant 成立。</li>
+          <li>維持：<code>A[1]</code> 是 <code>A[1..i]</code> 裡最大的，換到 <code>A[i]</code> 之後，<code>A[i..n]</code> 排好而且是最大的 n − i + 1 個。heap-size 減成 i − 1，根可能壞掉，MAX-HEAPIFY(A, 1) 把 <code>A[1..i−1]</code> 修回 max-heap。下一輪的 invariant 成立。</li>
+          <li>終止：i = 1 時 <code>A[1]</code> 是最小的，<code>A[2..n]</code> 是排好的最大 n − 1 個，整個陣列排好了。</li>
+        </ol>
+      </details>
+<pre class="code">HEAP-MAXIMUM(A)
+ 1  return A[1]
+
+HEAP-EXTRACT-MAX(A)
+ 1  if A.heap-size &lt; 1
+ 2      error "heap underflow"
+ 3  max = A[1]
+ 4  A[1] = A[A.heap-size]
+ 5  A.heap-size = A.heap-size − 1
+ 6  MAX-HEAPIFY(A, 1)
+ 7  return max
+
+HEAP-INCREASE-KEY(A, i, key)
+ 1  if key &lt; A[i]
+ 2      error "new key is smaller than current key"
+ 3  A[i] = key
+ 4  while i &gt; 1 and A[PARENT(i)] &lt; A[i]
+ 5      exchange A[i] with A[PARENT(i)]
+ 6      i = PARENT(i)
+
+MAX-HEAP-INSERT(A, key)
+ 1  A.heap-size = A.heap-size + 1
+ 2  A[A.heap-size] = −∞
+ 3  HEAP-INCREASE-KEY(A, A.heap-size, key)</pre>
+      <p>Priority queue 的四個操作。取最大值和 heapsort 的一輪幾乎一樣：把最後一格搬到根，heap-size 減一，那一格的舊值還留在陣列裡，只是不算在 heap 裡了。把 key 變大是反方向的動作，節點往上浮。插入先在尾端放一個 −∞，這樣一定不違反 max-heap property，再把它「變大」成要插的值，往上浮的程式只要寫一次。</p>
+    </div>
+  </div>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">陣列（可以改）</p>
+        <textarea id="src" spellcheck="false" aria-label="陣列"></textarea>
+        <div class="field inline" id="idx-field"><span class="lbl">MAX-HEAPIFY 的 i</span><input id="idx" type="number" min="1" value="1" aria-label="MAX-HEAPIFY 的 i"></div>
+        <div class="field" id="ops-field">
+          <span class="lbl">操作（每行一個）</span>
+          <textarea id="ops" spellcheck="false" aria-label="優先佇列的操作"></textarea>
+        </div>
+        <div class="errs" id="errs"></div>
+        <p class="hint" id="inhint"></p>
+      </div>
+      <div>
+        <p class="panel-title">執行</p>
+        <div class="modes" id="modes"><span class="lbl">模式</span></div>
+        <div class="controls">
+          <button id="btn-reset" type="button">重來</button>
+          <button id="btn-prev" type="button">上一步</button>
+          <button id="btn-next" type="button" class="primary">下一步</button>
+          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count" id="count"></span>
+        </div>
+        <div class="jumps">
+          <button id="btn-unit" type="button">跳到下一次呼叫</button>
+          <button id="btn-end" type="button">跑完</button>
+        </div>
+        <p class="hint" id="phint"></p>
+        <p class="hint">陣列和樹上，<span class="mono">黃底</span>是目前的 i，<i class="hit">綠色虛線</i>是正在比較的小孩，<i class="hit">綠色實線</i>是目前最大的那個，<i class="hit">綠底</i>是這一步交換的兩格，<i class="miss">紫底</i>是違反 max-heap property 的地方。虛線的格子已經不在 heap 裡。</p>
+      </div>
+    </div>
+
+    <div class="row strip">
+      <div class="strip-head"><span>陣列 A</span><span class="sub" id="sstat"></span></div>
+      <div class="cells" id="cells"></div>
+    </div>
+
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span>讀成樹</span><span class="sub" id="tstat"></span></div>
+        <div class="treebox"><svg class="tree" id="tree" aria-label="heap 畫成樹"></svg></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>虛擬碼</span><span class="sub" id="phase"></span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+        <div class="vars" id="vars"></div>
+        <div class="stack" id="stack"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>為什麼 BUILD-MAX-HEAP 是 O(n) 而不是 O(n lg n)</h2>
+    <p>粗估是 n/2 次呼叫，每次 O(lg n)，所以 O(n lg n)。這個上界沒錯，但不緊。緊的算法是看每個節點的高度：高度 h 的節點最多 ⌈n/2<sup>h+1</sup>⌉ 個，每個最多沉 h 層，總共</p>
+    <p class="mono" style="text-align:center">Σ<sub>h=0</sub><sup>⌊lg n⌋</sup> ⌈n/2<sup>h+1</sup>⌉ · O(h) = O(n · Σ<sub>h</sub> h/2<sup>h</sup>) = O(n)</p>
+    <p>因為 Σ h/2<sup>h</sup> 收斂到 2。白話說：會沉很深的節點很少，數量多的節點都在底層附近，沉不了幾步。「已排序的輸入」那個範例是最壞情況，每個被處理的節點都沉到底，15 個元素總共只交換 11 次；如果每次都走滿高度 3，7 個非葉節點會交換 21 次。</p>
+    <p>HEAPSORT 沒有這種便宜可以撿：n − 1 次 MAX-HEAPIFY 都是從根開始，而且習題 6.4-3 和 6.4-5 說明不管輸入是什麼順序，都是 Θ(n lg n)。</p>
+    <details>
+      <summary>證明：高度 h 的節點最多 ⌈n/2<sup>h+1</sup>⌉ 個，以及總和為什麼是 O(n)</summary>
+      <p>先看葉子（h = 0）：習題 6.1-7 說葉子是第 ⌊n/2⌋ + 1 到 n 格，共 ⌈n/2⌉ 個。把葉子全部拿掉，剩下的 ⌊n/2⌋ 個節點又是一個 heap，它的葉子就是原來高度 1 的節點，最多 ⌈⌊n/2⌋/2⌉ ≤ ⌈n/4⌉ 個。一直做下去，高度 h 的節點最多 ⌈n/2<sup>h+1</sup>⌉ 個。</p>
+      <p>每個高度 h 的節點呼叫 MAX-HEAPIFY 花 O(h)，所以總時間是</p>
+      <p class="m" style="text-align:center">Σ<sub>h=0</sub><sup>⌊lg n⌋</sup> ⌈n/2<sup>h+1</sup>⌉ · O(h) = O(n · Σ<sub>h=0</sub><sup>∞</sup> h/2<sup>h</sup>)</p>
+      <p>而 Σ h · x<sup>h</sup> = x/(1 − x)<sup>2</sup>，代 x = 1/2 得到 2。所以 BUILD-MAX-HEAP 是 O(n)。</p>
+    </details>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>Heap 是陣列加一條讀法：2i 和 2i + 1 是小孩，⌊i/2⌋ 是父親，不存指標，形狀永遠是完全二元樹。整章只有一個核心動作，把一個節點沉到對的位置，前提是子樹已經好了，所以是 O(lg n)。建 heap 是從中間倒著對每個非葉節點做一次，加起來是 O(n)；排序是對根做 n − 1 次，排好的部分藏在 heap-size 之外，所以是原地的。</p>
+    <p>第七章的 quicksort 是實務上更常贏的 O(n lg n) 排序，第八章證明比較排序的下界就是 Ω(n lg n)，所以 heapsort 和 merge sort 已經是最好的那一類。Priority queue 的用途在圖的章節才真正出現：<a href="../graph-search/">BFS</a> 用的是普通的 queue，把它換成 min-priority queue 就是 Prim 和 Dijkstra，那時需要的是 DECREASE-KEY，和這一頁的 INCREASE-KEY 方向相反。</p>
+    <p>這一頁只做 max-heap，min-heap 是把所有比較反過來。書上 6.5 節提到實務上 heap 裡存的是物件，INCREASE-KEY 要靠 handle 找到物件現在在哪一格，這裡直接用陣列位置。MAX-HEAP-INSERT 應該檢查 heap-size 會不會超過 A.length，這裡讓陣列直接長一格。真的寫程式時陣列從 0 開始，公式變成小孩在 2i + 1 和 2i + 2、父親在 ⌊(i − 1)/2⌋。Heapsort 不是穩定排序，而且存取模式跳來跳去，對快取不友善，這是它實務上輸給 quicksort 的主要原因。</p>
+  </section>
+
+  <p class="foot">來源：Cormen、Leiserson、Rivest、Stein，<i>Introduction to Algorithms</i>（第三版），Chapter 6。虛擬碼照書上的寫法和行號。範例裡的習題 6.1-6、6.2-1、6.3-1、6.4-1 都是書上的題目。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const fmt = v => v === -Infinity ? '−∞' : String(v);
+const MAXN = 31;
+
+const MODES = [
+  { id: 'heapify', label: '單次 MAX-HEAPIFY', procs: ['H'] },
+  { id: 'build', label: 'BUILD-MAX-HEAP', procs: ['B', 'H'] },
+  { id: 'sort', label: 'HEAPSORT', procs: ['S', 'B', 'H'] },
+  { id: 'pq', label: '優先佇列', procs: ['B', 'H', 'M', 'X', 'K', 'I'] },
+];
+const MODE = Object.fromEntries(MODES.map(m => [m.id, m]));
+
+const PRESETS = [
+  { title: '書上的例子', mode: 'build', arr: '4 1 3 2 16 9 10 14 8 7',
+    hint: '圖 6.3 的輸入。i 從 ⌊10/2⌋ = 5 倒著走到 1，葉子 6 到 10 不用處理。' },
+  { title: '接著排序', mode: 'sort', arr: '4 1 3 2 16 9 10 14 8 7',
+    hint: '同一個輸入。前半段和上一個範例一樣，建好 heap 之後看最大值一個一個被換到尾端，heap-size 跟著縮。' },
+  { title: '優先佇列', mode: 'pq', arr: '16 14 10 8 7 9 3 2 4 1', ops: 'increase-key 9 15\nextract-max\ninsert 12\nmaximum',
+    hint: '圖 6.5 的 heap。先把 A[9] 從 4 改成 15 看它往上浮，再取出最大值、插入 12、問最大值。' },
+  { title: '單次 heapify（6.2-1）', mode: 'heapify', arr: '27 17 3 16 13 10 1 5 7 12 4 8 9 0', i: 3,
+    hint: '習題 6.2-1：只有位置 3 違反 max-heap property，看 3 一路沉到哪裡。' },
+  { title: '建 heap（6.3-1）', mode: 'build', arr: '5 3 17 10 84 19 6 22 9',
+    hint: '習題 6.3-1。84 一開始在第 5 格，看它怎麼在三次呼叫裡浮到根。' },
+  { title: '排序（6.4-1）', mode: 'sort', arr: '5 13 2 25 7 17 20 8 4',
+    hint: '習題 6.4-1。' },
+  { title: '已排序的輸入', mode: 'build', arr: '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15',
+    hint: '遞增的陣列是 min-heap，離 max-heap 最遠：每一次 MAX-HEAPIFY 都要沉到底。但大多數節點離底很近，看右邊的交換次數。' },
+  { title: '這是 max-heap 嗎（6.1-6）', mode: 'pq', arr: '23 17 14 6 13 10 1 5 7 12', ops: 'maximum',
+    hint: '習題 6.1-6。優先佇列模式開始前會先檢查 max-heap property，看它在哪裡壞掉。' },
+  { title: '重複的值', mode: 'build', arr: '3 3 3 1 3 3 3',
+    hint: '比較用的是嚴格大於，相等不交換。只有那個 1 會動。' },
+];
+
+const LINE = {
+  H0: 'MAX-HEAPIFY(A, i)', H1: '  l = LEFT(i)', H2: '  r = RIGHT(i)',
+  H3: '  if l ≤ A.heap-size and A[l] > A[i]', H4: '      largest = l', H5: '  else largest = i',
+  H6: '  if r ≤ A.heap-size and A[r] > A[largest]', H7: '      largest = r',
+  H8: '  if largest ≠ i', H9: '      exchange A[i] with A[largest]', H10: '      MAX-HEAPIFY(A, largest)',
+  B0: 'BUILD-MAX-HEAP(A)', B1: '  A.heap-size = A.length', B2: '  for i = ⌊A.length/2⌋ downto 1', B3: '      MAX-HEAPIFY(A, i)',
+  S0: 'HEAPSORT(A)', S1: '  BUILD-MAX-HEAP(A)', S2: '  for i = A.length downto 2', S3: '      exchange A[1] with A[i]',
+  S4: '      A.heap-size = A.heap-size − 1', S5: '      MAX-HEAPIFY(A, 1)',
+  M0: 'HEAP-MAXIMUM(A)', M1: '  return A[1]',
+  X0: 'HEAP-EXTRACT-MAX(A)', X1: '  if A.heap-size < 1', X2: '      error "heap underflow"', X3: '  max = A[1]',
+  X4: '  A[1] = A[A.heap-size]', X5: '  A.heap-size = A.heap-size − 1', X6: '  MAX-HEAPIFY(A, 1)', X7: '  return max',
+  K0: 'HEAP-INCREASE-KEY(A, i, key)', K1: '  if key < A[i]', K2: '      error "new key is smaller than current key"',
+  K3: '  A[i] = key', K4: '  while i > 1 and A[PARENT(i)] < A[i]', K5: '      exchange A[i] with A[PARENT(i)]', K6: '      i = PARENT(i)',
+  I0: 'MAX-HEAP-INSERT(A, key)', I1: '  A.heap-size = A.heap-size + 1', I2: '  A[A.heap-size] = −∞', I3: '  HEAP-INCREASE-KEY(A, A.heap-size, key)',
+};
+const PROC = {
+  H: ['H0', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7', 'H8', 'H9', 'H10'],
+  B: ['B0', 'B1', 'B2', 'B3'],
+  S: ['S0', 'S1', 'S2', 'S3', 'S4', 'S5'],
+  M: ['M0', 'M1'],
+  X: ['X0', 'X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7'],
+  K: ['K0', 'K1', 'K2', 'K3', 'K4', 'K5', 'K6'],
+  I: ['I0', 'I1', 'I2', 'I3'],
+};
+
+// ---- parsers ----
+function parseArray(src) {
+  const errors = [], arr = [];
+  const toks = src.trim().split(/[\s,]+/).filter(Boolean);
+  toks.forEach(t => {
+    if (/^-?\d+$/.test(t)) arr.push(Number(t));
+    else errors.push(`「${t}」不是整數。陣列用空白或逗號隔開，只能放整數。`);
+  });
+  if (!errors.length && arr.length === 0) errors.push('陣列至少要有一個元素。');
+  if (arr.length > MAXN) errors.push(`最多 ${MAXN} 個元素，樹才畫得下。現在有 ${arr.length} 個。`);
+  return { arr, errors };
+}
+function parseOps(src) {
+  const ops = [], errors = [];
+  src.split('\n').forEach((raw, idx) => {
+    const ln = idx + 1;
+    const t = raw.replace(/(#|\/\/).*$/, '').trim().toLowerCase();
+    if (!t) return;
+    const w = t.split(/[\s,()]+/).filter(Boolean);
+    const num = s => /^-?\d+$/.test(s) ? Number(s) : null;
+    if (['maximum', 'max', 'heap-maximum'].includes(w[0]) && w.length === 1) { ops.push({ ln, op: 'max' }); return; }
+    if (['extract-max', 'extract', 'heap-extract-max', 'pop'].includes(w[0]) && w.length === 1) { ops.push({ ln, op: 'extract' }); return; }
+    if (['insert', 'max-heap-insert', 'push'].includes(w[0]) && w.length === 2 && num(w[1]) !== null) { ops.push({ ln, op: 'insert', key: num(w[1]) }); return; }
+    if (['increase-key', 'increase', 'heap-increase-key'].includes(w[0]) && w.length === 3 && num(w[1]) !== null && num(w[2]) !== null) {
+      if (num(w[1]) < 1) { errors.push(`第 ${ln} 行：位置要從 1 開始。`); return; }
+      ops.push({ ln, op: 'inc', i: num(w[1]), key: num(w[2]) }); return;
+    }
+    errors.push(`第 ${ln} 行：看不懂「${raw.trim()}」。可以用 maximum、extract-max、insert k、increase-key i k。`);
+  });
+  if (!errors.length && ops.length === 0) errors.push('至少要有一個操作。');
+  return { ops, errors };
+}
+
+// ---- trace ----
+function buildTrace(mode, arr, extra) {
+  const A = [null, ...arr];
+  let heapSize = 0;
+  const v = { oi: null, i: null, l: null, r: null, largest: null, key: null, max: null, swaps: 0 };
+  const stack = [];
+  const steps = [];
+  let unit = 0;
+  const n = () => A.length - 1;
+  const snap = (lines, x) => steps.push(Object.assign({
+    lines, A: A.slice(), heapSize, v: Object.assign({}, v), stack: stack.slice(), unit, hl: {}, chV: [], say: '', note: '', warn: '',
+  }, x));
+  const swap = (a, b) => { const t = A[a]; A[a] = A[b]; A[b] = t; v.swaps++; };
+  const isHeapAt = root => {
+    for (let i = 2 * root; i <= heapSize; i++) {
+      // only nodes inside the subtree of root
+      let p = i; while (p > root) p = p >> 1;
+      if (p === root && A[i >> 1] < A[i]) return i;
+    }
+    return 0;
+  };
+  const whereBroken = () => { for (let i = 2; i <= heapSize; i++) if (A[i >> 1] < A[i]) return i; return 0; };
+
+  function heapify(i, pre) {
+    pre = pre || {};
+    stack.push(`MAX-HEAPIFY(A, ${i})`);
+    const l = 2 * i, r = 2 * i + 1;
+    v.i = i; v.l = l; v.r = r; v.largest = null;
+    const kids = [l, r].filter(k => k <= heapSize);
+    const intro = (pre.say || '') + `呼叫 MAX-HEAPIFY(A, ${i})：l = ${l}，r = ${r}。` + (kids.length
+      ? `前提是以 ${kids.join(' 和 ')} 為根的子樹已經是 max-heap，只有 A[${i}] = ${fmt(A[i])} 可能比小孩小。`
+      : `${i} 是葉子（l = ${l} 已經超過 heap-size = ${heapSize}），什麼都不會發生。`);
+    snap((pre.lines || []).concat(['H0', 'H1', 'H2']), { hl: { cur: i, cmp: kids }, chV: ['i', 'l', 'r'], say: intro, warn: pre.warn || '' });
+    let largest;
+    if (l <= heapSize && A[l] > A[i]) {
+      largest = l;
+      snap(['H3', 'H4'], { hl: { cur: i, best: l, cmp: [r].filter(k => k <= heapSize) }, chV: ['largest'],
+        say: `A[l] = A[${l}] = ${fmt(A[l])} > A[i] = ${fmt(A[i])}，目前最大的是左小孩：largest = ${l}。` });
+    } else {
+      largest = i;
+      snap(['H3', 'H5'], { hl: { cur: i, best: i, cmp: [r].filter(k => k <= heapSize) }, chV: ['largest'],
+        say: l > heapSize ? `l = ${l} 超過 heap-size = ${heapSize}，沒有左小孩：largest = i = ${i}。`
+          : `A[l] = A[${l}] = ${fmt(A[l])} ≤ A[i] = ${fmt(A[i])}，左小孩沒有比較大：largest = i = ${i}。` });
+    }
+    v.largest = largest;
+    if (r <= heapSize && A[r] > A[largest]) {
+      const prev = largest;
+      largest = r; v.largest = r;
+      snap(['H6', 'H7'], { hl: { cur: i, best: r }, chV: ['largest'],
+        say: `A[r] = A[${r}] = ${fmt(A[r])} > A[largest] = A[${prev}] = ${fmt(A[prev])}，右小孩更大：largest = ${r}。` });
+    } else {
+      snap(['H6'], { hl: { cur: i, best: largest },
+        say: r > heapSize ? `r = ${r} 超過 heap-size = ${heapSize}，沒有右小孩，largest 還是 ${largest}。`
+          : `A[r] = A[${r}] = ${fmt(A[r])} ≤ A[largest] = A[${largest}] = ${fmt(A[largest])}，largest 還是 ${largest}。` });
+    }
+    if (largest !== i) {
+      const down = A[i], up = A[largest];
+      swap(i, largest);
+      snap(['H8', 'H9', 'H10'], { hl: { swap: [i, largest] }, chV: ['swaps'],
+        say: `largest = ${largest} ≠ i，交換 A[${i}] 和 A[${largest}]：${fmt(up)} 浮上來，${fmt(down)} 沉到位置 ${largest}。沉下去的 ${fmt(down)} 可能又比那裡的小孩小，所以遞迴呼叫 MAX-HEAPIFY(A, ${largest})。` });
+      heapify(largest);
+    } else {
+      snap(['H8'], { hl: { cur: i },
+        say: `largest = i，A[${i}] = ${fmt(A[i])} 不小於兩個小孩，以 ${i} 為根的子樹是 max-heap。MAX-HEAPIFY(A, ${i}) 結束` + (stack.length > 1 ? `，回到 ${stack[stack.length - 2]}。` : '。') });
+    }
+    stack.pop();
+    v.i = v.l = v.r = v.largest = null;
+  }
+
+  function build(pre) {
+    pre = pre || {};
+    stack.push('BUILD-MAX-HEAP(A)');
+    heapSize = n();
+    const half = Math.floor(n() / 2);
+    snap((pre.lines || []).concat(['B0', 'B1']), { chV: ['hs'],
+      say: (pre.say || '') + `BUILD-MAX-HEAP：heap-size = A.length = ${n()}，整個陣列都算在 heap 裡，但現在還不滿足 max-heap property。葉子是第 ${half + 1} 到 ${n()} 格，各自是只有一個節點的 max-heap，不用處理。`,
+      hl: { cmp: Array.from({ length: n() - half }, (_, k) => half + 1 + k) } });
+    for (let i = half; i >= 1; i--) {
+      unit++;
+      v.oi = i;
+      const kids = [2 * i, 2 * i + 1].filter(k => k <= heapSize);
+      heapify(i, { lines: ['B2', 'B3'], say: `i = ${i}：` + (i === half ? '' : `它的小孩 ${kids.join('、')} 在前面的迭代已經是 max-heap 的根了。`) });
+    }
+    v.oi = null;
+    unit++;
+    snap(['B2'], { hl: { best: 1 }, say: `i 走到 0，迴圈結束。整個陣列是 max-heap：每個節點都不小於它的小孩，A[1] = ${fmt(A[1])} 是最大值。一共交換了 ${v.swaps} 次。` });
+    stack.pop();
+  }
+
+  function increaseKey(i, key, pre) {
+    pre = pre || {};
+    stack.push(`HEAP-INCREASE-KEY(A, ${i}, ${key})`);
+    v.i = i; v.key = key;
+    if (key < A[i]) {
+      snap((pre.lines || []).concat(['K0', 'K1', 'K2']), { hl: { bad: [i] }, chV: ['i', 'key'],
+        warn: `HEAP-INCREASE-KEY(A, ${i}, ${key})：key = ${key} 比 A[${i}] = ${fmt(A[i])} 小。這個操作只能把 key 變大，報錯，什麼都不改。` });
+      stack.pop(); v.i = v.key = null;
+      return;
+    }
+    const old = A[i];
+    A[i] = key;
+    snap((pre.lines || []).concat(['K0', 'K3']), { hl: { cur: i }, chV: ['i', 'key'],
+      say: (pre.say || '') + `HEAP-INCREASE-KEY(A, ${i}, ${key})：A[${i}] 從 ${fmt(old)} 改成 ${key}。變大之後可能比父節點大，要往上浮。` });
+    while (true) {
+      const p = i >> 1;
+      if (i > 1 && A[p] < A[i]) {
+        swap(i, p);
+        snap(['K4', 'K5', 'K6'], { hl: { swap: [i, p] }, chV: ['i', 'swaps'],
+          say: `A[PARENT(${i})] = A[${p}] = ${fmt(A[i])} < A[${i}] = ${fmt(A[p])}，交換，i 變成 ${p}。` });
+        i = p; v.i = i;
+      } else {
+        snap(['K4'], { hl: { cur: i }, say: i === 1 ? `i = 1，已經在根，停止。` : `A[PARENT(${i})] = A[${p}] = ${fmt(A[p])} ≥ A[${i}] = ${fmt(A[i])}，父節點沒有比較小，停止。` });
+        break;
+      }
+    }
+    stack.pop(); v.i = v.key = null;
+  }
+
+  if (mode === 'heapify') {
+    heapSize = n();
+    const i = extra.i;
+    unit++;
+    const l = 2 * i, r = 2 * i + 1;
+    const brokenKids = [l, r].filter(k => k <= heapSize && isHeapAt(k));
+    heapify(i, brokenKids.length ? { warn: `注意：以 ${brokenKids.join(' 和 ')} 為根的子樹本身就不是 max-heap，MAX-HEAPIFY 的前提不成立，跑完也不保證是 max-heap。` } : {});
+    const b = whereBroken();
+    unit++;
+    snap([], { hl: b ? { bad: [b >> 1, b] } : { best: i },
+      say: b ? `跑完了，但 A[${b >> 1}] = ${fmt(A[b >> 1])} < A[${b}] = ${fmt(A[b])}，整個陣列還不是 max-heap。MAX-HEAPIFY 只修從 ${i} 往下的一條路徑，其他地方壞掉它不管。`
+        : `跑完了。以 ${i} 為根的子樹已經是 max-heap` + (i === 1 ? '，而且因為 i 是根，整個陣列都是。' : '。') });
+  } else if (mode === 'build') {
+    build();
+  } else if (mode === 'sort') {
+    stack.push('HEAPSORT(A)');
+    build({ lines: ['S0', 'S1'], say: 'HEAPSORT 第一步先建 heap。' });
+    for (let i = n(); i >= 2; i--) {
+      unit++;
+      v.oi = i;
+      const big = A[1], last = A[i];
+      swap(1, i);
+      heapSize = i - 1;
+      snap(['S2', 'S3', 'S4'], { hl: { swap: [1, i] }, chV: ['oi', 'hs', 'swaps'],
+        say: `i = ${i}：A[1] = ${fmt(big)} 是 heap 裡最大的，和 A[${i}] = ${fmt(last)} 交換，把它放到最後的位置 ${i}。heap-size 減成 ${i - 1}，位置 ${i} 以後不再屬於 heap，之後不會再動它。` });
+      heapify(1, { lines: ['S5'], say: `根換成了 ${fmt(last)}，可能比小孩小。` });
+    }
+    v.oi = null;
+    unit++;
+    stack.pop();
+    snap(['S2'], { say: `i 走到 1，迴圈結束。heap 只剩 A[1]，它是最小的。A[1..${n()}] 已經由小到大排好。整個過程交換了 ${v.swaps} 次。` });
+  } else if (mode === 'pq') {
+    heapSize = n();
+    const b = whereBroken();
+    if (b) {
+      snap([], { hl: { bad: [b >> 1, b] },
+        warn: `輸入不是 max-heap：A[${b >> 1}] = ${fmt(A[b >> 1])} < A[${b}] = ${fmt(A[b])}，位置 ${b} 比它的父節點大。優先佇列的操作都假設 heap 已經成立，所以先跑一次 BUILD-MAX-HEAP。` });
+      build();
+    } else {
+      snap([], { hl: { best: 1 }, say: `輸入已經是 max-heap：每個 A[PARENT(i)] ≥ A[i]。heap-size = ${n()}，直接開始操作。` });
+    }
+    extra.ops.forEach(op => {
+      unit++;
+      v.max = null;
+      if (op.op === 'max') {
+        stack.push('HEAP-MAXIMUM(A)');
+        if (heapSize < 1) { snap(['M0', 'M1'], { warn: 'HEAP-MAXIMUM：heap 是空的，A[1] 沒有意義。書上的虛擬碼沒有檢查這個。' }); }
+        else { v.max = A[1]; snap(['M0', 'M1'], { hl: { best: 1 }, chV: ['max'], say: `HEAP-MAXIMUM：最大值就在根，回傳 A[1] = ${fmt(A[1])}。不用動任何東西，O(1)。` }); }
+        stack.pop(); v.max = null;
+      } else if (op.op === 'extract') {
+        stack.push('HEAP-EXTRACT-MAX(A)');
+        if (heapSize < 1) {
+          snap(['X0', 'X1', 'X2'], { warn: 'HEAP-EXTRACT-MAX：heap-size < 1，heap 是空的，報 heap underflow。' });
+          stack.pop();
+          return;
+        }
+        const max = A[1], hs = heapSize, last = A[hs];
+        v.max = max;
+        A[1] = A[hs];
+        heapSize = hs - 1;
+        snap(['X0', 'X3', 'X4', 'X5'], { hl: hs === 1 ? { cur: 1 } : { swap: [1, hs] }, chV: ['max', 'hs'],
+          say: `HEAP-EXTRACT-MAX：記下 max = A[1] = ${fmt(max)}，把最後一格 A[${hs}] = ${fmt(last)} 搬到根，heap-size 減成 ${hs - 1}。` + (hs > 1 ? `位置 ${hs} 還留著 ${fmt(last)}，但已經不在 heap 裡了。` : '') });
+        if (heapSize >= 1) heapify(1, { lines: ['X6'], say: `根換成了 ${fmt(last)}，可能比小孩小。` });
+        snap(['X7'], { chV: ['max'], say: `回傳 max = ${fmt(max)}。` + (heapSize ? `heap 剩 ${heapSize} 個元素，新的最大值是 A[1] = ${fmt(A[1])}。` : 'heap 空了。') });
+        stack.pop(); v.max = null;
+      } else if (op.op === 'inc') {
+        if (op.i > heapSize) {
+          snap([], { warn: `increase-key ${op.i} ${op.key}：位置 ${op.i} 不在 heap 裡（heap-size = ${heapSize}），略過。` });
+          return;
+        }
+        increaseKey(op.i, op.key, {});
+      } else if (op.op === 'insert') {
+        stack.push(`MAX-HEAP-INSERT(A, ${op.key})`);
+        heapSize++;
+        if (heapSize > n()) A.push(-Infinity); else A[heapSize] = -Infinity;
+        v.key = op.key;
+        snap(['I0', 'I1', 'I2'], { hl: { cur: heapSize }, chV: ['hs', 'key'],
+          say: `MAX-HEAP-INSERT(A, ${op.key})：heap-size 加成 ${heapSize}，新的尾端 A[${heapSize}] 先放 −∞，這樣一定不會違反 max-heap property。` });
+        increaseKey(heapSize, op.key, { lines: ['I3'], say: '再把 −∞ 變大成要插入的 key。' });
+        stack.pop();
+      }
+    });
+    unit++;
+    snap([], { hl: heapSize ? { best: 1 } : {}, say: `操作做完。heap 有 ${heapSize} 個元素` + (heapSize ? `，最大值 A[1] = ${fmt(A[1])}` : '') + `，一共交換了 ${v.swaps} 次。` });
+  }
+  return steps;
+}
+
+// ---- state ----
+const state = { pi: 0, k: 0, mode: 'build', parsed: null, trace: [], err: [] };
+const total = () => state.trace.length;
+const INIT = () => ({ lines: [], A: [null, ...(state.parsed ? state.parsed.arr : [])], heapSize: null,
+  v: { oi: null, i: null, l: null, r: null, largest: null, key: null, max: null, swaps: 0 }, stack: [], unit: 0, hl: {}, chV: [], say: '', note: '', warn: '' });
+const cur = () => state.k === 0 ? INIT() : state.trace[state.k - 1];
+
+function rebuild(keepStep) {
+  state.parsed = parseArray($('src').value);
+  state.err = state.parsed.errors.slice();
+  const extra = {};
+  if (state.mode === 'heapify') {
+    const i = Number($('idx').value);
+    if (!Number.isInteger(i) || i < 1 || i > state.parsed.arr.length) state.err.push(`i 要在 1 到 ${state.parsed.arr.length} 之間。`);
+    extra.i = i;
+  }
+  if (state.mode === 'pq') {
+    const po = parseOps($('ops').value);
+    state.err.push(...po.errors);
+    extra.ops = po.ops;
+  }
+  state.trace = state.err.length ? [] : buildTrace(state.mode, state.parsed.arr, extra);
+  state.k = keepStep ? Math.min(state.k, total()) : 0;
+}
+
+// ---- rendering ----
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { applyPreset(i); });
+    p.appendChild(b);
+  });
+  const m = $('modes');
+  MODES.forEach(md => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = md.label; b.dataset.mode = md.id;
+    b.addEventListener('click', () => setMode(md.id));
+    m.appendChild(b);
+  });
+}
+function applyPreset(i) {
+  const c = PRESETS[i];
+  state.pi = i;
+  $('src').value = c.arr;
+  if (c.ops !== undefined) $('ops').value = c.ops;
+  if (c.i !== undefined) $('idx').value = c.i;
+  state.mode = c.mode;
+  renderPseudoShell();
+  rebuild();
+  renderAll();
+}
+function presetActive() {
+  const c = PRESETS[state.pi];
+  return c.mode === state.mode && $('src').value === c.arr && (c.ops === undefined || $('ops').value === c.ops) && (c.i === undefined || Number($('idx').value) === c.i);
+}
+
+function renderPseudoShell() {
+  const procs = MODE[state.mode].procs;
+  $('pseudo').innerHTML = procs.map(p => PROC[p].map((id, k) =>
+    `<span class="pl${k === 0 ? ' head' : ''}" data-l="${id}">${esc(LINE[id])}</span>`).join('')).join('<span class="gap"></span>');
+  $('idx-field').style.display = state.mode === 'heapify' ? '' : 'none';
+  $('ops-field').style.display = state.mode === 'pq' ? '' : 'none';
+  $('inhint').textContent = state.mode === 'pq'
+    ? '操作每行一個：maximum、extract-max、insert k、increase-key i k（i 是陣列位置）。開始前會檢查陣列是不是 max-heap，不是就先建。'
+    : state.mode === 'heapify' ? '陣列整個算在 heap 裡。i 是要呼叫 MAX-HEAPIFY 的位置，書上的前提是 i 的兩棵子樹已經是 max-heap。'
+    : `陣列用空白隔開，最多 ${MAXN} 個整數，書上的位置從 1 開始。`;
+}
+
+function hlClass(hl, i) {
+  if (hl.bad && hl.bad.includes(i)) return 'bad';
+  if (hl.swap && hl.swap.includes(i)) return 'swap';
+  if (hl.cur === i) return 'cur';
+  if (hl.best === i) return 'best';
+  if (hl.cmp && hl.cmp.includes(i)) return 'cmp';
+  return '';
+}
+
+function renderCells(s) {
+  const n = s.A.length - 1, hs = s.heapSize == null ? n : s.heapSize;
+  $('sstat').textContent = `A.length = ${n} · heap-size = ${s.heapSize == null ? '–' : s.heapSize}`;
+  let html = '';
+  for (let i = 1; i <= n; i++) {
+    const cls = ['cell', i > hs ? 'out' : '', hlClass(s.hl, i)].filter(Boolean).join(' ');
+    html += `<div class="${cls}"><span class="ix">${i}</span><span class="val">${fmt(s.A[i])}</span></div>`;
+  }
+  $('cells').innerHTML = html;
+}
+
+function treeSVG(A, heapSize, hl, W) {
+  const n = A.length - 1;
+  if (n < 1) return `<text class="empty" x="${W / 2}" y="40">（空的）</text>`;
+  const levels = Math.floor(Math.log2(n)) + 1;
+  const LH = levels > 4 ? 56 : 66, R = levels > 4 ? 12 : 15, PAD = R + 6;
+  const pos = i => { const d = Math.floor(Math.log2(i)), k = i - (1 << d); return { x: W * (k + 0.5) / (1 << d), y: PAD + d * LH }; };
+  let edges = '', nodes = '';
+  for (let i = 1; i <= n; i++) {
+    const p = pos(i);
+    if (i >= 2) { const q = pos(i >> 1); edges += `<line class="${i > heapSize ? 'out' : ''}" x1="${q.x}" y1="${q.y}" x2="${p.x}" y2="${p.y}"/>`; }
+    const cls = ['nd', i > heapSize ? 'out' : '', hlClass(hl, i)].filter(Boolean).join(' ');
+    nodes += `<g class="${cls}"><circle cx="${p.x}" cy="${p.y}" r="${R}"/><text x="${p.x}" y="${p.y}">${fmt(A[i])}</text><text class="ix" x="${p.x}" y="${p.y + R + 10}">${i}</text></g>`;
+  }
+  return { html: edges + nodes, H: PAD + (levels - 1) * LH + R + 14 };
+}
+
+function renderTree(s) {
+  const n = s.A.length - 1;
+  const W = 640;
+  const t = treeSVG(s.A, s.heapSize == null ? n : s.heapSize, s.hl, W);
+  const svg = $('tree');
+  if (typeof t === 'string') { svg.setAttribute('viewBox', `0 0 ${W} 60`); svg.innerHTML = t; }
+  else { svg.setAttribute('viewBox', `0 0 ${W} ${t.H}`); svg.innerHTML = t.html; }
+  $('tstat').textContent = n ? `${n} 個節點 · 高度 ${Math.floor(Math.log2(n))}` : '';
+}
+
+function renderPseudo(s) {
+  document.querySelectorAll('#pseudo .pl').forEach(el => el.classList.toggle('on', s.lines.includes(el.dataset.l)));
+  $('phase').textContent = MODE[state.mode].label;
+}
+
+function renderVars(s) {
+  const ch = new Set(s.chV);
+  const d = x => x == null ? '–' : fmt(x);
+  const v = (key, name, val) => `<span class="var${ch.has(key) ? ' chg' : ''}"><span class="k">${name}</span><span class="v">${val}</span></span>`;
+  let html = v('n', 'A.length', s.A.length - 1) + v('hs', 'heap-size', s.heapSize == null ? '–' : s.heapSize);
+  if (state.mode === 'build' || state.mode === 'sort') html += v('oi', state.mode === 'sort' ? 'HEAPSORT 的 i' : 'BUILD 的 i', d(s.v.oi));
+  html += v('i', 'i', d(s.v.i)) + v('l', 'l', d(s.v.l)) + v('r', 'r', d(s.v.r)) + v('largest', 'largest', d(s.v.largest));
+  if (state.mode === 'pq') html += v('key', 'key', d(s.v.key)) + v('max', 'max', d(s.v.max));
+  html += v('swaps', '交換次數', s.v.swaps);
+  $('vars').innerHTML = html;
+  $('stack').innerHTML = s.stack.length ? '呼叫：' + s.stack.map((f, k) => k === s.stack.length - 1 ? `<b>${esc(f)}</b>` : esc(f)).join(' → ') : '呼叫：（還沒開始）';
+}
+
+function renderAll() {
+  const bad = state.err.length > 0;
+  const T = total();
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && presetActive()));
+  document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('chosen', b.dataset.mode === state.mode));
+  $('errs').innerHTML = state.err.map(e => `<span>${esc(e)}</span>`).join('');
+  $('phint').textContent = presetActive() ? PRESETS[state.pi].hint : '';
+  $('step-range').max = T; $('step-range').value = state.k;
+  $('count').textContent = `第 ${state.k} / ${T} 步`;
+  $('btn-prev').disabled = state.k === 0;
+  $('btn-next').disabled = bad || state.k >= T;
+  $('btn-unit').disabled = bad || state.k >= T;
+  $('btn-end').disabled = bad || state.k >= T;
+  const s = bad ? INIT() : cur();
+  renderCells(s);
+  renderTree(s);
+  renderPseudo(s);
+  renderVars(s);
+  const say = $('say');
+  const START = { heapify: '按「下一步」呼叫 MAX-HEAPIFY。', build: '還沒開始。按「下一步」開始建 heap。', sort: '還沒開始。按「下一步」開始 heapsort。', pq: '按「下一步」先檢查輸入是不是 max-heap，再依序做操作。' };
+  if (bad) say.textContent = '輸入有錯，修好之後再開始。';
+  else if (state.k === 0) say.textContent = START[state.mode];
+  else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '') + (s.note ? `<span class="note">${s.note}</span>` : '');
+}
+
+function setMode(m) {
+  if (state.mode === m) return;
+  state.mode = m;
+  renderPseudoShell();
+  rebuild();
+  renderAll();
+}
+
+$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
+$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
+$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
+$('btn-unit').addEventListener('click', () => {
+  const now = cur().unit;
+  const idx = state.trace.findIndex((s, j) => j >= state.k && s.unit !== now);
+  state.k = idx >= 0 ? idx + 1 : total();
+  renderAll();
+});
+$('btn-end').addEventListener('click', () => { state.k = total(); renderAll(); });
+$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
+$('src').addEventListener('input', () => { rebuild(); renderAll(); });
+$('ops').addEventListener('input', () => { rebuild(); renderAll(); });
+$('idx').addEventListener('input', () => { rebuild(); renderAll(); });
+document.addEventListener('keydown', e => {
+  if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
+  if (e.key === 'ArrowRight') $('btn-next').click();
+  if (e.key === 'ArrowLeft') $('btn-prev').click();
+});
+
+// static figure in the prose
+(() => {
+  const A = [null, 16, 14, 10, 8, 7, 9, 3, 2, 4, 1];
+  const t = treeSVG(A, 10, {}, 320);
+  const svg = $('fig-tree');
+  svg.setAttribute('viewBox', `0 0 320 ${t.H}`);
+  svg.innerHTML = t.html;
+})();
+
+renderPresets();
+applyPreset(0);
+</script>
+</body>
+</html>

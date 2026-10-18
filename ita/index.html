@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Introduction to Algorithms 筆記</title>
+<meta name="description" content="讀 CLRS 的 Introduction to Algorithms（第三版）時，把值得動手走一遍的演算法做成互動頁。每篇一個演算法，照書上的虛擬碼逐步執行。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --right: #0a6f6a;
+  --left: #9b2f6b;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --right: #56c9c0; --left: #ea86b8; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 46rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.entries { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); counter-reset: n; }
+.entries li { border-bottom: 1px solid var(--line); counter-increment: n; }
+.entry { display: flex; align-items: baseline; gap: 1rem; padding: 1.1rem 0; color: inherit; text-decoration: none; }
+.entry::before { content: counter(n, decimal-leading-zero); font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); flex: 0 0 2rem; }
+.entry:focus-visible { outline: 2px solid var(--right); outline-offset: 4px; }
+.entry h2 { font-size: 1.1rem; line-height: 1.35; margin: 0; }
+a.entry:hover h2 { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.entry p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.95rem; }
+.entry .text { flex: 1 1 16rem; min-width: 0; }
+.entry .ch { flex: 0 0 auto; font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 0.45rem; }
+.foot { color: var(--muted); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">Introduction to Algorithms</span> 筆記</h1>
+    <p class="lead">讀 Cormen、Leiserson、Rivest 和 Stein 的 Introduction to Algorithms（第三版）時，把值得動手走一遍的演算法做成互動頁。每篇一個演算法，照書上的虛擬碼逐步執行，可以獨立閱讀。</p>
+  </header>
+
+  <section class="prose">
+    <h2>書上虛擬碼的幾個慣例</h2>
+    <p>這本書的演算法都用自己的虛擬碼寫，這個系列照抄書上的寫法，所以先說三件事。陣列從 1 開始編號，<code>A[1..n]</code> 是整個陣列，<code>A.length</code> 是長度。物件的屬性用點，像 <code>A.heap-size</code>、<code>x.key</code>、<code>v.π</code>。縮排代表區塊，沒有大括號。每一頁的 workbench 會把目前執行到的那幾行標出來，旁邊列出變數的值。</p>
+  </section>
+
+  <ul class="entries">
+    <li>
+      <a class="entry" href="heap/">
+        <div class="text">
+          <h2>Heap 與 heapsort</h2>
+          <p>陣列和樹並排，一步步跑 <code>MAX-HEAPIFY</code>、<code>BUILD-MAX-HEAP</code>、<code>HEAPSORT</code>，再用同一個 heap 當 max-priority queue 做 insert、extract-max、increase-key。可以自己改陣列和操作。</p>
+        </div>
+        <span class="ch">Ch. 6</span>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="graph-search/">
+        <div class="text">
+          <h2>BFS、DFS 與 SCC</h2>
+          <p>在同一張圖上一步步跑 BFS、DFS、拓樸排序和 Kosaraju 的強連通元件。看 queue 裡的距離怎麼分層、時間戳怎麼寫成括號字串、每條邊依顏色分成 tree、back、forward、cross，以及第二次 DFS 為什麼要在反向圖上照 f 遞減走。可以自己改圖。</p>
+        </div>
+        <span class="ch">Ch. 22</span>
+      </a>
+    </li>
+  </ul>
+
+  <p class="foot">接下來預計做：Kruskal 與 Prim（Ch. 23）、單源最短路徑（Ch. 24）、DP 表格（Ch. 15）。</p>
+</main>
+</body>
+</html>

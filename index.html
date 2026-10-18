@@ -76,13 +76,23 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
 .mf.b { border-left-color: var(--left); }
 .mf.b span { color: var(--muted); }
 .mf.sp { border-style: dashed; border-left-color: var(--ink); color: var(--muted); }
+.mini-heap { width: 100%; height: 3.6rem; }
+.mini-heap line { stroke: var(--muted); stroke-width: 1.2; }
+.mini-heap circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.2; }
+.mini-heap circle.r { fill: var(--right); stroke: var(--right); }
+.mini-heap circle.l { stroke: var(--left); stroke-width: 1.8; }
+.mini-heap-wrap { display: flex; flex-direction: column; width: 100%; }
+.mini-heap-cells { display: flex; gap: 0.12rem; }
+.mini-heap-cells i { display: block; flex: 1; height: 0.5rem; background: var(--line); border-radius: 1px; }
+.mini-heap-cells i.r { background: var(--right); opacity: 0.8; }
+.mini-heap-cells i.l { background: var(--left); opacity: 0.8; }
 </style>
 </head>
 <body>
 <main class="page">
   <header>
     <h1>Explorables</h1>
-    <p class="lead">可以動手操作的互動解說。每一頁挑一個主題,讓你自己一步一步走過去。</p>
+    <p class="lead">可以動手操作的互動解說。每一頁挑一個主題，讓你自己一步一步走過去。</p>
   </header>
 
   <ul class="entries">
@@ -99,7 +109,7 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         </div>
         <div class="text">
           <h2>Pratt Parser 逐步圖解</h2>
-          <p>逐步執行運算子優先級解析,看每一步怎麼比較 l_bp 和 min_bp,也可以自己改結合力。</p>
+          <p>逐步執行運算子優先級解析，看每一步怎麼比較 l_bp 和 min_bp，也可以自己改結合力。</p>
         </div>
       </a>
     </li>
@@ -112,7 +122,7 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         </div>
         <div class="text">
           <h2>DNS 解析逐步圖解</h2>
-          <p>逐步執行一次 DNS 查詢,看解析器怎麼從根伺服器一路問到權威伺服器,也可以改紀錄、讓快取過期。</p>
+          <p>逐步執行一次 DNS 查詢，看解析器怎麼從根伺服器一路問到權威伺服器，也可以改紀錄、讓快取過期。</p>
         </div>
       </a>
     </li>
@@ -129,7 +139,7 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         </div>
         <div class="text">
           <h2>GPU 記憶體階層逐步圖解</h2>
-          <p>逐步執行一個 warp 的指令,看每次存取在 H100 晶片上走到 register、shared、L1、L2 還是 HBM,花了多少 cycle。可切換 H200,後面附 Blackwell 和 GB300 多了什麼。</p>
+          <p>逐步執行一個 warp 的指令，看每次存取在 H100 晶片上走到 register、shared、L1、L2 還是 HBM，花了多少 cycle。可切換 H200，後面附 Blackwell 和 GB300 多了什麼。</p>
         </div>
       </a>
     </li>
@@ -161,7 +171,7 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         </div>
         <div class="text">
           <h2>Engineering a Compiler 筆記</h2>
-          <p>讀 Cooper 和 Torczon 的編譯器教科書時，把值得動手走一遍的演算法做成互動頁。第一篇：從線性 IR 建控制流程圖。</p>
+          <p>讀 Cooper 和 Torczon 的編譯器教科書時，把值得動手走一遍的演算法做成互動頁。目前三篇：建控制流程圖、區域值編號、樹高平衡。</p>
         </div>
       </a>
     </li>
@@ -177,7 +187,7 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         </div>
         <div class="text">
           <h2>find_rows 逐步圖解</h2>
-          <p>一行 code 一步,看排序加二分搜尋的向量化查表怎麼把二維 queries 變成 pos、hit、row,以及為什麼 clamp 不會製造假命中。</p>
+          <p>一行 code 一步，看排序加二分搜尋的向量化查表怎麼把二維 queries 變成 pos、hit、row，以及為什麼 clamp 不會製造假命中。</p>
         </div>
       </a>
     </li>
@@ -193,7 +203,7 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         </div>
         <div class="text">
           <h2>x86-64 暫存器地圖</h2>
-          <p>點開每一個暫存器看別名怎麼疊、SysV 和 Win64 各給它什麼角色,再用幾個 C 函式逐步看參數怎麼進暫存器。</p>
+          <p>點開每一個暫存器看別名怎麼疊、SysV 和 Win64 各給它什麼角色，再用幾個 C 函式逐步看參數怎麼進暫存器。</p>
         </div>
       </a>
     </li>
@@ -208,7 +218,28 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         </div>
         <div class="text">
           <h2>函式呼叫與 Stack 逐步圖解</h2>
-          <p>用真實位址一步步看 call 和 ret 怎麼搬動 rip 與 rsp、frame 怎麼疊起來又拆掉、為什麼 call 的瞬間 rsp 必須是 16 的倍數,還有返回位址被蓋掉會怎樣。</p>
+          <p>用真實位址一步步看 call 和 ret 怎麼搬動 rip 與 rsp、frame 怎麼疊起來又拆掉、為什麼 call 的瞬間 rsp 必須是 16 的倍數，還有返回位址被蓋掉會怎樣。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="ita/">
+        <div class="glyph" aria-hidden="true">
+          <div class="mini-heap-wrap">
+            <svg class="mini-heap" viewBox="0 0 120 48">
+              <line x1="60" y1="10" x2="30" y2="26"/><line x1="60" y1="10" x2="90" y2="26"/>
+              <line x1="30" y1="26" x2="15" y2="42"/><line x1="30" y1="26" x2="45" y2="42"/>
+              <line x1="90" y1="26" x2="75" y2="42"/><line x1="90" y1="26" x2="105" y2="42"/>
+              <circle class="r" cx="60" cy="10" r="5"/>
+              <circle class="l" cx="30" cy="26" r="5"/><circle cx="90" cy="26" r="5"/>
+              <circle cx="15" cy="42" r="5"/><circle class="l" cx="45" cy="42" r="5"/><circle cx="75" cy="42" r="5"/><circle cx="105" cy="42" r="5"/>
+            </svg>
+            <div class="mini-heap-cells"><i class="r"></i><i class="l"></i><i></i><i></i><i class="l"></i><i></i><i></i></div>
+          </div>
+        </div>
+        <div class="text">
+          <h2>Introduction to Algorithms 筆記</h2>
+          <p>讀 CLRS 時，把值得動手走一遍的演算法做成互動頁。目前一篇：heap 與 heapsort，陣列和樹並排逐步執行，也能當 priority queue 操作。</p>
         </div>
       </a>
     </li>

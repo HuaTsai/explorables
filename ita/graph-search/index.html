@@ -1,0 +1,1096 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BFS、DFS 與 SCC：走一張圖的兩種方法</title>
+<meta name="description" content="把 Introduction to Algorithms 第二十二章的圖搜尋一步步跑給你看：BFS 怎麼用 queue 一圈一圈往外算距離、DFS 的時間戳怎麼變成括號結構、邊怎麼依顏色分成 tree、back、forward、cross 四種、拓樸排序為什麼是完成順序倒過來，以及 Kosaraju 的兩次 DFS 怎麼找出強連通元件。可以自己改圖。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the workbench has presets, the editable edge list, the mode switch
+   and the step controls on top, then two panels (graph, pseudocode + variables), then the vertex table
+   and the mode-specific list (queue / parentheses / topological order / components). */
+:root {
+  --bg: #eef1f0;
+  --surface: #f9fbfa;
+  --ink: #17211f;
+  --muted: #5b6b67;
+  --line: #cdd6d3;
+  --hit: #0a6f6a;          /* 目前探索的邊、剛改動的值 */
+  --hit-soft: #d5ebe8;
+  --miss: #9b2f6b;         /* back edge、警告 */
+  --miss-soft: #f3dbe8;
+  --mark: #fdf0b8;         /* 目前的 u */
+  --gray: #b9c4c0;         /* GRAY 頂點 */
+  --scc1: #f6d7a7; --scc2: #c9e3f7; --scc3: #d9e7b8; --scc4: #ead4f2; --scc5: #f7c9c9; --scc6: #cfe9e2;
+  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
+    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
+    --mark: #3d3610; --gray: #4a5955;
+    --scc1: #5a4420; --scc2: #1f3a50; --scc3: #37461d; --scc4: #45304d; --scc5: #512a2a; --scc6: #1f3f37;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
+.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
+h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
+h3 { font-size: 1rem; margin: 0.5rem 0 0; }
+p { margin: 0; }
+.lead { color: var(--muted); margin-top: 0.75rem; }
+.prose { display: flex; flex-direction: column; gap: 0.75rem; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+code, .mono { font-family: var(--font-mono); }
+code { font-size: 0.92em; }
+sub { font-size: 0.72em; line-height: 0; }
+i.hit, i.miss { font-style: normal; font-weight: 700; }
+i.hit { color: var(--hit); }
+i.miss { color: var(--miss); }
+.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+.foot { color: var(--muted); font-size: 0.85rem; }
+details { border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 1.1rem; background: var(--surface); }
+summary { cursor: pointer; font-weight: 700; }
+details > :not(summary) { margin-top: 0.6rem; }
+details p + p { margin-top: 0.6rem; }
+details ol, details ul { margin: 0.6rem 0 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
+
+/* static pseudocode in prose */
+.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow-x: auto; white-space: pre; }
+.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.col { display: flex; flex-direction: column; gap: 0.6rem; }
+.col p { font-size: 0.88rem; color: var(--muted); }
+table.def { border-collapse: collapse; font-size: 0.9rem; }
+.def th, .def td { text-align: left; padding: 0.3rem 0.75rem 0.3rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.def th { font-weight: 700; white-space: nowrap; }
+
+/* workbench */
+.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
+.row { padding: 1rem 1.25rem; }
+.row + .row { border-top: 1px solid var(--line); }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
+.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.presets button { font-size: 0.88rem; }
+.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
+@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
+textarea, input[type="text"] { font: inherit; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; }
+textarea { width: 100%; min-height: 11rem; resize: vertical; }
+input[type="text"] { width: 5rem; padding-block: 0.25rem; }
+.field { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.75rem; }
+.field .lbl { font-size: 0.85rem; color: var(--muted); }
+.errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.modes { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.6rem; }
+.modes .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+.modes button { font-size: 0.88rem; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
+.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+.jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.jumps button { font-size: 0.82rem; padding: 0.15rem 0.6rem; }
+.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; margin-top: 0.6rem; font-size: 0.8rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.legend i { display: inline-block; width: 1.4rem; height: 0; border-top: 2.5px solid var(--ink); }
+.legend i.back { border-color: var(--miss); }
+.legend i.fwd { border-color: var(--hit); border-top-style: dashed; }
+.legend i.cross { border-color: var(--muted); border-top-style: dotted; }
+.legend i.cur { border-color: var(--hit); border-top-width: 4px; }
+.legend b { display: inline-block; width: 0.9rem; height: 0.9rem; border-radius: 50%; border: 1.5px solid var(--ink); }
+.legend b.gray { background: var(--gray); }
+.legend b.black { background: var(--ink); }
+.say { font-size: 0.95rem; min-height: 3.2em; }
+.say .warn { display: block; margin-top: 0.35rem; color: var(--miss); }
+.say .warn::before { content: "⚠ "; }
+.say .note { display: block; margin-top: 0.35rem; color: var(--muted); font-size: 0.9rem; }
+
+/* panels */
+.work { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 1rem; }
+.work2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
+@media (max-width: 900px) { .work, .work2 { grid-template-columns: minmax(0, 1fr); } }
+.panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
+.panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+
+/* graph */
+.graphbox { padding: 0.5rem; background: var(--bg); flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow-x: auto; }
+.graph { width: 100%; max-width: 44rem; height: auto; display: block; }
+.graph .e { fill: none; stroke: var(--line); stroke-width: 1.8; }
+.graph .e.tree { stroke: var(--ink); stroke-width: 2.6; }
+.graph .e.back { stroke: var(--miss); stroke-width: 2.2; }
+.graph .e.forward { stroke: var(--hit); stroke-width: 2; stroke-dasharray: 6 4; }
+.graph .e.cross { stroke: var(--muted); stroke-width: 2; stroke-dasharray: 2 4; }
+.graph .e.cur { stroke: var(--hit); stroke-width: 4; stroke-dasharray: none; }
+.graph .e.dim { opacity: 0.35; }
+.graph .vx ellipse { fill: var(--surface); stroke: var(--ink); stroke-width: 1.6; }
+.graph .vx.gray ellipse { fill: var(--gray); }
+.graph .vx.black ellipse { fill: var(--ink); }
+.graph .vx.black text.nm { fill: var(--surface); }
+.graph .vx text { font-family: var(--font-mono); text-anchor: middle; fill: var(--ink); }
+.graph .vx text.nm { font-size: 13px; font-weight: 600; dominant-baseline: central; }
+.graph .vx text.lb { font-size: 10px; fill: var(--muted); }
+.graph .vx.cur ellipse { stroke: var(--hit); stroke-width: 3.5; }
+.graph .vx.cur2 ellipse { stroke: var(--hit); stroke-width: 3; stroke-dasharray: 4 3; }
+.graph .vx.src ellipse { stroke-width: 3; }
+.graph .vx.s1 ellipse { fill: var(--scc1); } .graph .vx.s2 ellipse { fill: var(--scc2); } .graph .vx.s3 ellipse { fill: var(--scc3); }
+.graph .vx.s4 ellipse { fill: var(--scc4); } .graph .vx.s5 ellipse { fill: var(--scc5); } .graph .vx.s6 ellipse { fill: var(--scc6); }
+.graph .vx.s1 text.nm, .graph .vx.s2 text.nm, .graph .vx.s3 text.nm, .graph .vx.s4 text.nm, .graph .vx.s5 text.nm, .graph .vx.s6 text.nm { fill: var(--ink); }
+.graph .empty { font-family: var(--font-body); font-size: 13px; fill: var(--muted); text-anchor: middle; }
+
+/* pseudocode + variables */
+.pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.65; white-space: pre; overflow-x: auto; background: var(--bg); flex: 1; }
+.pseudo .pl { display: block; padding: 0 0.3rem; border-radius: 3px; }
+.pseudo .pl.on { background: var(--mark); font-weight: 600; }
+.pseudo .pl.head { font-weight: 600; }
+.pseudo .gap { display: block; height: 0.6em; }
+.vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.78rem; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.var { display: inline-flex; align-items: baseline; gap: 0.3rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+.var .k { color: var(--muted); font-size: 0.72rem; }
+.var .v { font-weight: 600; min-width: 1em; }
+.var.chg { border-color: var(--hit); background: var(--hit-soft); }
+.stack { padding: 0.4rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); line-height: 1.6; }
+.stack b { color: var(--ink); font-weight: 600; }
+
+/* vertex table and the list panel */
+.tables { padding: 0.5rem 0.6rem; background: var(--bg); flex: 1; font-family: var(--font-mono); font-size: 0.78rem; overflow-x: auto; }
+table.tb { border-collapse: collapse; width: 100%; }
+.tb th, .tb td { padding: 0.15rem 0.5rem; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: baseline; }
+.tb th { font-family: var(--font-body); font-size: 0.7rem; color: var(--muted); font-weight: 700; }
+.tb tr.chg td { background: var(--hit-soft); }
+.tb td.c { color: var(--muted); }
+.tb .dot { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 50%; border: 1.5px solid var(--ink); vertical-align: -0.05em; margin-right: 0.3rem; background: var(--surface); }
+.tb .dot.gray { background: var(--gray); }
+.tb .dot.black { background: var(--ink); }
+.listbox { padding: 0.6rem 0.75rem; background: var(--bg); flex: 1; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.8; display: flex; flex-direction: column; gap: 0.5rem; }
+.listbox .lbl { font-family: var(--font-body); font-size: 0.75rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+.chip { padding: 0 0.5rem; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); font-weight: 600; }
+.chip.chg { border-color: var(--hit); background: var(--hit-soft); }
+.chip.done { color: var(--muted); font-weight: 400; text-decoration: line-through; }
+.chip.s1 { background: var(--scc1); } .chip.s2 { background: var(--scc2); } .chip.s3 { background: var(--scc3); }
+.chip.s4 { background: var(--scc4); } .chip.s5 { background: var(--scc5); } .chip.s6 { background: var(--scc6); }
+.paren { white-space: normal; word-break: break-word; line-height: 1.9; }
+.paren b { color: var(--hit); }
+.empty { color: var(--muted); font-family: var(--font-body); font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Introduction to Algorithms 筆記</a>
+    <h1><span class="mono">BFS</span>、<span class="mono">DFS</span> 與 <span class="mono">SCC</span>：走一張圖的兩種方法</h1>
+    <p class="lead">圖的演算法幾乎都從「把每個頂點走過一遍」開始，而走法只有兩種：BFS 用 queue 一圈一圈往外推，順便算出最短距離；DFS 一路往深處鑽，留下的時間戳和邊的分類是拓樸排序、強連通元件這些後續演算法的全部依據。Introduction to Algorithms 第二十二章把這兩種走法講清楚，這一頁把書上的虛擬碼一步步跑給你看，可以自己改圖。</p>
+  </header>
+
+  <section class="prose">
+    <h2>圖怎麼存：adjacency list，而且順序有差</h2>
+    <p>書上的圖 G = (V, E) 用 <strong>adjacency list</strong> 存：每個頂點 u 有一個串列 <code>G.Adj[u]</code>，列出所有從 u 出去的邊的另一端。無向圖的每條邊會出現在兩個串列裡。記憶體是 Θ(V + E)，對稀疏圖很省；代價是「u 和 v 之間有沒有邊」要掃過整個串列。另一種存法是 V × V 的 <strong>adjacency matrix</strong>，查邊 O(1) 但吃 Θ(V²)，適合稠密圖。</p>
+    <p>這一頁要特別記得一件事：BFS 和 DFS 的結果都依賴 <code>G.Adj[u]</code> 裡的順序，DFS 還依賴 <code>G.V</code> 的順序。換個順序，BFS 的 tree 會不一樣（但距離不變），DFS 的時間戳和邊的分類會不一樣。下面的 workbench 用你列邊的順序當 adjacency list 的順序，頂點第一次出現的順序當 G.V 的順序。</p>
+  </section>
+
+  <section class="prose">
+    <h2>BFS：一圈一圈往外</h2>
+    <p>從來源 s 開始，先找到所有距離 1 的頂點，再找所有距離 2 的，依此類推。做法是一個 FIFO queue：取出一個頂點 u，把它所有還沒見過的鄰居 v 標成見過、記 <code>v.d = u.d + 1</code>、記 <code>v.π = u</code>、放進 queue。顏色是書上的說法：<strong>白</strong>是還沒發現，<strong>灰</strong>是發現了但鄰居還沒掃完，<strong>黑</strong>是掃完了。灰的頂點永遠是「已發現」和「未發現」的邊界，而且 queue 的內容就是圖上所有灰的頂點，照發現的順序排。</p>
+    <p>跑完之後 <code>v.d</code> 就是 s 到 v 的最短距離 δ(s, v)（用邊數算），走不到的是 ∞。π 連起來是一棵 <strong>breadth-first tree</strong>，從 s 到任何頂點沿著樹走就是一條最短路徑。證明的核心是 queue 的性質：queue 裡的 d 值永遠是「不遞減的，而且頭尾最多差 1」（Lemma 22.3），所以頂點是按距離一層一層被取出的。時間 O(V + E)：每個頂點進出 queue 一次，每個 adjacency list 掃一次。注意 d 在入列的那一刻就定了，之後不會改；後面第二十四章的 Dijkstra 長得很像，但那裡的 d 是估計值，會一路被 relax。這裡每條邊都算 1，第一次發現就是最短。</p>
+    <details>
+      <summary>證明：BFS 算出的 d 就是最短距離（Lemma 22.3、Theorem 22.5）</summary>
+      <p>先記兩個簡單的事實。Lemma 22.1：對任何邊 <code>(u, v)</code>，δ(s, v) ≤ δ(s, u) + 1，因為從 s 到 u 的最短路徑接上這條邊就是一條到 v 的路徑。Lemma 22.2：執行過程中永遠有 v.d ≥ δ(s, v)，用歸納：v.d 被設成 u.d + 1 的那一刻，u.d ≥ δ(s, u)，所以 v.d ≥ δ(s, u) + 1 ≥ δ(s, v)，而且 d 設了就不再改。</p>
+      <p>Lemma 22.3：queue 的內容 ⟨v<sub>1</sub>, …, v<sub>r</sub>⟩ 永遠滿足 v<sub>r</sub>.d ≤ v<sub>1</sub>.d + 1，而且 v<sub>i</sub>.d ≤ v<sub>i+1</sub>.d。歸納每一次 queue 的操作：取出 v<sub>1</sub> 之後新的頭 v<sub>2</sub> 的 d 不比 v<sub>1</sub> 小，所以尾巴仍然 ≤ 新頭 + 1；放進 v 時 v.d = u.d + 1，而 u 是剛取出的頭，v<sub>1</sub>.d ≥ u.d，所以 v.d ≤ v<sub>1</sub>.d + 1，而且 v.d 不小於原本的尾巴 v<sub>r</sub>.d ≤ u.d + 1。推論：先入列的頂點 d 不大於後入列的（Corollary 22.4）。</p>
+      <p>Theorem 22.5：反設有頂點拿到錯的 d。取 δ(s, v) 最小的那個 v 使得 v.d ≠ δ(s, v)，由 Lemma 22.2 是 v.d &gt; δ(s, v)，且 v ≠ s，而且 v 走得到（否則 v.d = ∞ = δ）。設 u 是 s 到 v 最短路徑上 v 的前一個頂點，δ(s, v) = δ(s, u) + 1，由 v 的選法 u.d = δ(s, u)，所以 v.d &gt; u.d + 1。看 u 從 queue 被取出的那一刻：v 若是白的，會被設成 u.d + 1，矛盾；v 若是黑的，它比 u 早被取出，由 Corollary 22.4 v.d ≤ u.d，矛盾；v 若是灰的，它是被某個比 u 早取出的 w 染灰的，v.d = w.d + 1 ≤ u.d + 1，矛盾。所以每個 v.d = δ(s, v)。π 構成的樹是最短路徑樹，因為 v.π = u 時 v.d = u.d + 1。</p>
+    </details>
+  </section>
+
+  <section class="prose">
+    <h2>DFS：時間戳和括號</h2>
+    <p>DFS 從一個頂點出發，沿著一條還沒走過的邊一直往下，走到沒路才退回來。它不是從單一來源出發：外層迴圈掃過 G.V，遇到白的就從那裡開始一棵新的樹，結果是一座 <strong>depth-first forest</strong>。每個頂點記兩個時間戳：<code>u.d</code> 是被發現（變灰）的時刻，<code>u.f</code> 是鄰居全部處理完（變黑）的時刻。全域的 time 每次只加 1，所以時間戳是 1 到 2|V| 的整數，每個頂點用掉兩個。</p>
+    <p><strong>Parenthesis theorem（22.7）</strong>：把 u.d 寫成 <code>(u</code>、u.f 寫成 <code>u)</code>，整段執行會寫出一個合法的括號字串。任兩個頂點的區間 [u.d, u.f] 和 [v.d, v.f] 要嘛完全分開，要嘛一個包住另一個；包住就代表祖先和子孫的關係。Workbench 會把這個括號字串一邊跑一邊寫出來。</p>
+    <details>
+      <summary>證明：Parenthesis theorem（Theorem 22.7）</summary>
+      <p>不失一般性設 u.d &lt; v.d，分兩種情況。若 v.d &lt; u.f，則 v 是在 u 還是灰的時候被發現的，所以 v 是 u 的子孫；而且 v 比 u 晚發現，它的 adjacency list 會在搜尋退回 u 之前掃完，所以 v.f &lt; u.f，區間 [v.d, v.f] 整個落在 [u.d, u.f] 裡。若 u.f &lt; v.d，則 u.d &lt; u.f &lt; v.d &lt; v.f，兩個區間分開；沒有任何一個頂點是在另一個灰的時候被發現的，所以沒有祖先子孫關係。v.d &lt; u.d 的情況對稱。</p>
+      <p>推論（Corollary 22.8）：v 是 u 的真子孫，當且僅當 u.d &lt; v.d &lt; v.f &lt; u.f。</p>
+    </details>
+    <p><strong>White-path theorem（22.9）</strong>：v 是 u 的子孫，當且僅當在 u.d 那一刻，存在一條從 u 到 v 全是白頂點的路徑。白話說：發現 u 的時候，所有「只經過沒走過的頂點就能到」的頂點，都會在 u 完成前被 u 這棵子樹收進來。這是後面拓樸排序和 SCC 證明的主要工具。</p>
+    <details>
+      <summary>證明：White-path theorem（Theorem 22.9）</summary>
+      <p>（⇒）若 v = u，路徑就是 u 自己，設定 u.d 的那一刻它還是白的。若 v 是 u 的真子孫，由 Corollary 22.8 u.d &lt; v.d，所以在 u.d 那一刻 v 是白的；樹上從 u 到 v 的路徑上每個頂點都是 u 的子孫，同理都是白的。</p>
+      <p>（⇐）反設在 u.d 那一刻有一條全白的路徑從 u 到 v，但 v 沒有成為 u 的子孫。不失一般性假設路徑上除了 v 以外的頂點都成為 u 的子孫（否則把 v 換成路徑上第一個沒成為子孫的頂點）。設 w 是路徑上 v 的前一個頂點，w 是 u 的子孫（w 可以等於 u），由 Corollary 22.8 w.f ≤ u.f。v 必須在 u 發現之後、w 完成之前被發現（因為 w 掃 adjacency list 時會碰到白的 v），所以 u.d &lt; v.d &lt; w.f ≤ u.f。由 Theorem 22.7，[v.d, v.f] 落在 [u.d, u.f] 裡，v 是 u 的子孫，矛盾。白話說：路徑上 v 的前一站 w 是 u 的子孫，就逼著 v 也得是。</p>
+    </details>
+    <h3>邊的四種分類</h3>
+    <p>DFS 探索邊 <code>(u, v)</code> 的時候，看 v 的顏色就知道這條邊是哪一種：</p>
+    <table class="def">
+      <tr><th>v 是白的</th><td><strong>tree edge</strong>：v 是透過這條邊被發現的，成為 u 的小孩。</td></tr>
+      <tr><th>v 是灰的</th><td><strong>back edge</strong>：v 還沒完成，它是 u 的祖先（或 u 自己，self-loop 也算）。這條邊和樹上的路徑形成一個環。</td></tr>
+      <tr><th>v 是黑的，且 u.d &lt; v.d</th><td><strong>forward edge</strong>：v 是 u 的子孫，但不是透過這條邊發現的。</td></tr>
+      <tr><th>v 是黑的，且 u.d &gt; v.d</th><td><strong>cross edge</strong>：v 在另一棵子樹，或另一棵樹裡，兩邊沒有祖先關係。</td></tr>
+    </table>
+    <p>黑的 v 要再比一次 d，因為「完成了」有兩種可能：u.d &lt; v.d 表示 v 是在 u 發現之後才被發現、又在 u 完成前完成，區間巢狀在 u 裡面，所以是子孫；反過來 v 比 u 早發現又已經完成，兩個區間完全分開。Self-loop <code>(u, u)</code> 探索時 u 自己是灰的，所以算 back edge，書上 Figure 22.4 的 z → z 就是。</p>
+    <p>無向圖簡單得多：每條邊從兩頭各會被探索一次，以先碰到的那一次為準，而且只會是 tree 或 back（Theorem 22.10）。</p>
+    <details>
+      <summary>證明：無向圖只有 tree 和 back（Theorem 22.10）</summary>
+      <p>設 <code>(u, v)</code> 是無向邊，不失一般性 u.d &lt; v.d。搜尋第一次探索這條邊的時候，若是從 u 這頭，v 一定還是白的（否則從 v 那頭早就探索過了），所以是 tree edge。若是從 v 這頭，那時 u 是灰的（u 比 v 早發現，而且還沒完成，因為 v 是在 u 的區間裡被發現的），所以是 back edge。forward 和 cross 都不可能出現。</p>
+    </details>
+  </section>
+
+  <section class="prose">
+    <h2>拓樸排序：完成順序倒過來</h2>
+    <p>一個 DAG（有向無環圖）的 <strong>topological sort</strong> 是把頂點排成一列，讓每條邊 <code>(u, v)</code> 的 u 都排在 v 前面。做法只有一行：跑 DFS，每個頂點<strong>完成</strong>的時候插到一個 linked list 的最前面。理由是 Lemma 22.12：對 DAG 裡的任何邊 <code>(u, v)</code>，一定有 v.f &lt; u.f。探索 <code>(u, v)</code> 時 v 不可能是灰的（那會是 back edge，DAG 沒有環），白的話 v 會先完成，黑的話 v 早就完成了。所以 f 越大越前面。</p>
+    <p>反過來，Lemma 22.11 說有向圖無環當且僅當 DFS 不產生 back edge。所以同一次 DFS 也順便檢查了輸入是不是 DAG：workbench 遇到 back edge 會標紫色並警告。另一種常見做法是反覆拿掉 in-degree 為 0 的頂點（Kahn 的演算法），書上沒講；DFS 版的好處是多個起點不用特別處理，外層迴圈自然會掃到。</p>
+    <details>
+      <summary>證明：無環 ⇔ 沒有 back edge（Lemma 22.11），以及 TOPOLOGICAL-SORT 的正確性（Lemma 22.12）</summary>
+      <p>Lemma 22.11（⇒）：若 DFS 產生 back edge <code>(u, v)</code>，v 是 u 的祖先，樹上有一條 v 到 u 的路徑，接上這條邊就是環。（⇐）：若 G 有環 c，設 v 是 c 上第一個被發現的頂點，<code>(u, v)</code> 是 c 上進入 v 的邊。在 v.d 那一刻，c 上從 v 到 u 的路徑全是白的，由 white-path theorem u 會成為 v 的子孫，所以探索 <code>(u, v)</code> 時 v 是灰的，它是 back edge。</p>
+      <p>Lemma 22.12：只要證明對 DAG 的任何邊 <code>(u, v)</code> 都有 v.f &lt; u.f。探索這條邊的時候 v 不可能是灰的，否則是 back edge，和 Lemma 22.11 矛盾。v 是白的話它成為 u 的子孫，v.f &lt; u.f；v 是黑的話它已經完成，v.f 早就設了，當然小於之後才設的 u.f。所以照 f 遞減排，每條邊的 u 都在 v 前面。</p>
+    </details>
+  </section>
+
+  <section class="prose">
+    <h2>強連通元件：兩次 DFS</h2>
+    <p>有向圖的 <strong>strongly connected component（SCC）</strong>是「互相都走得到」的最大頂點集合。把每個 SCC 縮成一點得到的 <strong>component graph</strong> 一定是 DAG（Lemma 22.13，兩個元件之間若雙向都有路，它們就該是同一個元件）。書上的演算法是 Kosaraju 的做法：</p>
+    <ol>
+      <li>對 G 跑一次 DFS，記下每個頂點的 f。</li>
+      <li>把所有邊反向，得到 G<sup>T</sup>。它的 SCC 和 G 一模一樣。</li>
+      <li>對 G<sup>T</sup> 跑 DFS，但外層迴圈照 f <strong>遞減</strong>的順序挑起點。</li>
+      <li>第二次 DFS 的每一棵樹就是一個 SCC。</li>
+    </ol>
+    <p>關鍵是 Lemma 22.14：若 G 有一條邊從元件 C 指向元件 C'，則 f(C) &gt; f(C')，這裡 f(C) 是 C 裡最大的 f。所以照 f 遞減挑起點，第一棵樹從「component graph 的源頭」開始；在 G<sup>T</sup> 裡邊都反過來了，從這個元件出去的邊只會指向 f 更大的元件，而那些都已經走過（黑的）。於是這棵樹剛好只收進自己的元件，不會漏出去。接下來每一棵樹都用同樣的論證。要記得第二次看的是 f 不是 d：f 最大的頂點所在的元件是源頭，反向之後它變成匯點，從它出發走不出去。</p>
+    <details>
+      <summary>證明：Lemma 22.13、22.14 和 Theorem 22.16</summary>
+      <p>Lemma 22.13：C 和 C' 是不同的 SCC，u, v ∈ C，u', v' ∈ C'。若 G 同時有路徑 u ⇝ u' 和 v' ⇝ v，那麼 u ⇝ u' ⇝ v'（C' 內部互通）和 v' ⇝ v ⇝ u（C 內部互通）讓 C 和 C' 互相可達，它們應該是同一個 SCC，矛盾。所以 component graph 沒有環。</p>
+      <p>Lemma 22.14：設 d(C) 和 f(C) 是 C 裡最小的 d 和最大的 f。若有邊 <code>(u, v)</code>，u ∈ C，v ∈ C'，則 f(C) &gt; f(C')。分兩種情況。若 d(C) &lt; d(C')，設 x 是 C 裡第一個被發現的。在 x.d 那一刻 C 和 C' 全白，而 C 裡每個頂點都有從 x 出發的路徑，經過 <code>(u, v)</code> 之後 C' 的每個頂點也有，由 white-path theorem 它們全都成為 x 的子孫，由 Corollary 22.8 x.f 最大，所以 f(C) = x.f &gt; f(C')。若 d(C) &gt; d(C')，設 y 是 C' 裡第一個被發現的，同理 C' 全部成為 y 的子孫，f(C') = y.f。由 Lemma 22.13 從 C' 走不到 C，所以 y 完成時 C 還全是白的，C 裡每個頂點的 f 都大於 y.f，f(C) &gt; f(C')。</p>
+      <p>Corollary 22.15：在 G<sup>T</sup> 裡，若有邊從 C 指向 C'，則 f(C) &lt; f(C')。因為 G<sup>T</sup> 的邊 <code>(u, v)</code> 就是 G 的邊 <code>(v, u)</code>，套 Lemma 22.14。</p>
+      <p>Theorem 22.16：對第二次 DFS 產生的樹做歸納，假設前 k 棵樹各是一個 SCC。第 k + 1 棵樹的根 u 在元件 C 裡，u.f = f(C) 大於所有還沒走過的元件的 f。那一刻 C 的其他頂點都是白的（歸納假設說前面的樹沒碰到 C），C 內部互通，由 white-path theorem 它們都成為 u 的子孫。反過來，G<sup>T</sup> 裡從 C 出去的邊只會指向 f 更大的元件（Corollary 22.15），那些元件都已經在前 k 棵樹裡，是黑的，所以這棵樹不會收進 C 以外的頂點。這棵樹剛好就是 C。</p>
+    </details>
+  </section>
+
+  <div class="cols">
+    <div class="col">
+<pre class="code">BFS(G, s)
+ 1  for each vertex u ∈ G.V − {s}
+ 2      u.color = WHITE
+ 3      u.d = ∞
+ 4      u.π = NIL
+ 5  s.color = GRAY
+ 6  s.d = 0
+ 7  s.π = NIL
+ 8  Q = ∅
+ 9  ENQUEUE(Q, s)
+10  while Q ≠ ∅
+11      u = DEQUEUE(Q)
+12      for each v ∈ G.Adj[u]
+13          if v.color == WHITE
+14              v.color = GRAY
+15              v.d = u.d + 1
+16              v.π = u
+17              ENQUEUE(Q, v)
+18      u.color = BLACK</pre>
+<pre class="code">TOPOLOGICAL-SORT(G)
+ 1  call DFS(G) to compute finishing times v.f for each vertex v
+ 2  as each vertex is finished, insert it onto the front of a linked list
+ 3  return the linked list of vertices</pre>
+    </div>
+    <div class="col">
+<pre class="code">DFS(G)
+ 1  for each vertex u ∈ G.V
+ 2      u.color = WHITE
+ 3      u.π = NIL
+ 4  time = 0
+ 5  for each vertex u ∈ G.V
+ 6      if u.color == WHITE
+ 7          DFS-VISIT(G, u)
+
+DFS-VISIT(G, u)
+ 1  time = time + 1
+ 2  u.d = time
+ 3  u.color = GRAY
+ 4  for each v ∈ G.Adj[u]
+ 5      if v.color == WHITE
+ 6          v.π = u
+ 7          DFS-VISIT(G, v)
+ 8  u.color = BLACK
+ 9  time = time + 1
+10  u.f = time</pre>
+<pre class="code">STRONGLY-CONNECTED-COMPONENTS(G)
+ 1  call DFS(G) to compute finishing times u.f for each vertex u
+ 2  compute G<sup>T</sup>
+ 3  call DFS(G<sup>T</sup>), but in the main loop of DFS, consider the vertices
+        in order of decreasing u.f (as computed in line 1)
+ 4  output the vertices of each tree in the depth-first forest formed
+        in line 3 as a separate strongly connected component</pre>
+    </div>
+  </div>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">邊（可以改）</p>
+        <textarea id="src" spellcheck="false" aria-label="邊的列表"></textarea>
+        <div class="field" id="src-field"><span class="lbl">BFS 的來源 s</span><input id="source" type="text" aria-label="BFS 的來源"></div>
+        <div class="errs" id="errs"></div>
+        <p class="hint">每行一條邊 <code>u v</code>，有向圖代表 u → v。列邊的順序就是 adjacency list 的順序，頂點第一次出現的順序就是 G.V 的順序。<code>@u x y</code> 指定 u 畫在哪裡（可省略，會自動排），單獨一個名字代表孤立的頂點。</p>
+      </div>
+      <div>
+        <p class="panel-title">執行</p>
+        <div class="modes" id="modes"><span class="lbl">模式</span></div>
+        <div class="modes" id="dirs"><span class="lbl">圖</span><button type="button" data-dir="directed">有向</button><button type="button" data-dir="undirected">無向</button></div>
+        <div class="controls">
+          <button id="btn-reset" type="button">重來</button>
+          <button id="btn-prev" type="button">上一步</button>
+          <button id="btn-next" type="button" class="primary">下一步</button>
+          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count" id="count"></span>
+        </div>
+        <div class="jumps">
+          <button id="btn-unit" type="button">跳到下一個頂點</button>
+          <button id="btn-end" type="button">跑完</button>
+        </div>
+        <p class="hint" id="phint"></p>
+        <div class="legend">
+          <span><b></b>白</span><span><b class="gray"></b>灰</span><span><b class="black"></b>黑</span>
+          <span><i class="cur"></i>正在探索的邊</span><span><i></i>tree</span><span><i class="back"></i>back</span><span><i class="fwd"></i>forward</span><span><i class="cross"></i>cross</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span id="gtitle">圖</span><span class="sub" id="gstat"></span></div>
+        <div class="graphbox"><svg class="graph" id="graph" aria-label="圖"></svg></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>虛擬碼</span><span class="sub" id="phase"></span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+        <div class="vars" id="vars"></div>
+        <div class="stack" id="stack"></div>
+      </div>
+    </div>
+
+    <div class="row work2">
+      <div class="panel">
+        <div class="panel-head"><span>頂點</span><span class="sub" id="vstat"></span></div>
+        <div class="tables" id="vtable"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span id="ltitle">Queue</span><span class="sub" id="lstat"></span></div>
+        <div class="listbox" id="list"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>BFS 是 queue，DFS 是 stack（遞迴）。前者按距離分層，給你最短路徑樹；後者給你時間戳，括號結構和白路徑定理都是從時間戳來的。DFS 探索一條邊時看另一端的顏色就能分類：白是 tree，灰是 back（代表有環），黑再比 d 分 forward 和 cross。完成時間 f 是 DFS 最有用的副產品：DAG 的邊永遠從 f 大指向 f 小，所以 f 遞減就是拓樸順序；元件之間的邊也從 f 大的元件指向 f 小的，所以照 f 遞減在反向圖上重跑，每棵樹就是一個 SCC。</p>
+    <p>邊有權重的時候，把 queue 換成 priority queue 就是第二十四章的 Dijkstra，第二十三章 Prim 的最小生成樹也是同一個骨架，這兩頁都會用到 <a href="../heap/">heap</a>。DFS 的時間戳還能做更多事：習題 22-2 用它找 articulation point 和 bridge，22-3 找 Euler tour。SCC 書上只講 Kosaraju 的兩次 DFS，實務上更常見的 Tarjan 做法用一個 stack 和 low-link 值一次走完，證明的核心還是同一個白路徑定理。</p>
+    <p>這一頁只用 adjacency list，矩陣版的 BFS 和 DFS 是 Θ(V²)，因為掃一個頂點的鄰居要看整列。DFS-VISIT 照書上用遞迴，深度等於最長的路徑；真的寫程式常改成自己維護 stack，但那時邊的分類不能再靠呼叫順序，要另外記每個頂點掃到哪裡。</p>
+  </section>
+
+  <p class="foot">來源：Cormen、Leiserson、Rivest、Stein，<i>Introduction to Algorithms</i>（第三版），Chapter 22。虛擬碼照書上的寫法和行號。範例裡的圖是書上 Figure 22.3、22.4、22.6、22.7、22.8、22.9 和習題 22.2-1、22.3-2、22.4-1 的圖。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const MAXV = 26;
+
+const MODES = [
+  { id: 'bfs', label: 'BFS', procs: ['Q'], list: 'Queue' },
+  { id: 'dfs', label: 'DFS', procs: ['D', 'V'], list: '括號結構' },
+  { id: 'topo', label: '拓樸排序', procs: ['T', 'D', 'V'], list: '排序結果（linked list）' },
+  { id: 'scc', label: 'SCC', procs: ['C', 'D', 'V'], list: '元件' },
+];
+const MODE = Object.fromEntries(MODES.map(m => [m.id, m]));
+
+const G223 = `@r 0 0
+@s 1 0
+@t 2 0
+@u 3 0
+@v 0 1
+@w 1 1
+@x 2 1
+@y 3 1
+s w
+s r
+w t
+w x
+r v
+t u
+t x
+x u
+x y
+u y`;
+const G224 = `@u 0 0
+@v 1 0
+@w 2 0
+@x 0 1
+@y 1 1
+@z 2 1
+u v
+u x
+v y
+w y
+w z
+x v
+y x
+z z`;
+const G227 = `@shirt 3 0
+@tie 3 1
+@jacket 2.2 2.1
+@belt 1.9 1.1
+@watch 1.8 0
+@undershorts 0 0
+@pants 0 1.1
+@shoes 0.8 2.1
+@socks 0.8 0
+shirt tie
+shirt belt
+tie jacket
+belt jacket
+undershorts pants
+undershorts shoes
+pants belt
+pants shoes
+socks shoes`;
+const G229 = `@c 2 0
+@b 1 0
+@a 0 0
+@d 3 0
+@e 0 1
+@f 1 1
+@g 2 1
+@h 3 1
+c g
+c d
+g f
+g h
+f g
+h h
+d c
+d h
+b e
+b c
+b f
+e a
+e f
+a b`;
+const G226 = `@q 1 0
+@r 3 0
+@s 0 1
+@t 2 1
+@u 4 1
+@v 0 2
+@w 1 2
+@x 2 2
+@y 3 2
+@z 2 3
+q s
+q w
+q t
+r u
+r y
+s v
+t x
+t y
+u y
+v w
+w s
+x z
+y q
+z x`;
+const G228 = `@m 0 0
+@n 1.3 0
+@o 2.6 0
+@p 3.9 0
+@q 0.3 1.1
+@r 1.6 1.1
+@s 2.9 1.1
+@t 0 2.2
+@u 1 2.2
+@v 2 2.2
+@w 3 2.2
+@x 4 2.2
+@y 1.5 3.3
+@z 3.5 3.3
+m q
+m r
+m x
+n o
+n q
+n u
+o r
+o s
+o v
+p o
+p s
+p z
+q t
+r u
+r y
+s r
+u t
+v w
+v x
+w z
+y v`;
+const G222 = `@1 0 0
+@2 1 0
+@3 2 0
+@4 0 1
+@5 1 1
+@6 2 1
+1 2
+1 4
+2 5
+3 5
+3 6
+4 2
+5 4
+6 6`;
+
+const PRESETS = [
+  { title: 'BFS 書上的例子', mode: 'bfs', dir: 'undirected', src: G223, s: 's',
+    hint: 'Figure 22.3 的無向圖，從 s 出發。看 queue 裡的 d 值永遠不遞減、頭尾最多差 1，頂點按距離一層一層被取出。' },
+  { title: 'DFS 書上的例子', mode: 'dfs', dir: 'directed', src: G224,
+    hint: 'Figure 22.4。注意 u → x 是 forward（x 是 u 的子孫但不是經由這條邊發現）、w → y 是 cross、z → z 是 back。' },
+  { title: '拓樸排序：穿衣服', mode: 'topo', dir: 'directed', src: G227,
+    hint: 'Figure 22.7。頂點照書上的 G.V 順序排，先從 shirt 開始。每個頂點完成時插到 list 最前面，最後的 list 就是穿衣順序。' },
+  { title: 'SCC 書上的例子', mode: 'scc', dir: 'directed', src: G229,
+    hint: 'Figure 22.9。第一次 DFS 從 c 開始（照 G.V 順序），第二次在 G^T 上照 f 遞減挑起點：b、c、g、h，每棵樹就是一個元件。' },
+  { title: 'BFS（22.2-1）', mode: 'bfs', dir: 'directed', src: G222, s: '3',
+    hint: '習題 22.2-1：Figure 22.2(a) 的有向圖，從 3 出發。1 和 2 走不到，d 維持 ∞。' },
+  { title: 'DFS（22.3-2）', mode: 'dfs', dir: 'directed', src: G226,
+    hint: '習題 22.3-2：Figure 22.6 的圖，頂點照字母順序。四種邊都會出現。' },
+  { title: '拓樸排序（22.4-1）', mode: 'topo', dir: 'directed', src: G228,
+    hint: '習題 22.4-1：Figure 22.8 的 DAG，十四個頂點。' },
+  { title: '無向圖的 DFS', mode: 'dfs', dir: 'undirected', src: G223,
+    hint: '同一張 Figure 22.3 的圖改跑 DFS。無向圖只會有 tree 和 back 兩種邊（Theorem 22.10），從另一頭再碰到同一條邊時不會重新分類。' },
+  { title: '有環的拓樸排序', mode: 'topo', dir: 'directed', src: G224,
+    hint: 'Figure 22.4 的圖有環。DFS 一碰到 back edge 就知道這不是 DAG，排出來的順序對那條邊不成立。' },
+];
+
+const LINE = {
+  Q0: 'BFS(G, s)', Q1: '  for each vertex u ∈ G.V − {s}', Q2: '      u.color = WHITE', Q3: '      u.d = ∞', Q4: '      u.π = NIL',
+  Q5: '  s.color = GRAY', Q6: '  s.d = 0', Q7: '  s.π = NIL', Q8: '  Q = ∅', Q9: '  ENQUEUE(Q, s)',
+  Q10: '  while Q ≠ ∅', Q11: '      u = DEQUEUE(Q)', Q12: '      for each v ∈ G.Adj[u]', Q13: '          if v.color == WHITE',
+  Q14: '              v.color = GRAY', Q15: '              v.d = u.d + 1', Q16: '              v.π = u', Q17: '              ENQUEUE(Q, v)', Q18: '      u.color = BLACK',
+  D0: 'DFS(G)', D1: '  for each vertex u ∈ G.V', D2: '      u.color = WHITE', D3: '      u.π = NIL', D4: '  time = 0',
+  D5: '  for each vertex u ∈ G.V', D6: '      if u.color == WHITE', D7: '          DFS-VISIT(G, u)',
+  V0: 'DFS-VISIT(G, u)', V1: '  time = time + 1', V2: '  u.d = time', V3: '  u.color = GRAY', V4: '  for each v ∈ G.Adj[u]',
+  V5: '      if v.color == WHITE', V6: '          v.π = u', V7: '          DFS-VISIT(G, v)', V8: '  u.color = BLACK', V9: '  time = time + 1', V10: '  u.f = time',
+  T0: 'TOPOLOGICAL-SORT(G)', T1: '  call DFS(G) to compute finishing times v.f\n      for each vertex v', T2: '  as each vertex is finished, insert it onto\n      the front of a linked list', T3: '  return the linked list of vertices',
+  C0: 'STRONGLY-CONNECTED-COMPONENTS(G)', C1: '  call DFS(G) to compute finishing times u.f', C2: '  compute Gᵀ', C3: '  call DFS(Gᵀ), but in the main loop of DFS,\n      consider the vertices in order of\n      decreasing u.f (as computed in line 1)', C4: '  output the vertices of each tree in the\n      depth-first forest as a separate SCC',
+};
+const PROC = {
+  Q: ['Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8', 'Q9', 'Q10', 'Q11', 'Q12', 'Q13', 'Q14', 'Q15', 'Q16', 'Q17', 'Q18'],
+  D: ['D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'],
+  V: ['V0', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10'],
+  T: ['T0', 'T1', 'T2', 'T3'],
+  C: ['C0', 'C1', 'C2', 'C3', 'C4'],
+};
+
+// ---- parser ----
+function parseGraph(src, directed) {
+  const errors = [], names = [], pos = {}, edges = [];
+  const seen = new Set();
+  const addV = nm => { if (!seen.has(nm)) { seen.add(nm); names.push(nm); } };
+  src.split('\n').forEach((raw, idx) => {
+    const ln = idx + 1;
+    const t = raw.replace(/(#|\/\/).*$/, '').trim();
+    if (!t) return;
+    const w = t.split(/[\s,]+/);
+    if (w[0].startsWith('@')) {
+      const nm = w[0].slice(1);
+      if (!nm || w.length !== 3 || isNaN(Number(w[1])) || isNaN(Number(w[2]))) { errors.push(`第 ${ln} 行：位置要寫成 @名字 x y。`); return; }
+      addV(nm); pos[nm] = { x: Number(w[1]), y: Number(w[2]) }; return;
+    }
+    if (w.length === 1) { addV(w[0]); return; }
+    if (w.length === 2) { addV(w[0]); addV(w[1]); edges.push({ u: w[0], v: w[1] }); return; }
+    errors.push(`第 ${ln} 行：看不懂「${t}」。每行一條邊 u v，或 @u x y。`);
+  });
+  if (!errors.length && names.length === 0) errors.push('至少要有一個頂點。');
+  if (names.length > MAXV) errors.push(`最多 ${MAXV} 個頂點，現在有 ${names.length} 個。`);
+  // duplicate edges are kept (multigraph), but an undirected self-loop is rejected
+  if (!directed) edges.forEach(e => { if (e.u === e.v) errors.push(`無向圖不能有 self-loop（${e.u} ${e.v}）。`); });
+  const adj = {}; names.forEach(n => adj[n] = []);
+  edges.forEach((e, k) => {
+    e.id = directed ? `${e.u}>${e.v}` : (e.u < e.v ? `${e.u}-${e.v}` : `${e.v}-${e.u}`);
+    e.k = k;
+    adj[e.u].push(e.v);
+    if (!directed && e.u !== e.v) adj[e.v].push(e.u);
+  });
+  return { names, pos, edges, adj, directed, errors };
+}
+
+// ---- layout ----
+function layout(G) {
+  const names = G.names, n = names.length;
+  const have = names.filter(nm => G.pos[nm]).length;
+  let P = {};
+  if (have === n) { names.forEach(nm => P[nm] = { x: G.pos[nm].x, y: G.pos[nm].y }); }
+  else {
+    // deterministic Fruchterman-Reingold; vertices with a given position are pinned
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    names.forEach((nm, k) => P[nm] = G.pos[nm] ? { x: G.pos[nm].x, y: G.pos[nm].y, pin: true }
+      : { x: Math.cos(2 * Math.PI * k / n) * 1.5 + rnd() * 0.1, y: Math.sin(2 * Math.PI * k / n) * 1.5 + rnd() * 0.1 });
+    const K = 1.2;
+    const nb = {}; names.forEach(nm => nb[nm] = new Set());
+    G.edges.forEach(e => { if (e.u !== e.v) { nb[e.u].add(e.v); nb[e.v].add(e.u); } });
+    for (let it = 0; it < 400; it++) {
+      const temp = 0.6 * (1 - it / 400) + 0.01;
+      const disp = {}; names.forEach(nm => disp[nm] = { x: 0, y: 0 });
+      for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) {
+        const A = P[names[a]], B = P[names[b]];
+        let dx = A.x - B.x, dy = A.y - B.y, d = Math.hypot(dx, dy) || 0.01;
+        const f = K * K / d;
+        dx /= d; dy /= d;
+        disp[names[a]].x += dx * f; disp[names[a]].y += dy * f;
+        disp[names[b]].x -= dx * f; disp[names[b]].y -= dy * f;
+      }
+      names.forEach(u => nb[u].forEach(v => {
+        const A = P[u], B = P[v];
+        let dx = A.x - B.x, dy = A.y - B.y, d = Math.hypot(dx, dy) || 0.01;
+        const f = d * d / K;
+        disp[u].x -= dx / d * f; disp[u].y -= dy / d * f;
+      }));
+      names.forEach(nm => {
+        if (P[nm].pin) return;
+        disp[nm].x -= P[nm].x * 0.5 * Math.sqrt(n); disp[nm].y -= P[nm].y * 0.5 * Math.sqrt(n);
+        const d = Math.hypot(disp[nm].x, disp[nm].y) || 0.01, m = Math.min(d, temp);
+        P[nm].x += disp[nm].x / d * m; P[nm].y += disp[nm].y / d * m;
+      });
+    }
+  }
+  const xs = names.map(nm => P[nm].x), ys = names.map(nm => P[nm].y);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const R = 17, PADY = 34;
+  const rxOf = nm => Math.max(R, nm.length * 7.8 / 2 + 9);
+  const PAD = Math.max(...names.map(rxOf)) + 14;
+  const dx = Math.max(maxx - minx, 0.001), dy = Math.max(maxy - miny, 0.001);
+  const sc = Math.min((700 - 2 * PAD) / dx, 120, (520 - 2 * PADY - 24) / dy);
+  const W = Math.max(dx * sc + 2 * PAD, 160), H = Math.max(dy * sc + 2 * PADY + 24, 120);
+  const out = {};
+  names.forEach(nm => out[nm] = { x: PAD + (P[nm].x - minx) * sc, y: PADY + 12 + (P[nm].y - miny) * sc, rx: rxOf(nm), ry: R });
+  return { pos: out, W, H, R };
+}
+
+// ---- trace ----
+function buildTrace(mode, G, extra) {
+  const names = G.names, adj = G.adj, directed = G.directed;
+  const V = {}; names.forEach(nm => V[nm] = { color: 'white', d: null, f: null, pi: null });
+  const EC = {};                    // edge id -> 'tree' | 'back' | 'forward' | 'cross'
+  const edgeOf = (u, v) => G.edges.find(e => directed ? (e.u === u && e.v === v) : ((e.u === u && e.v === v) || (e.u === v && e.v === u)));
+  const st = { u: null, v: null, time: 0 };
+  const stack = [], steps = [];
+  let unit = 0, Q = [], L = [], paren = [], sccs = [], phase = 'G', forder = null, skipped = [];
+  const snap = (lines, x) => steps.push(Object.assign({
+    lines, V: JSON.parse(JSON.stringify(V)), EC: Object.assign({}, EC), st: Object.assign({}, st), stack: stack.slice(), unit,
+    Q: Q.slice(), L: L.slice(), paren: paren.slice(), sccs: sccs.map(c => c.slice()), phase, forder: forder ? forder.slice() : null,
+    cur: {}, chV: [], chRows: [], say: '', note: '', warn: '',
+  }, x));
+  const fmtV = v => v == null ? '–' : v;
+
+  if (mode === 'bfs') {
+    const s = extra.s;
+    V[s].color = 'gray'; V[s].d = 0; Q = [s];
+    snap(['Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8', 'Q9'], { cur: { u: s }, chRows: [s],
+      say: `初始化：所有頂點白色、d = ∞、π = NIL。來源 ${s} 染灰、d = 0，放進 queue。灰色代表「發現了，但鄰居還沒掃」，也就是在 queue 裡。` });
+    while (Q.length) {
+      unit++;
+      const u = Q.shift();
+      st.u = u; st.v = null;
+      snap(['Q10', 'Q11'], { cur: { u }, chV: ['u', 'q'], say: `Queue 不是空的，取出最前面的 u = ${u}（d = ${V[u].d}）。接下來掃它的 adjacency list：${adj[u].length ? adj[u].join('、') : '（空的）'}。` });
+      for (const v of adj[u]) {
+        st.v = v;
+        const e = edgeOf(u, v);
+        if (V[v].color === 'white') {
+          V[v].color = 'gray'; V[v].d = V[u].d + 1; V[v].pi = u; Q.push(v);
+          EC[e.id] = 'tree';
+          snap(['Q12', 'Q13', 'Q14', 'Q15', 'Q16', 'Q17'], { cur: { u, v, e: e.id }, chV: ['v', 'q'], chRows: [v],
+            say: `v = ${v} 是白的：第一次發現。染灰、d = ${u}.d + 1 = ${V[v].d}、π = ${u}，放進 queue。邊 <code>(${u}, ${v})</code> 成為 breadth-first tree 的邊。` });
+        } else {
+          snap(['Q12', 'Q13'], { cur: { u, v, e: e.id }, chV: ['v'],
+            say: `v = ${v} 是${V[v].color === 'gray' ? '灰' : '黑'}的，已經發現過了（d = ${V[v].d}），不做事。` + (V[v].d <= V[u].d + 1 ? '' : '') });
+        }
+      }
+      V[u].color = 'black'; st.v = null;
+      snap(['Q18'], { cur: { u }, chRows: [u], say: `${u} 的鄰居掃完了，染黑。` + (Q.length ? `Queue 現在是 ⟨${Q.join(', ')}⟩，d 值 ${Q.map(x => V[x].d).join(', ')}：不遞減，頭尾最多差 1。` : 'Queue 空了。') });
+    }
+    st.u = null; unit++;
+    const unreached = names.filter(nm => V[nm].d === null);
+    snap(['Q10'], { say: `Queue 空了，BFS 結束。每個頂點的 d 就是從 ${s} 出發的最短距離，π 連起來是 breadth-first tree。` + (unreached.length ? `${unreached.join('、')} 從 ${s} 走不到，d 維持 ∞。` : '') });
+    return steps;
+  }
+
+  // ---- DFS core, shared by dfs / topo / scc ----
+  let time = 0;
+  const useAdj = () => phase === 'GT' ? extra.adjT : adj;
+  const onFinish = (u) => {
+    if (mode === 'topo') L.unshift(u);
+  };
+  function visit(u, pre) {
+    pre = pre || {};
+    stack.push(`DFS-VISIT(${u})`);
+    time++; V[u].d = time; V[u].color = 'gray'; st.u = u; st.v = null; st.time = time;
+    paren.push({ t: '(' + u, v: u });
+    const A = useAdj()[u];
+    snap((pre.lines || []).concat(['V0', 'V1', 'V2', 'V3']), { cur: { u }, chV: ['u', 'time'], chRows: [u],
+      say: (pre.say || '') + `DFS-VISIT(${u})：time = ${time}，${u}.d = ${time}，染灰。寫下 <code>(${u}</code>。接下來掃 ${phase === 'GT' ? 'Gᵀ.' : 'G.'}Adj[${u}] = ${A.length ? A.join('、') : '（空的）'}。` });
+    for (const v of A) {
+      st.u = u; st.v = v;
+      const e = phase === 'GT' ? extra.edgeOfT(u, v) : edgeOf(u, v);
+      if (!directed && EC[e.id]) {
+        snap(['V4', 'V5'], { cur: { u, v, e: e.id }, chV: ['v'],
+          say: `邊 <code>(${u}, ${v})</code>：無向圖的這條邊已經從 ${v} 那頭探索過、分類成 ${EC[e.id]} 了，這次不重新分類。${v} 是${V[v].color === 'gray' ? '灰' : '黑'}的，不往下走。` });
+        continue;
+      }
+      if (V[v].color === 'white') {
+        EC[e.id] = 'tree'; V[v].pi = u;
+        visit(v, { lines: ['V4', 'V5', 'V6', 'V7'], say: `邊 <code>(${u}, ${v})</code>：${v} 是白的，tree edge，${v}.π = ${u}。` });
+        st.u = u;
+      } else if (V[v].color === 'gray') {
+        EC[e.id] = 'back';
+        snap(['V4', 'V5'], { cur: { u, v, e: e.id }, chV: ['v'],
+          say: `邊 <code>(${u}, ${v})</code>：${v} 是灰的，還沒完成，它是 ${u} 的${u === v ? '自己（self-loop）' : '祖先'}。這是 <b>back edge</b>，代表圖上有一個環。`,
+          warn: mode === 'topo' ? `出現 back edge，這張圖不是 DAG，拓樸排序不存在。繼續跑，但最後的順序對邊 <code>(${u}, ${v})</code> 不成立。` : '' });
+      } else {
+        const kind = V[u].d < V[v].d ? 'forward' : 'cross';
+        EC[e.id] = kind;
+        snap(['V4', 'V5'], { cur: { u, v, e: e.id }, chV: ['v'],
+          say: `邊 <code>(${u}, ${v})</code>：${v} 是黑的，已經完成。${u}.d = ${V[u].d} ${kind === 'forward' ? '<' : '>'} ${v}.d = ${V[v].d}，` + (kind === 'forward'
+            ? `${v} 是在 ${u} 之後才被發現的，是 ${u} 的子孫，但不是經由這條邊：<b>forward edge</b>。`
+            : `${v} 比 ${u} 早發現又已經完成，兩邊的區間完全分開：<b>cross edge</b>。`) });
+      }
+    }
+    V[u].color = 'black'; time++; V[u].f = time; st.u = u; st.v = null; st.time = time;
+    paren.push({ t: u + ')', v: u });
+    onFinish(u);
+    stack.pop();
+    snap(['V8', 'V9', 'V10'].concat(mode === 'topo' ? ['T2'] : []), { cur: { u }, chV: ['time'], chRows: [u], chList: u,
+      say: `${u} 的 adjacency list 掃完了：染黑，time = ${time}，${u}.f = ${time}。寫下 <code>${u})</code>，區間 [${V[u].d}, ${V[u].f}]。` +
+        (mode === 'topo' ? `插到 linked list 最前面：⟨${L.join(', ')}⟩。` : '') +
+        (stack.length ? `回到 ${stack[stack.length - 1]}。` : '') });
+  }
+  function dfs(order, pre) {
+    pre = pre || {};
+    stack.push(phase === 'GT' ? 'DFS(Gᵀ)' : 'DFS(G)');
+    paren = [];
+    names.forEach(nm => { V[nm].color = 'white'; V[nm].pi = null; V[nm].d = null; V[nm].f = null; });
+    time = 0; st.time = 0;
+    snap((pre.lines || []).concat(['D0', 'D1', 'D2', 'D3', 'D4']), { chV: ['time'],
+      say: (pre.say || '') + `初始化：所有頂點白色、π = NIL，time = 0。外層迴圈照${phase === 'GT' ? ' f 遞減的順序' : ' G.V 的順序'}看每個頂點：${order.join('、')}。` });
+    skipped = [];
+    for (const u of order) {
+      if (V[u].color !== 'white') { skipped.push(u); continue; }
+      unit++;
+      const sk = skipped.length ? `${skipped.join('、')} 已經不是白的，跳過。` : '';
+      skipped = [];
+      const before = names.filter(nm => V[nm].color !== 'white').length;
+      visit(u, { lines: ['D5', 'D6', 'D7'], say: sk + `外層迴圈：${u} 是白的，從它開始一棵新的樹。` });
+      if (mode === 'scc' && phase === 'GT') {
+        const comp = names.filter(nm => V[nm].color === 'black' && !sccs.flat().includes(nm));
+        sccs.push(comp);
+        unit++;
+        snap(['C4'], { chList: 'scc', say: `以 ${u} 為根的這棵樹收進了 {${comp.join(', ')}}，這就是一個強連通元件。從這裡出去的邊都指向已經黑掉的元件，所以沒有漏出去。` });
+      }
+      void before;
+    }
+    stack.pop();
+    unit++;
+    const sk = skipped.length ? `${skipped.join('、')} 已經不是白的，跳過。` : '';
+    skipped = [];
+    if (mode === 'dfs') snap(['D5'], { say: sk + `外層迴圈走完，DFS 結束。括號字串是完整的：每個頂點的區間要嘛分開、要嘛巢狀。邊的分類：` + summarizeEdges() });
+    else if (mode === 'topo') snap(['T3'], { chList: 'all', say: sk + `DFS 結束。linked list 是 ⟨${L.join(', ')}⟩，也就是 f 遞減的順序。` + (Object.values(EC).includes('back') ? '' : '每條邊的 u 都排在 v 前面，這是一個合法的拓樸順序。'),
+      warn: Object.values(EC).includes('back') ? '這張圖有 back edge，不是 DAG，上面的順序不是拓樸排序。' : '' });
+    else if (mode === 'scc' && phase === 'G') snap(['C1'], { say: sk + `第一次 DFS 結束，每個頂點都有 f 了。` });
+    else if (mode === 'scc' && phase === 'GT') snap(['C4'], { chList: 'scc', say: sk + `第二次 DFS 結束，一共 ${sccs.length} 個強連通元件：${sccs.map(c => '{' + c.join(', ') + '}').join('、')}。` });
+  }
+  function summarizeEdges() {
+    const cnt = { tree: 0, back: 0, forward: 0, cross: 0 };
+    Object.values(EC).forEach(k => cnt[k]++);
+    return `tree ${cnt.tree}、back ${cnt.back}、forward ${cnt.forward}、cross ${cnt.cross}。`;
+  }
+
+  if (mode === 'dfs') { dfs(names); return steps; }
+  if (mode === 'topo') { L = []; dfs(names, { lines: ['T0', 'T1'], say: 'TOPOLOGICAL-SORT 就是跑一次 DFS。' }); return steps; }
+  if (mode === 'scc') {
+    phase = 'G';
+    dfs(names, { lines: ['C0', 'C1'], say: '第一步：對 G 跑 DFS，目的只是算出每個頂點的 f。' });
+    phase = 'GT';
+    forder = names.slice().sort((a, b) => V[b].f - V[a].f);
+    names.forEach(nm => V[nm].f0 = V[nm].f);
+    Object.keys(EC).forEach(k => delete EC[k]);
+    unit++;
+    snap(['C2', 'C3'], { chList: 'forder', say: `第二步：把每條邊反向得到 Gᵀ（圖已經換成反向的）。第三步的起點順序照第一次 DFS 的 f 遞減：${forder.map(nm => `${nm}(${V[nm].f})`).join('、')}。頂點表多了一欄記住這些 f，d/f 欄接下來會換成第二次 DFS 的時間戳。f 最大的頂點所在的元件是 component graph 的源頭，在 Gᵀ 上從它出發走不出自己的元件。` });
+    dfs(forder, { lines: ['C3'], say: '' });
+    return steps;
+  }
+  return steps;
+}
+
+// ---- state ----
+const state = { pi: 0, k: 0, mode: 'bfs', dir: 'undirected', G: null, lay: null, trace: [], err: [], adjT: null, edgesT: null };
+const total = () => state.trace.length;
+const INIT = () => {
+  const V = {}; (state.G ? state.G.names : []).forEach(nm => V[nm] = { color: 'white', d: null, f: null, pi: null });
+  return { lines: [], V, EC: {}, st: { u: null, v: null, time: 0 }, stack: [], unit: 0, Q: [], L: [], paren: [], sccs: [], phase: 'G', forder: null, cur: {}, chV: [], chRows: [], say: '', note: '', warn: '' };
+};
+const cur = () => state.k === 0 ? INIT() : state.trace[state.k - 1];
+
+function rebuild(keepStep) {
+  const directed = state.dir === 'directed';
+  state.G = parseGraph($('src').value, directed);
+  state.err = state.G.errors.slice();
+  const extra = {};
+  if (state.mode === 'bfs') {
+    const s = $('source').value.trim();
+    if (!state.err.length && !state.G.names.includes(s)) state.err.push(s ? `來源 ${s} 不在圖裡。` : '要指定 BFS 的來源 s。');
+    extra.s = s;
+  }
+  if (state.mode === 'scc') {
+    // transpose: reverse every edge, keep edge order
+    const adjT = {}; state.G.names.forEach(n => adjT[n] = []);
+    const edgesT = state.G.edges.map(e => ({ u: e.v, v: e.u, id: `${e.v}>${e.u}`, k: e.k }));
+    edgesT.forEach(e => adjT[e.u].push(e.v));
+    extra.adjT = adjT; extra.edgeOfT = (u, v) => edgesT.find(e => e.u === u && e.v === v);
+    state.adjT = adjT; state.edgesT = edgesT;
+  }
+  state.lay = state.err.length ? null : layout(state.G);
+  state.trace = state.err.length ? [] : buildTrace(state.mode, state.G, extra);
+  state.k = keepStep ? Math.min(state.k, total()) : 0;
+}
+
+// ---- rendering ----
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => applyPreset(i));
+    p.appendChild(b);
+  });
+  const m = $('modes');
+  MODES.forEach(md => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = md.label; b.dataset.mode = md.id;
+    b.addEventListener('click', () => setMode(md.id));
+    m.appendChild(b);
+  });
+  document.querySelectorAll('#dirs button').forEach(b => b.addEventListener('click', () => setDir(b.dataset.dir)));
+}
+function applyPreset(i) {
+  const c = PRESETS[i];
+  state.pi = i;
+  $('src').value = c.src;
+  if (c.s !== undefined) $('source').value = c.s;
+  state.mode = c.mode; state.dir = c.dir;
+  renderPseudoShell();
+  rebuild();
+  renderAll();
+}
+function presetActive() {
+  const c = PRESETS[state.pi];
+  return c.mode === state.mode && c.dir === state.dir && $('src').value === c.src && (c.s === undefined || $('source').value.trim() === c.s);
+}
+function renderPseudoShell() {
+  const procs = MODE[state.mode].procs;
+  $('pseudo').innerHTML = procs.map(p => PROC[p].map((id, k) =>
+    `<span class="pl${k === 0 ? ' head' : ''}" data-l="${id}">${esc(LINE[id])}</span>`).join('')).join('<span class="gap"></span>');
+  $('src-field').style.display = state.mode === 'bfs' ? '' : 'none';
+  $('ltitle').textContent = MODE[state.mode].list;
+  const forced = state.mode === 'topo' || state.mode === 'scc';
+  document.querySelectorAll('#dirs button').forEach(b => { b.disabled = forced && b.dataset.dir === 'undirected'; b.title = b.disabled ? '拓樸排序和 SCC 只對有向圖有意義' : ''; });
+}
+
+// distance from an ellipse's centre to its boundary along direction (dx, dy)
+const edgeR = (n, dx, dy) => 1 / Math.sqrt((dx / n.rx) ** 2 + (dy / n.ry) ** 2);
+function edgePath(a, b, R, bend, self) {
+  if (self) return `M ${a.x - 7} ${a.y - R + 3} C ${a.x - 30} ${a.y - R - 34}, ${a.x + 30} ${a.y - R - 34}, ${a.x + 7} ${a.y - R + 3}`;
+  let dx = b.x - a.x, dy = b.y - a.y; const d = Math.hypot(dx, dy) || 1; dx /= d; dy /= d;
+  const nx = -dy, ny = dx;
+  const ra = edgeR(a, dx, dy), rb = edgeR(b, dx, dy) + 2;
+  if (!bend) return `M ${a.x + dx * ra} ${a.y + dy * ra} L ${b.x - dx * rb} ${b.y - dy * rb}`;
+  const off = 16;
+  const mx = (a.x + b.x) / 2 + nx * off, my = (a.y + b.y) / 2 + ny * off;
+  // start and end shifted a bit along the normal so the two curves leave the shapes at different points
+  const sx = a.x + dx * ra * 0.85 + nx * R * 0.5, sy = a.y + dy * ra * 0.85 + ny * R * 0.5;
+  const ex = b.x - dx * rb * 0.85 + nx * R * 0.5, ey = b.y - dy * rb * 0.85 + ny * R * 0.5;
+  return `M ${sx} ${sy} Q ${mx} ${my} ${ex} ${ey}`;
+}
+
+function renderGraph(s) {
+  const G = state.G, lay = state.lay, svg = $('graph');
+  if (!G || !lay) { svg.setAttribute('viewBox', '0 0 700 80'); svg.innerHTML = '<text class="empty" x="350" y="45">（圖有錯）</text>'; return; }
+  const useT = s.phase === 'GT';
+  const edges = useT ? state.edgesT : G.edges;
+  const dirEdges = G.directed;
+  const has = new Set(edges.map(e => `${e.u}>${e.v}`));
+  const markers = ['plain', 'tree', 'back', 'forward', 'cross', 'cur'].map(k =>
+    `<marker id="m-${k}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" class="mk ${k}"/></marker>`).join('');
+  let eh = '';
+  edges.forEach(e => {
+    const a = lay.pos[e.u], b = lay.pos[e.v];
+    const self = e.u === e.v;
+    const bend = dirEdges && !self && has.has(`${e.v}>${e.u}`);
+    const kind = EC_of(s, e);
+    const isCur = s.cur.e === e.id;
+    const cls = ['e', kind || '', isCur ? 'cur' : ''].filter(Boolean).join(' ');
+    const mk = dirEdges ? ` marker-end="url(#m-${isCur ? 'cur' : (kind || 'plain')})"` : '';
+    eh += `<path class="${cls}" d="${edgePath(a, b, lay.R, bend, self)}"${mk}/>`;
+  });
+  let vh = '';
+  const sccIdx = {}; s.sccs.forEach((c, k) => c.forEach(nm => sccIdx[nm] = k));
+  G.names.forEach(nm => {
+    const p = lay.pos[nm], v = s.V[nm];
+    const cls = ['vx', v.color !== 'white' ? v.color : '', s.cur.u === nm ? 'cur' : '', s.cur.v === nm && s.cur.v !== s.cur.u ? 'cur2' : '',
+      sccIdx[nm] !== undefined ? `s${sccIdx[nm] % 6 + 1}` : '', state.mode === 'bfs' && nm === $('source').value.trim() ? 'src' : ''].filter(Boolean).join(' ');
+    let lb = '';
+    if (state.mode === 'bfs') lb = v.d == null ? '' : `d = ${v.d}`;
+    else if (v.d != null) lb = `${v.d}/${v.f == null ? '' : v.f}`;
+    vh += `<g class="${cls}"><ellipse cx="${p.x}" cy="${p.y}" rx="${p.rx}" ry="${p.ry}"/><text class="nm" x="${p.x}" y="${p.y}">${esc(nm)}</text>` +
+      (lb ? `<text class="lb" x="${p.x}" y="${p.y - lay.R - 5}">${lb}</text>` : '') + `</g>`;
+  });
+  svg.setAttribute('viewBox', `0 0 ${lay.W} ${lay.H}`);
+  svg.style.maxWidth = `${Math.round(lay.W * 1.15)}px`;
+  svg.innerHTML = `<defs>${markers}</defs><style>.mk.plain{fill:var(--line)}.mk.tree{fill:var(--ink)}.mk.back{fill:var(--miss)}.mk.forward{fill:var(--hit)}.mk.cross{fill:var(--muted)}.mk.cur{fill:var(--hit)}</style>` + eh + vh;
+  $('gtitle').textContent = useT ? '圖 Gᵀ（邊反向）' : '圖 G';
+  $('gstat').textContent = `${G.names.length} 個頂點 · ${G.edges.length} 條邊 · ${G.directed ? '有向' : '無向'}`;
+}
+function EC_of(s, e) { return s.EC[e.id]; }
+
+function renderPseudo(s) {
+  document.querySelectorAll('#pseudo .pl').forEach(el => el.classList.toggle('on', s.lines.includes(el.dataset.l)));
+  $('phase').textContent = MODE[state.mode].label + (state.mode === 'scc' ? (s.phase === 'GT' ? '：第二次 DFS（Gᵀ）' : '：第一次 DFS（G）') : '');
+}
+function renderVars(s) {
+  const ch = new Set(s.chV);
+  const d = x => x == null ? '–' : x;
+  const v = (key, name, val) => `<span class="var${ch.has(key) ? ' chg' : ''}"><span class="k">${name}</span><span class="v">${val}</span></span>`;
+  let html = v('u', 'u', d(s.st.u)) + v('v', 'v', d(s.st.v));
+  if (state.mode === 'bfs') html += v('q', '|Q|', s.Q.length);
+  else html += v('time', 'time', s.st.time);
+  $('vars').innerHTML = html;
+  $('stack').innerHTML = s.stack.length ? '呼叫：' + s.stack.map((f, k) => k === s.stack.length - 1 ? `<b>${esc(f)}</b>` : esc(f)).join(' → ') : '呼叫：（還沒開始）';
+}
+function renderTable(s) {
+  const G = state.G, ch = new Set(s.chRows);
+  if (!G) { $('vtable').innerHTML = ''; return; }
+  const bfs = state.mode === 'bfs';
+  const gt = s.forder != null;
+  const hd = bfs ? '<th>頂點</th><th>color</th><th>d</th><th>π</th>' : `<th>頂點</th><th>color</th><th>d</th><th>f</th><th>π</th>${gt ? '<th>第一次的 f</th>' : ''}`;
+  const rows = G.names.map(nm => {
+    const v = s.V[nm];
+    const col = `<span class="dot ${v.color}"></span>${v.color.toUpperCase()}`;
+    const cells = bfs ? `<td>${col}</td><td>${v.d == null ? '∞' : v.d}</td><td class="c">${v.pi == null ? 'NIL' : esc(v.pi)}</td>`
+      : `<td>${col}</td><td>${v.d == null ? '–' : v.d}</td><td>${v.f == null ? '–' : v.f}</td><td class="c">${v.pi == null ? 'NIL' : esc(v.pi)}</td>${gt ? `<td class="c">${v.f0}</td>` : ''}`;
+    return `<tr class="${ch.has(nm) ? 'chg' : ''}"><td>${esc(nm)}</td>${cells}</tr>`;
+  }).join('');
+  $('vtable').innerHTML = `<table class="tb"><thead><tr>${hd}</tr></thead><tbody>${rows}</tbody></table>`;
+  const colored = G.names.filter(nm => s.V[nm].color !== 'white').length;
+  $('vstat').textContent = `${colored} / ${G.names.length} 已發現`;
+}
+function renderList(s) {
+  let html = '';
+  if (state.mode === 'bfs') {
+    html = `<div class="lbl">Q（左邊是最前面）</div><div class="chips">${s.Q.length ? s.Q.map((nm, k) => `<span class="chip${k === 0 && s.lines.includes('Q11') ? '' : ''}">${esc(nm)}<small style="color:var(--muted);font-weight:400"> d=${s.V[nm].d}</small></span>`).join('') : '<span class="empty">（空的）</span>'}</div>`;
+    $('lstat').textContent = `${s.Q.length} 個`;
+  } else {
+    const ps = s.paren.map((t, k) => k === s.paren.length - 1 && (s.chRows.length) ? `<b>${esc(t.t)}</b>` : esc(t.t)).join(' ');
+    html = `<div class="lbl">括號字串，<code>(</code> 是 d、<code>)</code> 是 f</div><div class="paren">${ps || '<span class="empty">（還沒開始）</span>'}</div>`;
+    if (state.mode === 'topo') {
+      html += `<div class="lbl">Linked list（完成的插到最前面）</div><div class="chips">${s.L.length ? s.L.map(nm => `<span class="chip${s.chList === nm ? ' chg' : ''}">${esc(nm)}</span>`).join('<span style="color:var(--muted)">→</span>') : '<span class="empty">（空的）</span>'}</div>`;
+      $('lstat').textContent = `${s.L.length} 個`;
+    } else if (state.mode === 'scc') {
+      if (s.forder) html += `<div class="lbl">第二次 DFS 的起點順序（f 遞減）</div><div class="chips">${s.forder.map(nm => `<span class="chip${s.V[nm].color !== 'white' && s.phase === 'GT' ? ' done' : ''}">${esc(nm)}<small style="color:var(--muted);font-weight:400"> f=${s.V[nm].f0}</small></span>`).join('')}</div>`;
+      html += `<div class="lbl">找到的元件</div><div class="chips">${s.sccs.length ? s.sccs.map((c, k) => `<span class="chip s${k % 6 + 1}">{${c.map(esc).join(', ')}}</span>`).join('') : '<span class="empty">（還沒有）</span>'}</div>`;
+      $('lstat').textContent = `${s.sccs.length} 個元件`;
+    } else {
+      $('lstat').textContent = `${s.paren.length} 個符號`;
+    }
+  }
+  $('list').innerHTML = html;
+}
+
+function renderAll() {
+  const bad = state.err.length > 0;
+  const T = total();
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && presetActive()));
+  document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('chosen', b.dataset.mode === state.mode));
+  document.querySelectorAll('#dirs button').forEach(b => b.classList.toggle('chosen', b.dataset.dir === state.dir));
+  $('errs').innerHTML = state.err.map(e => `<span>${esc(e)}</span>`).join('');
+  $('phint').textContent = presetActive() ? PRESETS[state.pi].hint : '';
+  $('step-range').max = T; $('step-range').value = state.k;
+  $('count').textContent = `第 ${state.k} / ${T} 步`;
+  $('btn-prev').disabled = state.k === 0;
+  $('btn-next').disabled = bad || state.k >= T;
+  $('btn-unit').disabled = bad || state.k >= T;
+  $('btn-end').disabled = bad || state.k >= T;
+  const s = bad ? INIT() : cur();
+  renderGraph(s);
+  renderPseudo(s);
+  renderVars(s);
+  renderTable(s);
+  renderList(s);
+  const say = $('say');
+  const START = { bfs: '還沒開始。按「下一步」初始化並把來源放進 queue。', dfs: '還沒開始。按「下一步」開始 DFS。', topo: '還沒開始。按「下一步」開始 DFS，每個頂點完成時會插進 linked list。', scc: '還沒開始。按「下一步」開始第一次 DFS。' };
+  if (bad) say.textContent = '輸入有錯，修好之後再開始。';
+  else if (state.k === 0) say.textContent = START[state.mode];
+  else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '') + (s.note ? `<span class="note">${s.note}</span>` : '');
+}
+
+function setMode(m) {
+  if (state.mode === m) return;
+  state.mode = m;
+  if ((m === 'topo' || m === 'scc') && state.dir !== 'directed') state.dir = 'directed';
+  renderPseudoShell();
+  rebuild();
+  renderAll();
+}
+function setDir(d) {
+  if (state.dir === d) return;
+  state.dir = d;
+  rebuild();
+  renderAll();
+}
+
+$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
+$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
+$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
+$('btn-unit').addEventListener('click', () => {
+  const now = cur().unit;
+  const idx = state.trace.findIndex((s, j) => j >= state.k && s.unit !== now);
+  state.k = idx >= 0 ? idx + 1 : total();
+  renderAll();
+});
+$('btn-end').addEventListener('click', () => { state.k = total(); renderAll(); });
+$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
+$('src').addEventListener('input', () => { rebuild(); renderAll(); });
+$('source').addEventListener('input', () => { rebuild(); renderAll(); });
+document.addEventListener('keydown', e => {
+  if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
+  if (e.key === 'ArrowRight') $('btn-next').click();
+  if (e.key === 'ArrowLeft') $('btn-prev').click();
+});
+
+renderPresets();
+applyPreset(0);
+</script>
+</body>
+</html>
