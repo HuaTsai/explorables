@@ -42,6 +42,7 @@ p { margin: 0; }
 .lead { color: var(--muted); margin-top: 0.75rem; }
 .prose { display: flex; flex-direction: column; gap: 0.75rem; }
 .prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.prose li > ol { margin-block: 0.35rem; }
 code, .mono { font-family: var(--font-mono); }
 code { font-size: 0.92em; }
 sub { font-size: 0.72em; line-height: 0; }
@@ -191,7 +192,14 @@ textarea { width: 100%; min-height: 14rem; resize: vertical; font: inherit; font
     <h2>三個觀念</h2>
     <ul>
       <li><strong>候選樹。</strong>只有可交換又可結合的運算子（這一頁支援 <code>+</code> 和 <code>×</code>）才能重排。減法和除法不行，它們的結果在樹裡只能當葉子。</li>
-      <li><strong>根。</strong>一棵樹能重排到多大，取決於哪些中間值「非算出來不可」。書上叫這種值<strong>暴露值</strong>（exposed）：離開 block 時還活著、在 block 裡被用超過一次、或被不同運算子的運算用到。暴露值就是樹的根，別棵樹看到它只能當葉子，不能穿過去繼續攤平。</li>
+      <li><strong>根。</strong>一棵樹能重排到多大，取決於哪些中間值「非算出來不可」。第一階段的判斷是一句話：Op<sub>i</sub> 可交換可結合，而且 T<sub>i</sub> 是<strong>暴露值</strong>（exposed），就標成根。前提先過濾掉一批：由 <code>−</code>、<code>÷</code> 算出來的值永遠不是根，不管它暴不暴露，在別棵樹裡只能當葉子。暴露則有三個條件，符合任何一個就算：
+        <ol>
+          <li><strong>離開 block 時還活著</strong>（live on exit）：後面的 block 還要用它，所以它一定要真的算出來、存進那個名字。</li>
+          <li><strong>在 block 裡被用超過一次</strong>：它是共用的子運算式，攤平進任何一棵樹都會讓它被重算，所以只能算一次、以結果當葉子。</li>
+          <li><strong>被用一次，但用它的那條運算的運算子和 Op<sub>i</sub> 不同</strong>：t<sub>3</sub> ← a + b 被 t<sub>4</sub> ← t<sub>3</sub> × c 用到，× 樹不能穿過 + 去重排 a 和 b。「不同」包括另一個可重排的運算子，也包括 <code>−</code>、<code>÷</code> 這種本來就不能重排的。</li>
+        </ol>
+        反過來說，不是根的情況只有一種：由可重排運算子算出來、只在 block 內用一次、用它的運算又是同一個運算子。這種值才是 Flatten 會穿過去繼續攤平的中間節點。根是樹和樹之間的邊界，別棵樹看到它只能當葉子。</li>
+      <li><strong>葉子從哪裡來。</strong>Flatten 碰到的名字有三種來源。常數。<strong>Upward exposed</strong> 的名字：在 block 裡被用到時前面還沒有任何運算定義它，值是從 block 外面帶進來的（書上 UEVar 的意思，大例子裡的 a、b、c）；它不是這個 block 算的，Flatten 沒有東西可以往下走，只能當葉子。別棵樹的根：這個 block 算的但不能省掉，Flatten 走到它就要停。注意 upward exposed 和 live on exit 是兩個不同的概念，一個看入口、一個看出口：前者只看 block 自己的程式碼就能判斷，後者要看 block 之後的路徑，是 live variable analysis 跨 block 算出來的，所以 workbench 要你另外填 live 集合。一個名字可以兩者都是（從外面進來又在後面被用）、也可以都不是（block 算的、只在 block 內用）。</li>
       <li><strong>等級。</strong>Flatten 給每片葉子一個等級（rank）：常數 0、外面來的名字 1、別棵樹的根是它自己的等級。內部節點的等級是兩個子節點相加，差不多就是子樹的葉子數。Rebuild 每次從佇列拿<strong>等級最小的兩個</strong>配對，和 Huffman 編碼一樣的手法，矮的子樹先合，樹自然平衡。</li>
     </ul>
   </section>
