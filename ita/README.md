@@ -16,6 +16,7 @@
 | ------- | ---- | -------------------------------------------------------------------------------- | --------------------------------- |
 | `heap/` | Ch6  | MAX-HEAPIFY、BUILD-MAX-HEAP、HEAPSORT、max-priority queue 四種模式，陣列和樹並排 | 6.1-6、6.2-1、6.3-1、6.4-1、6.4-3 |
 | `graph-search/` | Ch22 | BFS、DFS（邊分類、括號字串）、拓樸排序、Kosaraju SCC 四種模式，同一個圖的 workbench，可自動排版 | 22.2-1、22.3-2、22.4-1 |
+| `mst/` | Ch23、Ch21 | Kruskal（含 disjoint-set forest：union by rank、path compression）、Prim、可點頂點畫 cut 看 light edge 三種模式，有權重的無向圖 workbench | 23.1-2、23.1-4、23.1-6、23.2-8；正文提到 23.1-1、23.1-3、23.1-7、23.1-8、23.2-1 到 23.2-4 |
 
 ## 章節總表
 
@@ -37,9 +38,9 @@
 | Ch15 Dynamic Programming          | 完整，15.1 到 15.5 加多題習題（含 LCS 的 C++）            | 第一批：DP 表格（rod cutting、matrix-chain、LCS、optimal BST） | 未做 |
 | Ch16 Greedy Algorithms            | 完整，含 matroid                                          | 候選：activity selection、Huffman                              | 未做 |
 | Ch17 Amortized Analysis           | 空                                                        | 略過                                                           | —    |
-| Ch21 Disjoint Sets                | 只有 21.1 的定義和應用                                    | 併入 MST 頁（Kruskal 需要）                                    | 未做 |
+| Ch21 Disjoint Sets                | 只有 21.1 的定義和應用                                    | 併入 mst/（21.3 的 forest 依書上補寫，21.4 的分析不講）         | 完成 |
 | Ch22 Elementary Graph Algorithms  | 完整，含 parenthesis 和 white-path 定理、SCC 證明         | graph-search/ | 完成 |
-| Ch23 Minimum Spanning Trees       | 完整，習題有 Prim 和 Kruskal 的 C++                       | 第一批：Kruskal 與 Prim                                        | 未做 |
+| Ch23 Minimum Spanning Trees       | 完整，習題有 Prim 和 Kruskal 的 C++                       | mst/                                                           | 完成 |
 | Ch24 Single-Source Shortest Paths | 24.1 到 24.3 完整，缺 24.4 difference constraints         | 第一批：Bellman-Ford、DAG、Dijkstra                            | 未做 |
 | Ch25 All-Pairs Shortest Paths     | 完整                                                      | 候選：Floyd-Warshall、Johnson                                  | 未做 |
 | Ch26 Maximum Flow                 | 26.1 到 26.3 完整，含 Hopcroft-Karp 題解；缺 push-relabel | 候選：Ford-Fulkerson 和殘餘網路、二分匹配                      | 未做 |
@@ -52,7 +53,7 @@
 
 1. heap（Ch6）：完成。
 2. BFS、DFS 與 SCC（Ch22）：完成。
-3. Kruskal 與 Prim（Ch23，含 disjoint set）
+3. Kruskal 與 Prim（Ch23，含 disjoint set）：完成。
 4. 單源最短路徑（Ch24）
 5. DP 表格（Ch15）
 
