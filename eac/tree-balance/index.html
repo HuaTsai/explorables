@@ -6,102 +6,20 @@
 <title>樹高平衡：把長鏈運算式變成矮樹</title>
 <meta name="description" content="把 Engineering a Compiler 第八章的 tree-height balancing 一步步跑給你看：第一階段怎麼找出每棵運算式樹的根，Balance、Flatten、Rebuild 怎麼把一條長鏈攤平成葉子佇列再按等級重建成矮樹。原樹和重建樹並排畫出來，可以自己改程式碼和 live 集合。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
 <style>
 /* Layout: one reading column; the workbench has presets, the editable block and the step controls
    on top, then three panels (listing, pseudocode + call stack, queues), then two panels (trees, output). */
-:root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* 這一步動到的東西 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* 根、警告 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;         /* 目前這一條 */
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
 .prose li > ol { margin-block: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-sub { font-size: 0.72em; line-height: 0; }
-i.hit, i.miss { font-style: normal; font-weight: 700; }
-i.hit { color: var(--hit); }
-i.miss { color: var(--miss); }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-
-/* static pseudocode in prose */
-.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow-x: auto; white-space: pre; }
-.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
-.col p { font-size: 0.88rem; color: var(--muted); margin-top: 0.4rem; }
 .fig { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start; justify-content: center; }
 .fig figure { margin: 0; text-align: center; font-size: 0.85rem; color: var(--muted); }
 .fig svg { display: block; margin: 0 auto 0.3rem; font-family: var(--font-mono); }
 
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.presets button { font-size: 0.88rem; }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+textarea { min-height: 14rem; }
+.work.a { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.4fr) minmax(0, 0.9fr); }
+.work.b { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
 
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
-textarea { width: 100%; min-height: 14rem; resize: vertical; font: inherit; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; tab-size: 4; }
-.errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
-.jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
-.jumps button { font-size: 0.82rem; padding: 0.15rem 0.6rem; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
-.say { font-size: 0.95rem; min-height: 3.2em; }
-.say .warn { display: block; margin-top: 0.35rem; color: var(--miss); }
-.say .warn::before { content: "⚠ "; }
-.say .note { display: block; margin-top: 0.35rem; color: var(--muted); font-size: 0.9rem; }
-
-/* panels */
-.work { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.4fr) minmax(0, 0.9fr); gap: 1rem; }
-.work2 { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 1rem; }
-@media (max-width: 980px) { .work, .work2 { grid-template-columns: minmax(0, 1fr); } }
-.panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
-.panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
-.panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
-
-/* listing */
+/* 運算列表和輸出 */
 .listing { padding: 0.5rem; background: var(--bg); overflow-x: auto; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; display: flex; flex-direction: column; gap: 0.15rem; flex: 1; }
 .op { display: grid; grid-template-columns: 1.4rem minmax(max-content, 1fr) max-content; align-items: center; gap: 0.5rem; padding: 0.12rem 0.45rem; border-radius: 3px; border: 1px solid transparent; border-left-width: 3px; white-space: nowrap; }
 .op .num { color: var(--muted); font-size: 0.72rem; text-align: right; }
@@ -113,7 +31,6 @@ textarea { width: 100%; min-height: 14rem; resize: vertical; font: inherit; font
 .op.sub { padding-left: 1.4rem; }
 .op.hd { color: var(--muted); font-family: var(--font-body); font-size: 0.72rem; }
 .badges { display: flex; gap: 0.25rem; align-items: center; }
-.badge { font-family: var(--font-body); font-size: 0.66rem; font-weight: 700; line-height: 1.4; padding: 0 0.35rem; border-radius: 3px; white-space: nowrap; }
 .badge.root { background: var(--miss); color: var(--surface); }
 .badge.inner { border: 1px solid var(--muted); color: var(--muted); }
 .badge.leaf { background: var(--muted); color: var(--surface); }
@@ -121,19 +38,10 @@ textarea { width: 100%; min-height: 14rem; resize: vertical; font: inherit; font
 .badge.done { background: var(--hit); color: var(--surface); }
 .live { padding: 0.35rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.78rem; color: var(--muted); font-family: var(--font-mono); }
 
-/* pseudocode + stack */
-.pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.7rem; line-height: 1.6; white-space: pre; overflow-x: auto; background: var(--bg); max-height: 30rem; overflow-y: auto; }
-.pseudo .pl { display: block; padding: 0 0.3rem; border-radius: 3px; }
-.pseudo .pl.on { background: var(--mark); font-weight: 600; }
-.pseudo .pl.head { font-weight: 600; }
-.pseudo .proc { display: block; opacity: 0.5; }
-.pseudo .proc.active { opacity: 1; }
-.pseudo .proc + .proc { margin-top: 0.5rem; }
-.vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.35rem; }
+/* 四段虛擬碼比較長，面板內自己捲；變數底下多一排呼叫堆疊 */
+.pseudo { font-size: 0.7rem; line-height: 1.6; max-height: 30rem; overflow-y: auto; }
+.vars { flex-direction: column; gap: 0.35rem; }
 .scalars { display: flex; flex-wrap: wrap; gap: 0.3rem; }
-.var { display: inline-flex; align-items: baseline; gap: 0.3rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
-.var .k { color: var(--muted); font-size: 0.72rem; }
-.var .v { font-weight: 600; min-width: 1em; }
 .stack { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
 .stack .k { color: var(--muted); font-size: 0.72rem; margin-right: 0.2rem; }
 .frame { padding: 0 0.4rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); font-size: 0.74rem; }
@@ -141,7 +49,7 @@ textarea { width: 100%; min-height: 14rem; resize: vertical; font: inherit; font
 .frame.bal { color: var(--miss); }
 .stack .arrow { color: var(--muted); font-size: 0.7rem; }
 
-/* queues */
+/* 佇列 */
 .queues { padding: 0.5rem 0.6rem; background: var(--bg); flex: 1; display: flex; flex-direction: column; gap: 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; }
 .queues h3 { margin: 0 0 0.25rem; font-family: var(--font-body); font-size: 0.75rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; }
 .qrow { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
@@ -152,7 +60,7 @@ textarea { width: 100%; min-height: 14rem; resize: vertical; font: inherit; font
 .ent.gone { opacity: 0.45; text-decoration: line-through; }
 .qnote { color: var(--muted); font-family: var(--font-body); font-size: 0.75rem; margin-top: 0.2rem; }
 
-/* trees */
+/* 原樹和重建樹並排 */
 .trees { padding: 0.5rem; background: var(--bg); flex: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
 @media (max-width: 600px) { .trees { grid-template-columns: minmax(0, 1fr); } }
 .tree { min-width: 0; }
@@ -181,7 +89,7 @@ textarea { width: 100%; min-height: 14rem; resize: vertical; font: inherit; font
 
   <section class="prose">
     <h2>鏈和樹的差別</h2>
-    <p>同一個運算式 <code>a + b + c + d + e + f + g + h</code>，左邊是前端自然產出的形狀，每一條加法都要等前一條；右邊是平衡過的形狀，第一層四條加法彼此獨立。兩種形狀都是 7 次加法，差的是關鍵路徑：7 層對 3 層。</p>
+    <p>同一個運算式 <code>a + b + c + d + e + f + g + h</code>，左邊是前端自然產出的形狀，每一條加法都要等前一條；右邊是平衡過的形狀，第一層四條加法彼此獨立。兩種形狀都是 7 次加法，差的是<span class="term" data-def="從葉子到根最長的那條相依鏈。不管機器能同時發幾條指令，這條鏈上的運算都只能一個接一個算，它的長度就是最少要花的時間。">關鍵路徑</span>：7 層對 3 層。</p>
   </section>
   <div class="fig">
     <figure><svg viewBox="0 0 230 240" width="230" height="240" aria-label="高度 7 的左傾鏈"><g fill="none" stroke="currentColor" stroke-opacity="0.45"><path d="M30 22 L52 44 M52 44 L74 66 M74 66 L96 88 M96 88 L118 110 M118 110 L140 132 M140 132 L162 154 M162 154 L184 176"/><path d="M30 22 L16 44 M52 44 L38 66 M74 66 L60 88 M96 88 L82 110 M118 110 L104 132 M140 132 L126 154 M162 154 L148 176 M184 176 L170 198 M184 176 L198 198"/></g><g font-size="11" text-anchor="middle" fill="currentColor"><text x="30" y="18">+</text><text x="52" y="40">+</text><text x="74" y="62">+</text><text x="96" y="84">+</text><text x="118" y="106">+</text><text x="140" y="128">+</text><text x="162" y="150">+</text><text x="184" y="172">+</text><text x="16" y="56">h</text><text x="38" y="78">g</text><text x="60" y="100">f</text><text x="82" y="122">e</text><text x="104" y="144">d</text><text x="126" y="166">c</text><text x="148" y="188">b</text><text x="170" y="210">a</text><text x="198" y="210">·</text></g></svg><figcaption>長鏈：高度 7</figcaption></figure>
@@ -199,14 +107,14 @@ textarea { width: 100%; min-height: 14rem; resize: vertical; font: inherit; font
           <li><strong>被用一次，但用它的那條運算的運算子和 Op<sub>i</sub> 不同</strong>：t<sub>3</sub> ← a + b 被 t<sub>4</sub> ← t<sub>3</sub> × c 用到，× 樹不能穿過 + 去重排 a 和 b。「不同」包括另一個可重排的運算子，也包括 <code>−</code>、<code>÷</code> 這種本來就不能重排的。</li>
         </ol>
         反過來說，不是根的情況只有一種：由可重排運算子算出來、只在 block 內用一次、用它的運算又是同一個運算子。這種值才是 Flatten 會穿過去繼續攤平的中間節點。根是樹和樹之間的邊界，別棵樹看到它只能當葉子。</li>
-      <li><strong>葉子從哪裡來。</strong>Flatten 碰到的名字有三種來源。常數。<strong>Upward exposed</strong> 的名字：在 block 裡被用到時前面還沒有任何運算定義它，值是從 block 外面帶進來的（書上 UEVar 的意思，大例子裡的 a、b、c）；它不是這個 block 算的，Flatten 沒有東西可以往下走，只能當葉子。別棵樹的根：這個 block 算的但不能省掉，Flatten 走到它就要停。注意 upward exposed 和 live on exit 是兩個不同的概念，一個看入口、一個看出口：前者只看 block 自己的程式碼就能判斷，後者要看 block 之後的路徑，是 live variable analysis 跨 block 算出來的，所以 workbench 要你另外填 live 集合。一個名字可以兩者都是（從外面進來又在後面被用）、也可以都不是（block 算的、只在 block 內用）。</li>
-      <li><strong>等級。</strong>Flatten 給每片葉子一個等級（rank）：常數 0、外面來的名字 1、別棵樹的根是它自己的等級。內部節點的等級是兩個子節點相加，差不多就是子樹的葉子數。Rebuild 每次從佇列拿<strong>等級最小的兩個</strong>配對，和 Huffman 編碼一樣的手法，矮的子樹先合，樹自然平衡。</li>
+      <li><strong>葉子從哪裡來。</strong>Flatten 碰到的名字有三種來源。常數。<strong>Upward exposed</strong> 的名字：在 block 裡被用到時前面還沒有任何運算定義它，值是從 block 外面帶進來的；<span class="sn">這就是書上 UEVar（upward-exposed variable）的意思，大例子裡的 a、b、c 都是。</span>它不是這個 block 算的，Flatten 沒有東西可以往下走，只能當葉子。別棵樹的根：這個 block 算的但不能省掉，Flatten 走到它就要停。注意 upward exposed 和 live on exit 是兩個不同的概念，一個看入口、一個看出口：前者只看 block 自己的程式碼就能判斷，後者要看 block 之後的路徑，是 live variable analysis 跨 block 算出來的，所以 workbench 要你另外填 live 集合。一個名字可以兩者都是（從外面進來又在後面被用）、也可以都不是（block 算的、只在 block 內用）。</li>
+      <li><strong>等級。</strong>Flatten 給每片葉子一個等級（rank）：常數 0、外面來的名字 1、別棵樹的根是它自己的等級。內部節點的等級是兩個子節點相加，差不多就是子樹的葉子數。Rebuild 每次從佇列拿<strong>等級最小的兩個</strong>配對，和 <span class="term" data-def="建最短前綴碼的演算法：每次把權重最小的兩棵子樹合成一棵放回去，權重小的被合得早、埋得深，權重大的留在靠近根的地方。">Huffman 編碼</span>一樣的手法，矮的子樹先合，樹自然平衡。</li>
     </ul>
   </section>
 
   <section class="prose">
     <h2>虛擬碼</h2>
-    <p>照書上的寫法。Roots 和 q 都是優先佇列：Roots 按運算子優先級由低到高出列，q 按等級由低到高出列。書上沒有明說同等級時誰先；這一頁用後進先出，因為這樣能重現書上 Roots 的順序和大多數圖例。</p>
+    <p>照書上的寫法。Roots 和 q 都是<span class="term" data-def="每個元素帶一個 key，出列時永遠拿 key 最小（或最大）的那一個，不管誰先進來。">優先佇列</span>：Roots 按運算子優先級由低到高出列，q 按等級由低到高出列。<span class="sn">書上沒有明說同等級時誰先；這一頁用後進先出，因為這樣能重現書上 Roots 的順序和大多數圖例。</span></p>
   </section>
   <div class="cols">
     <div class="col">
@@ -274,24 +182,20 @@ Rebuild(root, q, op)
       </div>
       <div>
         <p class="panel-title">執行</p>
-        <div class="controls">
-          <button id="btn-reset" type="button">重來</button>
-          <button id="btn-prev" type="button">上一步</button>
-          <button id="btn-next" type="button" class="primary">下一步</button>
-          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-          <span class="count" id="count"></span>
-        </div>
-        <div class="jumps">
-          <button id="btn-p2" type="button">跳到第二階段</button>
-          <button id="btn-root" type="button">跳到下一個根</button>
-          <button id="btn-end" type="button">跑完</button>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
         </div>
         <p class="hint" id="phint"></p>
         <p class="hint">運算列表裡 <i class="miss">紫色</i> 是根，<i class="hit">綠色</i> 是重建出來的新運算。樹裡 <i class="hit">綠框</i> 是 Flatten 已經走過的節點，葉子旁邊的數字是等級。鍵盤 ← → 也可以步進。</p>
       </div>
     </div>
 
-    <div class="row work">
+    <div class="row work a">
       <div class="panel">
         <div class="panel-head"><span>運算列表</span><span class="sub" id="nlabel"></span></div>
         <div class="listing" id="listing"></div>
@@ -308,7 +212,7 @@ Rebuild(root, q, op)
       </div>
     </div>
 
-    <div class="row work2">
+    <div class="row work b">
       <div class="panel">
         <div class="panel-head"><span>樹</span><span class="sub" id="tstat"></span></div>
         <div class="trees" id="trees"></div>
@@ -345,7 +249,7 @@ Rebuild(root, q, op)
 
   <section class="prose">
     <h2>結語</h2>
-    <p>先決定哪些值非算不可，再在這些值之間自由重排：根是邊界，Flatten 攤到根就停。等級小的先配對，樹就平衡，常數也順便湊在一起，和 Huffman 編碼是同一個直覺。平衡不是免費的，矮樹同時活著的中間值比長鏈多，暫存器壓力上升，在真實編譯器裡這個 pass 要和排程器、配置器一起看；LLVM 的 Reassociate pass 做的就是這件事，也用等級。</p>
+    <p>先決定哪些值非算不可，再在這些值之間自由重排：根是邊界，Flatten 攤到根就停。等級小的先配對，樹就平衡，常數也順便湊在一起，和 Huffman 編碼是同一個直覺。平衡不是免費的，矮樹同時活著的中間值比長鏈多，<span class="term" data-def="同一時刻活著、需要各占一個暫存器的值有多少；超過機器的暫存器數就得把一些值暫存到記憶體。">暫存器壓力</span>上升，在真實編譯器裡這個 pass 要和排程器、配置器一起看。<span class="sn">LLVM 的 Reassociate pass 做的就是這件事，也用等級。</span></p>
     <p>這個 pass 把長鏈變矮，是為了給指令排程更多可以並行的機會，書上第十二章的 list scheduling 就是吃這種樹；它製造的暫存器壓力則由第十三章的暫存器配置承受。同一章的 <a href="../lvn/">區域值編號</a>是另一種 block 內的變換，兩者都假設每個名字只定義一次，從線性 IR 切出 block 的方法在 <a href="../cfg/">CFG</a> 那一頁。</p>
     <p>浮點加法不滿足結合律，這個變換會改變結果，編譯器只在 fast-math 之類的旗標下對浮點做這件事。常數摺疊照 JavaScript 的整數算，真的編譯器要照目標機器的位寬和溢位語意。<code>&amp;</code>、<code>|</code>、<code>^</code> 也是可交換運算子，這裡只做 <code>+</code> 和 <code>×</code>。既沒人用又不活著的候選運算不會成為根，這一頁原樣保留在輸出裡，真的編譯器會把它刪掉。書上提醒平衡後的樹會增加同時活著的值，這一頁不計算這件事。</p>
   </section>
@@ -353,6 +257,7 @@ Rebuild(root, q, op)
   <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, Chapter 8, Section 8.4.2（Tree-Height Balancing）。虛擬碼照書上的寫法；中譯本（第二版）裡是圖 8-7 到 8-9，例子是圖 8-10 和 8-11。</p>
 </main>
 
+<script src="../../assets/site.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -670,12 +575,15 @@ const INIT = { phase: 'p0', i: null, rank: {}, isRoot: {}, rootsQ: [], processed
 const state = { pi: 0, k: 0, parsed: null, trace: [], A: null };
 const total = () => state.trace.length;
 const cur = () => state.k === 0 ? INIT : state.trace[state.k - 1];
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
 
 function rebuild() {
   state.parsed = parse($('src').value);
   if (state.parsed.errors.length) { state.trace = []; state.A = null; }
   else { const r = buildTrace(state.parsed); state.trace = r.steps; state.A = r.A; }
   state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
 }
 
 // ---- rendering ----
@@ -857,17 +765,9 @@ function renderOutput(s) {
 
 function renderAll() {
   const bad = state.parsed.errors.length > 0;
-  const T = total();
   document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && $('src').value === PRESETS[i].src));
   $('errs').innerHTML = state.parsed.errors.map(e => `<span>${esc(e)}</span>`).join('');
   $('phint').textContent = $('src').value === PRESETS[state.pi].src ? PRESETS[state.pi].hint : '';
-  $('step-range').max = T; $('step-range').value = state.k;
-  $('count').textContent = `第 ${state.k} / ${T} 步`;
-  $('btn-prev').disabled = state.k === 0;
-  $('btn-next').disabled = bad || state.k >= T;
-  $('btn-p2').disabled = bad;
-  $('btn-root').disabled = bad || state.k >= T;
-  $('btn-end').disabled = bad || state.k >= T;
   const s = bad ? INIT : cur();
   if (bad) {
     $('listing').innerHTML = ''; $('livebox').textContent = ''; $('vars').innerHTML = ''; $('queues').innerHTML = ''; $('trees').innerHTML = ''; $('output').innerHTML = '';
@@ -887,23 +787,7 @@ function renderAll() {
   else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '') + (s.note ? `<span class="note">${s.note}</span>` : '');
 }
 
-$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
-$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
-$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
-$('btn-p2').addEventListener('click', () => { const idx = state.trace.findIndex(s => s.phase === 'p2'); if (idx >= 0) { state.k = idx + 1; renderAll(); } });
-$('btn-root').addEventListener('click', () => {
-  const idx = state.trace.findIndex((s, j) => j >= state.k && s.lines.includes('P9'));
-  state.k = idx >= 0 ? idx + 1 : total();
-  renderAll();
-});
-$('btn-end').addEventListener('click', () => { state.k = total(); renderAll(); });
-$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
 $('src').addEventListener('input', () => { rebuild(); renderAll(); });
-document.addEventListener('keydown', e => {
-  if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
-  if (e.key === 'ArrowRight') $('btn-next').click();
-  if (e.key === 'ArrowLeft') $('btn-prev').click();
-});
 
 renderPresets();
 renderPseudoShell();

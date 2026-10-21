@@ -92,8 +92,7 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 .sn { display: none; font-size: 0.82rem; line-height: 1.6; color: var(--muted); }
 .sn .sn-n { font-family: var(--font-mono); font-size: 0.72rem; margin-right: 0.35em; color: var(--ink); }
 .sn.open { display: block; margin: 0.4rem 0 0.2rem; padding-left: 0.75rem; border-left: 2px solid var(--line); }
-@media (min-width: 80rem) {
-  .page.has-sn { margin-left: calc((100vw - 80rem) / 2); margin-right: 0; }
+@media (min-width: 96rem) {
   .sn, .sn.open { display: block; position: absolute; top: 0; right: calc(-14rem - 1.75rem); width: 14rem; margin: 0; padding: 0; border: 0; }
   .sn-ref { cursor: default; }
 }

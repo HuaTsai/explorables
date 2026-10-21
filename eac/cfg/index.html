@@ -6,105 +6,18 @@
 <title>從線性 IR 建 CFG：FindLeaders 與 BuildGraph</title>
 <meta name="description" content="把 Engineering a Compiler 第四章建控制流程圖的兩段虛擬碼一步步跑給你看：FindLeaders 怎麼從 label 找出每個 basic block 的開頭，BuildGraph 怎麼找出 block 的結尾並連上邊。可以換範例，也可以自己改 ILOC 程式碼。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
 <style>
 /* Layout: one reading column; the workbench has presets, the editable ILOC source and the
    step controls on top, then three panels: annotated listing, pseudocode + variables, CFG. */
-:root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* 這一步新增的節點 / 邊 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* 警告、錯誤 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;         /* 目前這一條 */
-  --blk-a: #e4ebe9;        /* 已切好的 block，交替兩色 */
-  --blk-b: #dfe5f0;
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; --blk-a: #1d2826; --blk-b: #1c2330; color-scheme: dark;
-  }
-}
+:root { --blk-a: #e4ebe9; --blk-b: #dfe5f0; }   /* 已切好的 block，交替兩色 */
+@media (prefers-color-scheme: dark) { :root { --blk-a: #1d2826; --blk-b: #1c2330; } }
 
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
+table.cmp { min-width: 34rem; }
+textarea { min-height: 12.5rem; font-size: 0.82rem; }
+.work { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) minmax(0, 0.85fr); }
 
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-sub { font-size: 0.72em; line-height: 0; }
-i.hit, i.miss { font-style: normal; font-weight: 700; }
-i.hit { color: var(--hit); }
-i.miss { color: var(--miss); }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-
-/* tables */
-.table-wrap { overflow-x: auto; }
-table.cmp { border-collapse: collapse; font-size: 0.9rem; min-width: 34rem; width: 100%; }
-.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
-.cmp td code { white-space: nowrap; }
-
-/* static pseudocode in prose */
-.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.7; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow-x: auto; white-space: pre; }
-.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
-.col p { font-size: 0.88rem; color: var(--muted); margin-top: 0.4rem; }
-
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.presets button { font-size: 0.88rem; }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
-textarea { width: 100%; min-height: 12.5rem; resize: vertical; font: inherit; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; tab-size: 4; }
-.errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
-.jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
-.jumps button { font-size: 0.82rem; padding: 0.15rem 0.6rem; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
-.say { font-size: 0.95rem; min-height: 3.2em; }
-.say .warn { display: block; margin-top: 0.35rem; color: var(--miss); }
-.say .warn::before { content: "⚠ "; }
-
-/* three panels */
-.work { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) minmax(0, 0.85fr); gap: 1rem; }
-@media (max-width: 980px) { .work { grid-template-columns: minmax(0, 1fr); } }
-.panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
-.panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
-.panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
-
-/* listing */
+/* 指令列表 */
 .listing { padding: 0.5rem 0.5rem; background: var(--bg); overflow-x: auto; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; display: flex; flex-direction: column; gap: 0.1rem; flex: 1; }
 .op { display: grid; grid-template-columns: 1.4rem max-content minmax(max-content, 1fr) max-content; align-items: center; gap: 0.5rem; padding: 0.12rem 0.4rem; border-radius: 3px; border: 1px solid transparent; border-left-width: 3px; white-space: nowrap; }
 .op .num { color: var(--muted); font-size: 0.72rem; text-align: right; }
@@ -115,25 +28,13 @@ textarea { width: 100%; min-height: 12.5rem; resize: vertical; font: inherit; fo
 .op.scan { border-left-color: var(--hit); }
 .op.cur { background: var(--mark); border-color: var(--line); border-left-color: var(--ink); }
 .badges { display: flex; gap: 0.25rem; }
-.badge { font-family: var(--font-body); font-size: 0.66rem; font-weight: 700; line-height: 1.4; padding: 0 0.35rem; border-radius: 3px; white-space: nowrap; }
 .badge.lead { background: var(--miss); color: var(--surface); }
 .badge.last { border: 1px solid var(--muted); color: var(--muted); }
 .badge.dead { background: var(--muted); color: var(--surface); }
 
-/* pseudocode + variables */
-.pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.65; white-space: pre; overflow-x: auto; background: var(--bg); }
-.pseudo .pl { display: block; padding: 0 0.3rem; border-radius: 3px; }
-.pseudo .pl.on { background: var(--mark); font-weight: 600; }
-.pseudo .pl.head { font-weight: 600; }
-.pseudo .proc { display: block; opacity: 0.5; }
-.pseudo .proc.active { opacity: 1; }
-.pseudo .proc + .proc { margin-top: 0.6rem; }
-.vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.35rem; }
+/* 變數：純量一排，Leader 和 Last 陣列各一排 */
+.vars { flex-direction: column; gap: 0.35rem; }
 .scalars { display: flex; flex-wrap: wrap; gap: 0.3rem; }
-.var { display: inline-flex; align-items: baseline; gap: 0.3rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
-.var .k { color: var(--muted); font-size: 0.72rem; }
-.var .v { font-weight: 600; min-width: 1em; }
-.var.chg { border-color: var(--hit); background: var(--hit-soft); }
 .arr { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
 .arr .k { color: var(--muted); font-size: 0.72rem; min-width: 4.2em; }
 .cell { display: inline-flex; flex-direction: column; align-items: center; min-width: 1.9rem; padding: 0 0.3rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); line-height: 1.3; }
@@ -141,7 +42,7 @@ textarea { width: 100%; min-height: 12.5rem; resize: vertical; font: inherit; fo
 .cell.chg { border-color: var(--hit); background: var(--hit-soft); }
 .arr .empty { color: var(--muted); font-size: 0.72rem; }
 
-/* graph */
+/* CFG */
 .graph { padding: 0.5rem; background: var(--bg); flex: 1; display: flex; align-items: flex-start; justify-content: center; }
 .graph svg { width: 100%; height: auto; max-width: 22rem; font-family: var(--font-mono); }
 .graph .node rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
@@ -160,7 +61,7 @@ textarea { width: 100%; min-height: 12.5rem; resize: vertical; font: inherit; fo
   <header>
     <a class="back" href="../">← Engineering a Compiler 筆記</a>
     <h1><span class="mono">CFG</span> 從線性 IR 建控制流程圖</h1>
-    <p class="lead">編譯器中段看到的是一串線性的指令。要做分析和最佳化，得先知道控制流會怎麼走：哪幾條指令一定連著執行、從哪裡能跳到哪裡。這一頁把 Engineering a Compiler 第四章建 CFG 的兩段虛擬碼一步步跑給你看：<code>FindLeaders</code> 找出每個 basic block 的第一條指令，<code>BuildGraph</code> 找出每個 block 的最後一條並連上邊。可以換範例，也可以自己改 ILOC 程式碼。</p>
+    <p class="lead">編譯器中段看到的是一串線性的指令。要做分析和最佳化，得先知道控制流會怎麼走：哪幾條指令一定連著執行、從哪裡能跳到哪裡。這一頁把 Engineering a Compiler 第四章建 CFG 的兩段虛擬碼一步步跑給你看：<code>FindLeaders</code> 找出每個 <span class="term" data-def="一段最長的連續指令，只能從第一條進來、只能從最後一條離開，中間沒有 label 也沒有 branch。">basic block</span> 的第一條指令，<code>BuildGraph</code> 找出每個 block 的最後一條並連上邊。可以換範例，也可以自己改 <span class="term" data-def="書上用的線性中間表示法，一條指令一行，長得像簡化的組合語言；名字是 intermediate language for an optimizing compiler 的縮寫。">ILOC</span> 程式碼。</p>
   </header>
 
   <section class="prose">
@@ -234,16 +135,16 @@ textarea { width: 100%; min-height: 12.5rem; resize: vertical; font: inherit; fo
       </div>
       <div>
         <p class="panel-title">執行</p>
-        <div class="controls">
-          <button id="btn-reset" type="button">重來</button>
-          <button id="btn-prev" type="button">上一步</button>
-          <button id="btn-next" type="button" class="primary">下一步</button>
-          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-          <span class="count" id="count"></span>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
         </div>
         <div class="jumps">
           <button id="btn-build" type="button">跳到 BuildGraph</button>
-          <button id="btn-end" type="button">跑完</button>
         </div>
         <p class="hint" id="phint"></p>
         <p class="hint">左邊列表裡 <i class="miss">紫色</i> 是 label 和 leader，<i class="hit">綠色</i> 左框是正在掃的範圍，底色交替的是已經切好的 block。右邊圖裡 <i class="hit">綠色</i> 是這一步新加的節點或邊。</p>
@@ -272,9 +173,9 @@ textarea { width: 100%; min-height: 12.5rem; resize: vertical; font: inherit; fo
   <section class="prose">
     <h2>虛擬碼裡最容易讀錯的四行</h2>
     <ul>
-      <li><strong><code>op<sub>j</sub> ∉ Leader</code> 是在問編號，不是在看指令。</strong>它的意思是「j 這個編號不在 Leader 陣列裡」。實作上要有 O(1) 的成員測試，例如一個 n 位的 bit vector；拿陣列線性搜尋，BuildGraph 就不再是線性時間。</li>
+      <li><strong><code>op<sub>j</sub> ∉ Leader</code> 是在問編號，不是在看指令。</strong>它的意思是「j 這個編號不在 Leader 陣列裡」。<span class="sn">實作上要有 O(1) 的成員測試，例如一個 n 位的 bit vector；拿陣列線性搜尋，BuildGraph 就不再是線性時間。</span></li>
       <li><strong><code>j ← j − 1</code> 是因為 while 多走了一步。</strong>迴圈停下來時 j 停在下一個 leader（或 n + 1），那條不屬於這個 block，退一格才是最後一條。</li>
-      <li><strong>其實有更短的寫法。</strong>Leader 是遞增填入的，所以 Last[i] 就是 Leader[i + 1] − 1，最後一個 block 則是 n。書上寫成掃描，是把「block 一路延伸到下一個 leader 之前」講白。整個 BuildGraph 的 while 加起來每條指令只看一次，還是 O(n)。</li>
+      <li><strong>其實有更短的寫法。</strong>Leader 是遞增填入的，所以 Last[i] 就是 Leader[i + 1] − 1，最後一個 block 則是 n。書上寫成掃描，是把「block 一路延伸到下一個 leader 之前」講白。<span class="sn">整個 BuildGraph 的 while 加起來每條指令只看一次，還是 O(n)。</span></li>
       <li><strong>邊的來源是 block，不是指令。</strong>「add edge from j」裡的 j 是 block i 的最後一條，圖上畫的是 B<sub>i</sub> 出去的邊。目標 l<sub>1</sub> 的節點，就是 leader 帶著那個 label 的 block。</li>
     </ul>
   </section>
@@ -282,7 +183,7 @@ textarea { width: 100%; min-height: 12.5rem; resize: vertical; font: inherit; fo
   <section class="prose">
     <h2>書上接著講的複雜情況</h2>
     <ul>
-      <li><strong>目標在暫存器裡（ambiguous jump）。</strong><code>jump → r</code> 編譯時不知道要跳去哪，演算法保守地連到每一個有 label 的 block。邊太多會讓後面的資料流分析結果變鈍。書上提到可以在 jump 後面用 <code>tbl</code> 這類 pseudo-op 列出可能的目標，建圖時只連那幾個。範例「jump → r」可以看到保守做法長什麼樣。</li>
+      <li><strong>目標在暫存器裡（ambiguous jump）。</strong><code>jump → r</code> 編譯時不知道要跳去哪，演算法保守地連到每一個有 label 的 block。邊太多會讓後面的<span class="term" data-def="在 CFG 上沿著邊傳遞資訊的分析，例如某個變數在某一點還活不活著；多餘的邊會讓能確定的事變少。">資料流分析</span>結果變鈍。書上提到可以在 jump 後面用 <code>tbl</code> 這類 <span class="term" data-def="寫在組語裡但不會變成機器指令的指示，只給組譯器或編譯器看。">pseudo-op</span> 列出可能的目標，建圖時只連那幾個。範例「jump → r」可以看到保守做法長什麼樣。</li>
       <li><strong>IR 有 fall-through。</strong>如果條件分支「不跳就往下走」，branch 的下一條也是 leader，而且要多加一條到它的邊。FindLeaders 和 BuildGraph 各要多一個 case。</li>
       <li><strong>branch 後面沒 label 的指令。</strong>在 ILOC 裡它不可達。演算法不會把它當 leader，於是它被吸進前一個 block，前一個 block 的最後一條不再是那個 branch，邊就丟了。範例「branch 後面沒 label」示範這個情況。實務上要在建圖前先刪掉這種死碼，或把它當 leader，讓它變成一個沒有入邊的節點。</li>
       <li><strong>沒有人跳到的 label。</strong>仍然是 leader、仍然建節點，只是沒有入邊，在 CFG 裡不可達。不過 <code>jump → r</code> 的保守做法會給它一條入邊。</li>
@@ -300,6 +201,7 @@ textarea { width: 100%; min-height: 12.5rem; resize: vertical; font: inherit; fo
   <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, 3rd ed., Chapter 4（Intermediate Representations）。兩段虛擬碼照書上的寫法。</p>
 </main>
 
+<script src="../../assets/site.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -499,11 +401,14 @@ const INIT = { proc: null, lines: [], next: null, i: null, j: null, maxStmt: nul
 const state = { pi: 0, k: 0, parsed: null, trace: [] };
 const total = () => state.trace.length;
 const cur = () => state.k === 0 ? INIT : state.trace[state.k - 1];
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
 
 function rebuild() {
   state.parsed = parse($('src').value);
   state.trace = state.parsed.errors.length ? [] : buildTrace(state.parsed);
   state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
 }
 
 // ---- rendering ----
@@ -609,16 +514,10 @@ function renderGraph(s) {
 
 function renderAll() {
   const bad = state.parsed.errors.length > 0;
-  const T = total();
   document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && $('src').value === PRESETS[i].src));
   $('errs').innerHTML = state.parsed.errors.map(e => `<span>${esc(e)}</span>`).join('');
   $('phint').textContent = $('src').value === PRESETS[state.pi].src ? PRESETS[state.pi].hint : '';
-  $('step-range').max = T; $('step-range').value = state.k;
-  $('count').textContent = `第 ${state.k} / ${T} 步`;
-  $('btn-prev').disabled = state.k === 0;
-  $('btn-next').disabled = bad || state.k >= T;
   $('btn-build').disabled = bad;
-  $('btn-end').disabled = bad || state.k >= T;
   const s = bad ? INIT : cur();
   renderListing(s);
   renderPseudo(s);
@@ -630,18 +529,8 @@ function renderAll() {
   else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '');
 }
 
-$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
-$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
-$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
-$('btn-build').addEventListener('click', () => { const idx = state.trace.findIndex(s => s.proc === 'build'); if (idx >= 0) { state.k = idx + 1; renderAll(); } });
-$('btn-end').addEventListener('click', () => { state.k = total(); renderAll(); });
-$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
+$('btn-build').addEventListener('click', () => { const idx = state.trace.findIndex(s => s.proc === 'build'); if (idx >= 0) stepper.set(idx + 1); });
 $('src').addEventListener('input', () => { rebuild(); renderAll(); });
-document.addEventListener('keydown', e => {
-  if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
-  if (e.key === 'ArrowRight') $('btn-next').click();
-  if (e.key === 'ArrowLeft') $('btn-prev').click();
-});
 
 renderPresets();
 renderPseudoShell();

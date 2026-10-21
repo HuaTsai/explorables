@@ -8,9 +8,7 @@
   function sidenotes() {
     const notes = document.querySelectorAll('.sn');
     if (!notes.length) return;
-    const page = document.querySelector('.page');
-    if (page) page.classList.add('has-sn');
-    const wide = window.matchMedia('(min-width: 80rem)');
+    const wide = window.matchMedia('(min-width: 96rem)');
     const pairs = [];
     notes.forEach((sn, i) => {
       const n = i + 1;
