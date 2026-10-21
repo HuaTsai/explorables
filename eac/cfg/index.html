@@ -7,11 +7,11 @@
 <meta name="description" content="把 Engineering a Compiler 第四章建控制流程圖的兩段虛擬碼一步步跑給你看：FindLeaders 怎麼從 label 找出每個 basic block 的開頭，BuildGraph 怎麼找出 block 的結尾並連上邊。可以換範例，也可以自己改 ILOC 程式碼。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
 <link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has presets, the editable ILOC source and the
    step controls on top, then three panels: annotated listing, pseudocode + variables, CFG. */
-:root { --blk-a: #e4ebe9; --blk-b: #dfe5f0; }   /* 已切好的 block，交替兩色 */
-@media (prefers-color-scheme: dark) { :root { --blk-a: #1d2826; --blk-b: #1c2330; } }
+:root { --blk-a: light-dark(#e4ebe9, #1d2826); --blk-b: light-dark(#dfe5f0, #1c2330); }   /* 已切好的 block，交替兩色 */
 
 table.cmp { min-width: 34rem; }
 textarea { min-height: 12.5rem; font-size: 0.82rem; }
@@ -201,7 +201,6 @@ textarea { min-height: 12.5rem; font-size: 0.82rem; }
   <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, 3rd ed., Chapter 4（Intermediate Representations）。兩段虛擬碼照書上的寫法。</p>
 </main>
 
-<script src="../../assets/site.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

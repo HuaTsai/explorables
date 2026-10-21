@@ -28,7 +28,7 @@
 ### 共用檔
 
 - `assets/site.css`：色彩 token、排版、按鈕、說明裡的 `.code`、`.cols`、比較表、右側註解、術語提示、workbench 外殼（`.bench`、`.row`、`.presets`、`.top`、`.controls`、`.say`、`.work`、`.panel`、`.pseudo`、`.vars`、`.badge`）和所有響應式規則。頁面的 `<style>` 只放這一頁特有的面板和圖，不重複共用檔裡的東西。
-- `assets/site.js`：右側註解、術語提示、逐步型 workbench 的控制列（`site.stepper`）。演算法、追蹤和面板繪製寫在每頁自己的 `<script>` 裡，放在 site.js 之後。
+- `assets/site.js`：主題切換鈕、右側註解、術語提示、逐步型 workbench 的控制列（`site.stepper`）。在 `<head>` 裡緊接 site.css 之後用 `<script src="…/assets/site.js"></script>` 引入（不加 defer，這樣手動指定的主題不會先閃一下淺色）。演算法、追蹤和面板繪製寫在每頁自己的 `<script>` 裡，放在 `</body>` 前。
 - 引入路徑依目錄深度：`../assets/site.css`、`../../assets/site.css`。
 
 ### 版面
@@ -40,9 +40,10 @@
 
 ### 色彩
 
+- 深色模式預設跟系統，右上角的「主題」鈕可以手動指定（自動、深色、淺色，記在 localStorage）。所有顏色都寫成 `light-dark(淺, 深)`，不用 `prefers-color-scheme` 的 media query。
 - 五個結構色：`--bg` 頁面底、`--surface` 面板和輸入框底、`--ink` 文字、`--muted` 次要文字、`--line` 邊框。
 - 三個語意色，全站意思固定：`--mark` 目前正在處理的這一條；`--hit` 這一步新增、改動、走過或正確的東西；`--miss` 警告或錯誤。各有 `-soft` 淡底用來塗整列。slider、按鈕焦點、高亮都用它們。
-- 頁面只有在表達「兩邊」這種非對錯的對比（caller 和 callee、查詢和回應）時才可以加自己的 token，而且要在 `:root` 和深色模式各給一組。對錯類的一律用 hit 和 miss。
+- 頁面只有在表達「兩邊」這種非對錯的對比（caller 和 callee、查詢和回應）時才可以加自己的 token，寫成 `--left: light-dark(#9b2f6b, #ea86b8)` 這樣一行，淺色和深色都給。對錯類的一律用 hit 和 miss。
 
 ### workbench
 

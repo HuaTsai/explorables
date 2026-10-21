@@ -7,6 +7,7 @@
 <meta name="description" content="把 Engineering a Compiler 第八章的 tree-height balancing 一步步跑給你看：第一階段怎麼找出每棵運算式樹的根，Balance、Flatten、Rebuild 怎麼把一條長鏈攤平成葉子佇列再按等級重建成矮樹。原樹和重建樹並排畫出來，可以自己改程式碼和 live 集合。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
 <link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has presets, the editable block and the step controls
    on top, then three panels (listing, pseudocode + call stack, queues), then two panels (trees, output). */
@@ -257,7 +258,6 @@ Rebuild(root, q, op)
   <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, Chapter 8, Section 8.4.2（Tree-Height Balancing）。虛擬碼照書上的寫法；中譯本（第二版）裡是圖 8-7 到 8-9，例子是圖 8-10 和 8-11。</p>
 </main>
 
-<script src="../../assets/site.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

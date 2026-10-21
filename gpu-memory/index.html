@@ -7,6 +7,7 @@
 <meta name="description" content="逐步執行一個 warp 的幾條指令，看每一次存取在 H100 晶片上走到哪一層、花了多少 cycle。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
 <link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the stepper is a single workbench — the kernel on top,
    two chip drawings (package, one SM zoomed in) under it, then the log, caches and registers. */
@@ -300,7 +301,6 @@ svg.chip { display: block; width: 100%; max-width: 54rem; margin: 0 auto; height
 
 </main>
 
-<script src="../assets/site.js"></script>
 <script>
 /* ---------- hardware constants ----------
    H100 SXM5 / H200 SXM, GH100 die. Latencies: Luo et al. 2024 (arXiv 2402.13499) Table IV and

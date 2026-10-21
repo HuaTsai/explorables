@@ -1,28 +1,25 @@
 /* explorables 共用樣式。每頁用 <link rel="stylesheet" href="../assets/site.css"> 引入（深度依目錄調整），
    頁面自己的 <style> 只放這一頁特有的面板和圖。規格見 CLAUDE.md 的「頁面設計」。 */
 
-/* ---- 色彩 token：五個結構色、三個語意色 ---- */
+/* ---- 色彩 token：五個結構色、三個語意色。light-dark() 的第一個值是淺色、第二個是深色；
+   預設跟系統，<html data-theme="dark|light"> 可以手動指定（site.js 的切換鈕會設）。 ---- */
 :root {
-  --bg: #eef1f0;           /* 頁面底色 */
-  --surface: #f9fbfa;      /* 面板、輸入框底色 */
-  --ink: #17211f;          /* 文字 */
-  --muted: #5b6b67;        /* 次要文字、說明 */
-  --line: #cdd6d3;         /* 邊框 */
-  --mark: #fdf0b8;         /* 目前正在處理的這一條 */
-  --hit: #0a6f6a;          /* 這一步新增、改動、走過或正確的東西 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* 警告、錯誤 */
-  --miss-soft: #f3dbe8;
+  color-scheme: light dark;
+  --bg: light-dark(#eef1f0, #0f1514);           /* 頁面底色 */
+  --surface: light-dark(#f9fbfa, #161e1c);      /* 面板、輸入框底色 */
+  --ink: light-dark(#17211f, #dfe7e4);          /* 文字 */
+  --muted: light-dark(#5b6b67, #93a39f);        /* 次要文字、說明 */
+  --line: light-dark(#cdd6d3, #2b3835);         /* 邊框 */
+  --mark: light-dark(#fdf0b8, #3d3610);         /* 目前正在處理的這一條 */
+  --hit: light-dark(#0a6f6a, #56c9c0);          /* 這一步新增、改動、走過或正確的東西 */
+  --hit-soft: light-dark(#d5ebe8, #123532);
+  --miss: light-dark(#9b2f6b, #ea86b8);         /* 警告、錯誤 */
+  --miss-soft: light-dark(#f3dbe8, #3a1a2b);
   --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --mark: #3d3610; --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    color-scheme: dark;
-  }
-}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 /* ---- 基本排版 ---- */
 * { box-sizing: border-box; }
@@ -47,8 +44,11 @@ sup { line-height: 0; }
 i.hit, i.miss { font-style: normal; font-weight: 700; }
 i.hit { color: var(--hit); }
 i.miss { color: var(--miss); }
+header { position: relative; }
 .back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
 .back:hover { color: var(--ink); }
+.theme { position: absolute; top: 0; right: 0; padding: 0.1rem 0.5rem; font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); border-color: transparent; }
+.theme:hover { color: var(--ink); border-color: var(--line); }
 .foot { color: var(--muted); font-size: 0.85rem; }
 
 button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
@@ -144,6 +144,8 @@ textarea { width: 100%; min-height: 10rem; resize: vertical; tab-size: 4; }
 .panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
 .panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
 .panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+.panel-head span > .sub { margin-left: 0.4rem; }
+.bench .code { background: var(--bg); border: 0; }
 
 /* 會隨步驟高亮的虛擬碼和變數 */
 .pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.65; white-space: pre; overflow-x: auto; background: var(--bg); flex: 1; }

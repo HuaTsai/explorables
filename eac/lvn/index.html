@@ -7,6 +7,7 @@
 <meta name="description" content="把 Engineering a Compiler 第八章的 local value numbering 一步步跑給你看：值編號怎麼發、hash 表怎麼查、哪一條運算被改寫成重用。可以切換基本版和擴展版（交換律、常數摺疊、代數恆等式），也會標出名字被覆寫之後虛擬碼寫出錯誤程式的那一刻。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
 <link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has presets, the editable source, the mode switch
    and the step controls on top, then three panels: annotated listing, pseudocode + variables, tables. */
@@ -191,7 +192,6 @@ c ← x + y      命中，改寫成 c ← a   ✗  a 現在是 17</pre>
   <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, Chapter 8, Section 8.4.1（Local Value Numbering）。虛擬碼照書上的寫法；中譯本（第二版）裡是圖 8-2 和圖 8-4。</p>
 </main>
 
-<script src="../../assets/site.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

@@ -1,8 +1,33 @@
-/* explorables 共用腳本：右側註解、術語提示、逐步型 workbench 的控制列。
-   每頁用 <script src="../assets/site.js"></script> 引入，放在 </body> 前、頁面自己的 <script> 之前。 */
+/* explorables 共用腳本：主題切換、右側註解、術語提示、逐步型 workbench 的控制列。
+   每頁在 <head> 用 <script src="../assets/site.js"></script> 引入（放 head 是為了主題不閃一下）；
+   頁面自己的 <script> 放在 </body> 前。 */
 (function () {
   'use strict';
   const site = {};
+
+  /* ---- 主題：自動（跟系統）、深色、淺色，記在 localStorage ---- */
+  const THEMES = [['auto', '自動'], ['dark', '深色'], ['light', '淺色']];
+  const getTheme = () => { try { return localStorage.getItem('theme') || 'auto'; } catch (e) { return 'auto'; } };
+  const applyTheme = t => {
+    if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', t);
+  };
+  applyTheme(getTheme());
+  function themeToggle() {
+    const header = document.querySelector('.page > header');
+    if (!header) return;
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'theme';
+    const label = () => { const t = getTheme(); btn.textContent = '主題：' + THEMES.find(x => x[0] === t)[1]; btn.setAttribute('aria-label', `切換主題，目前是${THEMES.find(x => x[0] === t)[1]}`); };
+    btn.addEventListener('click', () => {
+      const i = THEMES.findIndex(x => x[0] === getTheme());
+      const next = THEMES[(i + 1) % THEMES.length][0];
+      try { if (next === 'auto') localStorage.removeItem('theme'); else localStorage.setItem('theme', next); } catch (e) {}
+      applyTheme(next); label();
+    });
+    label();
+    header.appendChild(btn);
+  }
 
   /* ---- 右側註解：正文裡 <span class="sn">…</span>，自動加編號和展開鈕 ---- */
   function sidenotes() {
@@ -130,6 +155,6 @@
     return st;
   };
 
-  document.addEventListener('DOMContentLoaded', () => { sidenotes(); terms(); });
+  document.addEventListener('DOMContentLoaded', () => { themeToggle(); sidenotes(); terms(); });
   window.site = site;
 })();

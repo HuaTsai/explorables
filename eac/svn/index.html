@@ -7,6 +7,7 @@
 <meta name="description" content="把 Engineering a Compiler 第八章的 superlocal value numbering 一步步跑給你看：extended basic block 怎麼定義、只有一個前驅的 block 為什麼可以繼承前驅的 hash 表、scoped hash table 怎麼在進入 block 時開新表、離開時整張丟掉，以及名字不是 SSA 時表為什麼會漏。可以自己改 block 和邊。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
 <link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* 這一頁特有的：CFG 圖、分 block 的程式碼列表、一層一層的 scoped hash 表。 */
 textarea { min-height: 14rem; font-size: 0.82rem; }
@@ -260,7 +261,6 @@ SVN(Block, Table)
   <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, Chapter 8, Section 8.5.1（Superlocal Value Numbering）。虛擬碼和範例照書上的寫法；中譯本（第二版）裡是圖 8-12 和圖 8-13，EBB 的定義在同章 8.3 節。「非 SSA 名字」範例照 8.5.1 正文描述的情況編的。結語提到的題目是 8.5 節末的復習題 1。</p>
 </main>
 
-<script src="../../assets/site.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
