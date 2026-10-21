@@ -40,7 +40,7 @@
 
 ### 色彩
 
-- 深色模式預設跟系統，右上角的「主題」鈕可以手動指定（自動、深色、淺色，記在 localStorage）。所有顏色都寫成 `light-dark(淺, 深)`，不用 `prefers-color-scheme` 的 media query。
+- 深色模式預設跟系統，右上角的圖示鈕可以手動切換（自動、深色、淺色，記在 localStorage）。所有顏色都寫成 `light-dark(淺, 深)`，不用 `prefers-color-scheme` 的 media query。
 - 五個結構色：`--bg` 頁面底、`--surface` 面板和輸入框底、`--ink` 文字、`--muted` 次要文字、`--line` 邊框。
 - 三個語意色，全站意思固定：`--mark` 目前正在處理的這一條；`--hit` 這一步新增、改動、走過或正確的東西；`--miss` 警告或錯誤。各有 `-soft` 淡底用來塗整列。slider、按鈕焦點、高亮都用它們。
 - 頁面只有在表達「兩邊」這種非對錯的對比（caller 和 callee、查詢和回應）時才可以加自己的 token，寫成 `--left: light-dark(#9b2f6b, #ea86b8)` 這樣一行，淺色和深色都給。對錯類的一律用 hit 和 miss。

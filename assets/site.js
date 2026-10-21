@@ -7,6 +7,11 @@
 
   /* ---- 主題：自動（跟系統）、深色、淺色，記在 localStorage ---- */
   const THEMES = [['auto', '自動'], ['dark', '深色'], ['light', '淺色']];
+  const ICON = {
+    auto: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 2.5a7.5 7.5 0 0 1 0 15z" fill="currentColor"/></svg>',
+    dark: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.8A7 7 0 0 1 7.2 4.5a7 7 0 1 0 8.3 8.3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+    light: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><g stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 1.8v2.2M10 16v2.2M1.8 10H4M16 10h2.2M4.2 4.2l1.6 1.6M14.2 14.2l1.6 1.6M4.2 15.8l1.6-1.6M14.2 5.8l1.6-1.6"/></g></svg>',
+  };
   const getTheme = () => { try { return localStorage.getItem('theme') || 'auto'; } catch (e) { return 'auto'; } };
   const applyTheme = t => {
     if (t === 'auto') document.documentElement.removeAttribute('data-theme');
@@ -18,7 +23,7 @@
     if (!header) return;
     const btn = document.createElement('button');
     btn.type = 'button'; btn.className = 'theme';
-    const label = () => { const t = getTheme(); btn.textContent = '主題：' + THEMES.find(x => x[0] === t)[1]; btn.setAttribute('aria-label', `切換主題，目前是${THEMES.find(x => x[0] === t)[1]}`); };
+    const label = () => { const t = getTheme(), name = THEMES.find(x => x[0] === t)[1]; btn.innerHTML = ICON[t]; btn.title = `主題：${name}（點一下切換）`; btn.setAttribute('aria-label', `切換主題，目前是${name}`); };
     btn.addEventListener('click', () => {
       const i = THEMES.findIndex(x => x[0] === getTheme());
       const next = THEMES[(i + 1) % THEMES.length][0];
