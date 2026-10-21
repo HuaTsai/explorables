@@ -6,69 +6,29 @@
 <title>DNS 解析逐步圖解</title>
 <meta name="description" content="逐步執行一次 DNS 查詢，看遞迴解析器怎麼從根伺服器一路問到權威伺服器。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the stepper is a single workbench — the delegation tree on top,
    the current DNS message under it, the conversation log and resolver cache side by side. */
+/* 這一頁特有的色彩：問和答是「兩邊」的對比，不是對錯。 */
 :root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --ask: #0a6f6a;         /* 問:查詢 */
-  --ask-soft: #d5ebe8;
-  --reply: #9b2f6b;       /* 答:回應 */
-  --reply-soft: #f3dbe8;
-  --mark: #fdf0b8;        /* 目前這一步 */
-  --bad: #b3261e;
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+  --ask: light-dark(#0a6f6a, #56c9c0);         /* 問：查詢 */
+  --ask-soft: light-dark(#d5ebe8, #123532);
+  --reply: light-dark(#9b2f6b, #ea86b8);       /* 答：回應 */
+  --reply-soft: light-dark(#f3dbe8, #3a1a2b);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --ask: #56c9c0; --ask-soft: #123532; --reply: #ea86b8; --reply-soft: #3a1a2b;
-    --mark: #3d3610; --bad: #ff8a80; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 60rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
 i.ask, i.reply { font-style: normal; font-weight: 700; }
 i.ask { color: var(--ask); }
 i.reply { color: var(--reply); }
 .empty { color: var(--muted); font-size: 0.9rem; }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
+select { font: inherit; font-family: var(--font-mono); font-size: 0.85rem; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--ink); }
 
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-:focus-visible { outline: 2px solid var(--ask); outline-offset: 2px; }
-input[type="text"], input[type="number"], select { font-family: var(--font-mono); font-size: 0.95rem; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--ink); }
-
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row, .row + .panels { border-top: 1px solid var(--line); }
-
+/* 輸入列 */
 .input-row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0; }
 .input-row label { font-size: 0.85rem; color: var(--muted); }
 #q-name { flex: 1 1 15rem; min-width: 0; font-size: 1.05rem; }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem; flex: 1 1 100%; }
-.presets button { font-size: 0.85rem; }
+.input-row .presets { flex: 1 1 100%; }
 
 /* delegation tree */
 .diagram-wrap { overflow-x: auto; }
@@ -95,24 +55,11 @@ svg.diagram { display: block; width: 100%; min-width: 620px; height: auto; }
 .tag.reply { background: var(--reply); color: var(--surface); }
 .tag.think { background: var(--mark); color: var(--ink); }
 .msg-body { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; overflow-x: auto; min-height: 5.6em; background: var(--bg); }
-.say { max-width: none; min-height: 3.4em; }
-.say.err { color: var(--bad); }
-
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--ask); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
 
 /* log + cache */
-.panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
-.panel { padding: 1rem 1.25rem; min-width: 0; }
-.panel + .panel { border-left: 1px solid var(--line); }
-@media (max-width: 720px) {
-  .panels { grid-template-columns: minmax(0, 1fr); }
-  .panel + .panel { border-left: 0; border-top: 1px solid var(--line); }
-}
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-
-.log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.1rem; counter-reset: step; }
+.work { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+.pbody { padding: 0.75rem; }
+.log { list-style: none; margin: 0; padding: 0.5rem 0.6rem; display: flex; flex-direction: column; gap: 0.1rem; counter-reset: step; }
 .log-row { counter-increment: step; display: grid; grid-template-columns: 1.5rem minmax(0, 1fr); column-gap: 0.5rem; width: 100%; text-align: left; border: 0; border-radius: 3px; padding: 0.25rem 0.4rem; font-size: 0.82rem; line-height: 1.45; }
 .log-row::before { content: counter(step); color: var(--muted); font-family: var(--font-mono); font-size: 0.75rem; text-align: right; line-height: 1.6; }
 .log-row .who { display: block; font-weight: 700; }
@@ -135,22 +82,21 @@ svg.diagram { display: block; width: 100%; min-width: 620px; height: auto; }
 /* result */
 .result { display: flex; flex-direction: column; gap: 0.75rem; }
 .status { align-self: flex-start; font-weight: 700; padding: 0.1rem 0.7rem; border-radius: 3px; border: 1px solid transparent; }
-.status.ok { background: var(--ask-soft); border-color: var(--ask); }
-.status.fail { border-color: var(--bad); color: var(--bad); }
+.status.ok { background: var(--hit-soft); border-color: var(--hit); }
+.status.fail { border-color: var(--miss); color: var(--miss); }
 .answer { margin: 0; font-family: var(--font-mono); font-size: 0.9rem; line-height: 1.7; overflow-x: auto; }
 
 /* zone editor */
 .tune { display: flex; flex-direction: column; gap: 1rem; }
-.table-wrap { overflow-x: auto; }
-.zone-table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
-.zone-table th, .zone-table td { padding: 0.35rem 0.75rem 0.35rem 0; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.zone-table th { font-size: 0.8rem; color: var(--muted); font-weight: 700; }
-.zone-table td.fixed { font-family: var(--font-mono); font-size: 0.9rem; color: var(--muted); }
+.zone-table { width: auto; }
+.zone-table td { white-space: nowrap; padding-right: 0.75rem; }
+.zone-table td.fixed { font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); }
+.zone-table input { padding: 0.35rem 0.5rem; }
 .zone-table input[data-f="name"] { width: 9rem; }
 .zone-table input[data-f="value"] { width: 16rem; }
 .zone-table input[data-f="ttl"] { width: 5.5rem; }
 .zone-table button { font-size: 0.82rem; padding: 0.2rem 0.6rem; }
-.errors { margin: 0; padding-left: 1.2rem; color: var(--bad); display: flex; flex-direction: column; gap: 0.35rem; }
+.errors { margin: 0; padding-left: 1.2rem; color: var(--miss); display: flex; flex-direction: column; gap: 0.35rem; }
 .tune-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 </style>
 </head>
@@ -164,8 +110,8 @@ svg.diagram { display: block; width: 100%; min-width: 620px; height: auto; }
 
   <section class="prose">
     <h2>誰在回答問題</h2>
-    <p>你的電腦只問一台伺服器：<strong>遞迴解析器</strong>，通常是網路業者提供的，或 1.1.1.1、8.8.8.8 這類公用的。真正跑去問一圈的是它。</p>
-    <p>DNS 是一棵樹，每一層伺服器只知道下一層該問誰。根伺服器知道 <code>.dev</code> 歸誰管，<code>.dev</code> 伺服器知道 <code>huatsai.dev</code> 歸誰管，最後那台<strong>權威伺服器</strong>才有真正的紀錄。下圖用兩種顏色區分 <i class="ask">問</i> 和 <i class="reply">答</i>。</p>
+    <p>你的電腦只問一台伺服器：<span class="term" data-def="recursive resolver。替使用者把整個查詢跑完的伺服器：從根伺服器一路問到拿到答案為止，沿途的回答都快取起來。"><strong>遞迴解析器</strong></span>，通常是網路業者提供的，或 1.1.1.1、8.8.8.8 這類公用的。真正跑去問一圈的是它。</p>
+    <p>DNS 是一棵樹，每一層伺服器只知道下一層該問誰。根伺服器知道 <code>.dev</code> 歸誰管，<span class="sn">根伺服器有 13 組名字（a 到 m.root-servers.net），位址寫死在解析器內建的 root hints 檔裡，這是整個查詢唯一不用問別人就知道的位址。</span><code>.dev</code> 伺服器知道 <code>huatsai.dev</code> 歸誰管，最後那台<span class="term" data-def="authoritative server。真正保管某個 zone 紀錄的伺服器，它的回答不是轉述，是定義；其他伺服器給的答案都是從這裡抄來再快取的。"><strong>權威伺服器</strong></span>才有真正的紀錄。下圖用兩種顏色區分 <i class="ask">問</i> 和 <i class="reply">答</i>。</p>
   </section>
 
   <section class="bench" aria-label="逐步執行">
@@ -185,33 +131,37 @@ svg.diagram { display: block; width: 100%; min-width: 620px; height: auto; }
         <div class="msg-head" id="msg-head"></div>
         <pre class="msg-body" id="msg-body"></pre>
       </div>
-      <p class="say" id="say" aria-live="polite"></p>
-      <div class="controls">
-        <button id="btn-reset" type="button">重來</button>
-        <button id="btn-prev" type="button">上一步</button>
-        <button id="btn-next" type="button" class="primary">下一步</button>
-        <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-        <span class="count" id="count"></span>
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
       </div>
     </div>
 
-    <div class="panels">
+    <div class="row work">
       <div class="panel">
-        <p class="panel-title">對話紀錄（點任一行可以跳過去）</p>
+        <div class="panel-head"><span>對話紀錄</span><span class="sub">點任一行可以跳過去</span></div>
         <ol class="log" id="log"></ol>
       </div>
       <div class="panel">
-        <p class="panel-title">解析器的快取</p>
-        <div id="cache"></div>
-        <div class="clock">
-          <span id="clock-now"></span>
-          <button type="button" data-dt="60">過 1 分鐘</button>
-          <button type="button" data-dt="300">過 5 分鐘</button>
-          <button type="button" data-dt="3600">過 1 小時</button>
-          <button type="button" id="btn-flush">清空快取</button>
+        <div class="panel-head"><span>解析器的快取</span></div>
+        <div class="pbody">
+          <div id="cache"></div>
+          <div class="clock">
+            <span id="clock-now"></span>
+            <button type="button" data-dt="60">過 1 分鐘</button>
+            <button type="button" data-dt="300">過 5 分鐘</button>
+            <button type="button" data-dt="3600">過 1 小時</button>
+            <button type="button" id="btn-flush">清空快取</button>
+          </div>
         </div>
       </div>
     </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
   </section>
 
   <section class="result">
@@ -224,12 +174,12 @@ svg.diagram { display: block; width: 100%; min-width: 620px; height: auto; }
   <section class="tune">
     <div class="prose">
       <h2>改 huatsai.dev 的紀錄試試看</h2>
-      <p>下面是 <code>huatsai.dev</code> 權威伺服器手上的紀錄。只有 <code>explorables</code> 那筆對應真實設定，其他是示範用的。改完按上面的「查詢」。</p>
-      <p>如果答案沒變，看一下快取：解析器在 TTL 過期前不會再去問權威伺服器，所以改了紀錄不會馬上生效。</p>
+      <p>下面是 <code>huatsai.dev</code> 權威伺服器手上的紀錄。只有 <code>explorables</code> 那筆對應真實設定，其他是示範用的。<span class="sn">上層的委派和 github.io 的 A、AAAA 紀錄是 2026-10-08 用 dig 查到的，之後可能變。</span>改完按上面的「查詢」。</p>
+      <p>如果答案沒變，看一下快取：解析器在 <span class="term" data-def="time to live。每筆紀錄附帶的秒數，告訴快取這筆答案可以保留多久；過期之後才會重新去問權威伺服器。">TTL</span> 過期前不會再去問權威伺服器，所以改了紀錄不會馬上生效。</p>
     </div>
     <div class="table-wrap">
-      <table class="zone-table">
-        <thead><tr><th>名稱</th><th>類型</th><th>值</th><th>TTL(秒)</th><th></th></tr></thead>
+      <table class="cmp zone-table">
+        <thead><tr><th>名稱</th><th>類型</th><th>值</th><th>TTL（秒）</th><th></th></tr></thead>
         <tbody id="zone-body"></tbody>
       </table>
     </div>
@@ -243,15 +193,8 @@ svg.diagram { display: block; width: 100%; min-width: 620px; height: auto; }
   <section class="prose">
     <h2>結語</h2>
     <p>一次 DNS 查詢是解析器替你跑腿：從根伺服器問起，每一層只告訴你「下一層去問誰」，直到權威伺服器給出答案。中間每一個回答都帶著 TTL，解析器記住它，下一次就從記得的那一層直接往下問，所以第二次查詢幾乎不用出門。改紀錄之後舊答案還會活到 TTL 到期，這不是故障，是設計。</p>
-    <p>上面的沙盒可以自己改紀錄、讓快取過期，試試看把 TTL 調短或調長，觀察改紀錄後要等多久才看得到新值。真實世界再往下是 glue 紀錄怎麼打破「要先查 NS 的 IP 才能問 NS」的循環，以及 DNSSEC 怎麼讓每一層的回答可以驗證。</p>
-    <p>這個站實際上開了 Cloudflare 的 proxy（橘色雲），開了之後權威伺服器不會回 CNAME，而是直接回 Cloudflare 自己的 A 和 AAAA，這裡畫的是 DNS only（灰色雲）的情況。沙盒裡只有 <code>.dev</code> 和 <code>.io</code> 兩個頂級網域，底下各一個網域，每個網域實際上有好幾台名稱伺服器，這裡只列一台。其他簡化還有：</p>
-    <ul>
-      <li>解析器拿到 NS 紀錄後還得知道那台伺服器的 IP，這通常由同一個回應附帶的 glue 紀錄提供，這裡略過。</li>
-      <li>NXDOMAIN 和空答案實際上也會被快取一段時間（負快取），這裡不會。</li>
-      <li>同一個 zone 內的 CNAME 鏈，真實的權威伺服器通常在一次回應裡就附上後續紀錄，這裡每一跳都重新查詢，比較容易看清楚。</li>
-      <li>新的解析器會做 QNAME minimization，問根伺服器時只問 <code>dev</code>，不透露完整名稱，這裡每次都問完整的名稱。</li>
-      <li>瀏覽器和作業系統自己也有一層快取。DNSSEC 完全沒有畫。</li>
-    </ul>
+    <p>上面的沙盒可以自己改紀錄、讓快取過期，試試看把 TTL 調短或調長，觀察改紀錄後要等多久才看得到新值。真實世界再往下是 <span class="term" data-def="上層伺服器轉介時順便附上的 NS 伺服器 IP 位址。沒有它，要問 example.com 的伺服器得先查 ns.example.com 的 IP，而那個查詢又得問 example.com 的伺服器，循環不出來。">glue 紀錄</span>怎麼打破「要先查 NS 的 IP 才能問 NS」的循環，以及 DNSSEC 怎麼讓每一層的回答可以驗證。</p>
+    <p>這個站實際上開了 Cloudflare 的 proxy（橘色雲），開了之後權威伺服器不會回 CNAME，而是直接回 Cloudflare 自己的 A 和 AAAA，這裡畫的是 DNS only（灰色雲）的情況。沙盒裡只有 <code>.dev</code> 和 <code>.io</code> 兩個頂級網域，底下各一個網域，每個網域實際上有好幾台名稱伺服器，這裡只列一台。其他簡化還有：解析器拿到 NS 紀錄後還得知道那台伺服器的 IP，這通常由同一個回應附帶的 glue 紀錄提供，這裡略過；NXDOMAIN 和空答案實際上也會被快取一段時間（負快取），這裡不會；同一個 zone 內的 CNAME 鏈，真實的權威伺服器通常在一次回應裡就附上後續紀錄，這裡每一跳都重新查詢，比較容易看清楚；新的解析器會做 QNAME minimization，問根伺服器時只問 <code>dev</code>，不透露完整名稱，這裡每次都問完整的名稱；瀏覽器和作業系統自己也有一層快取，DNSSEC 完全沒有畫。</p>
   </section>
 
 </main>
@@ -602,7 +545,6 @@ function renderStep() {
   const s = t ? t.steps[state.step] : null;
   renderDiagram(s);
   const say = $('say');
-  say.classList.toggle('err', !t && state.noticeErr);
   if (s) {
     const tn = tone(s);
     $('msg-head').innerHTML = `<span class="tag ${tn}">${tn === 'ask' ? '問' : tn === 'reply' ? '答' : '查快取'}</span>`
@@ -618,20 +560,14 @@ function renderStep() {
   } else {
     $('msg-head').innerHTML = '<span>等待查詢</span>';
     $('msg-body').textContent = '';
-    say.textContent = state.notice;
+    if (state.noticeErr) say.innerHTML = `<span class="warn">${esc(state.notice)}</span>`;
+    else say.textContent = state.notice;
     $('log').innerHTML = '<li class="empty">還沒有對話。</li>';
     renderCache([...state.cache.values()].map(e => ({ ...e, left: e.expires - state.now, fresh: false })), state.now);
   }
-  const last = t ? t.steps.length - 1 : 0;
-  $('btn-reset').disabled = !t || state.step === 0;
-  $('btn-prev').disabled = !t || state.step === 0;
-  $('btn-next').disabled = !t || state.step === last;
-  const range = $('step-range');
-  range.max = last;
-  range.value = state.step;
-  range.disabled = !t;
-  $('count').textContent = t ? `步驟 ${state.step + 1} / ${last + 1}` : '';
 }
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.step = k; renderStep(); } });
 
 function idle(notice, isErr) {
   state.trace = null;
@@ -639,7 +575,8 @@ function idle(notice, isErr) {
   state.notice = notice;
   state.noticeErr = !!isErr;
   renderResult();
-  renderStep();
+  stepper.setTotal(0);
+  stepper.set(0);
 }
 
 function runQuery() {
@@ -650,13 +587,8 @@ function runQuery() {
   state.trace = resolve(qname, qtype, recs, state.cache, state.now);
   state.step = 0;
   renderResult();
-  renderStep();
-}
-
-function go(n) {
-  if (!state.trace) return;
-  state.step = Math.max(0, Math.min(state.trace.steps.length - 1, n));
-  renderStep();
+  stepper.setTotal(state.trace.steps.length - 1);
+  stepper.set(0);
 }
 
 function renderZoneErrors() {
@@ -690,18 +622,9 @@ function init() {
     runQuery();
   });
   $('query-form').addEventListener('submit', e => { e.preventDefault(); runQuery(); });
-  $('btn-reset').addEventListener('click', () => go(0));
-  $('btn-prev').addEventListener('click', () => go(state.step - 1));
-  $('btn-next').addEventListener('click', () => go(state.step + 1));
-  $('step-range').addEventListener('input', e => go(Number(e.target.value)));
   $('log').addEventListener('click', e => {
     const b = e.target.closest('button');
-    if (b) go(Number(b.dataset.step));
-  });
-  document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    if (e.key === 'ArrowRight') go(state.step + 1);
-    else if (e.key === 'ArrowLeft') go(state.step - 1);
+    if (b && state.trace) stepper.set(Number(b.dataset.step));
   });
 
   document.querySelector('.clock').addEventListener('click', e => {

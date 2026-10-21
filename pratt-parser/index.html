@@ -6,67 +6,28 @@
 <title>Pratt Parser 逐步圖解</title>
 <meta name="description" content="逐步執行 Pratt parser，看每一步怎麼比較 l_bp 和 min_bp。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the stepper is a single workbench — token tape on top,
    the tug-of-war verdict under it, code and call stack side by side. */
+/* 這一頁特有的色彩：左右兩側結合力是「兩邊」的對比，不是對錯。 */
 :root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --right: #0a6f6a;       /* 右側結合力:r_bp、min_bp */
-  --right-soft: #d5ebe8;
-  --left: #9b2f6b;        /* 左側結合力:l_bp */
-  --left-soft: #f3dbe8;
-  --mark: #fdf0b8;        /* 目前這一步 */
-  --bad: #b3261e;
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+  --right: light-dark(#0a6f6a, #56c9c0);       /* 右側結合力：r_bp、min_bp */
+  --right-soft: light-dark(#d5ebe8, #123532);
+  --left: light-dark(#9b2f6b, #ea86b8);        /* 左側結合力：l_bp */
+  --left-soft: light-dark(#f3dbe8, #3a1a2b);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --right: #56c9c0; --right-soft: #123532; --left: #ea86b8; --left-soft: #3a1a2b;
-    --mark: #3d3610; --bad: #ff8a80; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 60rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
 i.r, i.l { font-style: normal; font-weight: 600; }
 .r { color: var(--right); }
 .l { color: var(--left); }
 .empty { color: var(--muted); font-size: 0.9rem; }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
 
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-:focus-visible { outline: 2px solid var(--right); outline-offset: 2px; }
-
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row, .row + .panels, .panels + .row { border-top: 1px solid var(--line); }
-
+/* 輸入列 */
 .input-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
 .input-row label { font-size: 0.85rem; color: var(--muted); }
-#expr-input { font-family: var(--font-mono); font-size: 1.05rem; padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--ink); flex: 1 1 14rem; min-width: 0; }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.presets button { font-family: var(--font-mono); font-size: 0.85rem; }
+#expr-input { font-size: 1.05rem; flex: 1 1 14rem; min-width: 0; }
+.presets button { font-family: var(--font-mono); }
 
 /* tape */
 .tape-wrap { overflow-x: auto; }
@@ -80,8 +41,8 @@ button.primary { background: var(--ink); color: var(--surface); border-color: va
 .cell.read .tok { opacity: 0.35; }
 .cell.read .bps b:not(.cmp) { opacity: 0.5; }
 .cell.cur { background: var(--mark); border-color: var(--line); }
-.cell.bad { border-color: var(--bad); }
-.cell.bad .tok { color: var(--bad); }
+.cell.miss { border-color: var(--miss); }
+.cell.miss .tok { color: var(--miss); }
 .cell.eof .tok { font-family: var(--font-body); font-size: 0.8rem; font-weight: 400; color: var(--muted); }
 
 /* verdict */
@@ -99,29 +60,11 @@ button.primary { background: var(--ink); color: var(--surface); border-color: va
 .tug .idle strong { color: var(--muted); }
 .tug .prize { text-align: center; align-items: center; background: var(--bg); border-style: dashed; }
 .tug .prize strong { font-size: 1.1rem; color: var(--ink); }
-.say { max-width: none; min-height: 3.4em; }
-.say.err { color: var(--bad); }
-
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--right); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
 
 /* code + stack */
-.panels { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
-.panel { padding: 1rem 1.25rem; min-width: 0; }
-.panel + .panel { border-left: 1px solid var(--line); }
-@media (max-width: 720px) {
-  .panels { grid-template-columns: minmax(0, 1fr); }
-  .panel + .panel { border-left: 0; border-top: 1px solid var(--line); }
-}
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-pre.code { margin: 0; overflow-x: auto; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.65; }
-pre.code code { display: inline-block; min-width: 100%; font-size: inherit; }
-pre.code .ln { display: block; padding-right: 0.5rem; border-radius: 3px; white-space: pre; }
-pre.code .ln::before { content: attr(data-n); display: inline-block; width: 2ch; margin-right: 1.5ch; text-align: right; color: var(--muted); opacity: 0.6; }
-pre.code .ln.on { background: var(--mark); }
-
-.stack { display: flex; flex-direction: column; gap: 0.4rem; font-family: var(--font-mono); font-size: 0.82rem; }
+.work { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+.pseudo .pl::before { content: attr(data-n); display: inline-block; width: 2ch; margin-right: 1.5ch; text-align: right; color: var(--muted); opacity: 0.6; }
+.stack { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; font-family: var(--font-mono); font-size: 0.82rem; }
 .frame { border: 1px solid var(--line); border-radius: 4px; padding: 0.4rem 0.6rem; display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
 .frame.active { border-color: var(--ink); background: var(--bg); }
 .frame .wait { font-family: var(--font-body); font-size: 0.78rem; color: var(--muted); }
@@ -139,12 +82,9 @@ svg.tree { display: block; }
 
 /* bp table */
 .tune { display: flex; flex-direction: column; gap: 1rem; }
-.table-wrap { overflow-x: auto; }
-table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
-th, td { padding: 0.4rem 1.25rem 0.4rem 0; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
-th { font-size: 0.8rem; color: var(--muted); font-weight: 700; }
-td.op { font-family: var(--font-mono); font-size: 1.15rem; font-weight: 600; }
-td input { width: 4.5rem; font-family: var(--font-mono); font-size: 0.95rem; padding: 0.25rem 0.4rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); }
+.cmp td { white-space: nowrap; }
+.cmp td.op { font-family: var(--font-mono); font-size: 1.15rem; font-weight: 600; }
+.cmp td input { width: 4.5rem; padding: 0.25rem 0.4rem; }
 .tune-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 </style>
 </head>
@@ -158,8 +98,8 @@ td input { width: 4.5rem; font-family: var(--font-mono); font-size: 0.95rem; pad
 
   <section class="prose">
     <h2>結合力怎麼比</h2>
-    <p>每個二元運算子有兩個數字：<i class="l">左側結合力 l_bp</i> 和 <i class="r">右側結合力 r_bp</i>，寫在下方紙帶的運算子兩側。運算元夾在兩個運算子中間時，左邊的運算子用右側結合力拉它，右邊的用左側結合力拉它，數字大的搶到。</p>
-    <p>程式裡的 <i class="r">min_bp</i> 就是「左邊那個運算子的右側結合力」。迴圈每遇到一個新運算子只做一件事：拿它的 <i class="l">l_bp</i> 跟 <i class="r">min_bp</i> 比。</p>
+    <p>每個二元運算子有兩個數字：<i class="l">左側<span class="term" data-def="binding power。運算子拉住旁邊運算元的力道，左右各一個數字；運算元被兩邊拉時，數字大的那邊搶到。">結合力</span> l_bp</i> 和 <i class="r">右側結合力 r_bp</i>，寫在下方紙帶的運算子兩側。運算元夾在兩個運算子中間時，左邊的運算子用右側結合力拉它，右邊的用左側結合力拉它，數字大的搶到。</p>
+    <p>程式裡的 <i class="r">min_bp</i> 就是「左邊那個運算子的右側結合力」。迴圈每遇到一個新運算子只做一件事：拿它的 <i class="l">l_bp</i> 跟 <i class="r">min_bp</i> 比。<span class="sn">Pratt 1973 年的論文就叫它 left 和 right binding power；這一頁的 l_bp、r_bp、min_bp 命名和程式結構照 matklad 的〈Simple but Powerful Pratt Parsing〉。</span></p>
   </section>
 
   <section class="bench" aria-label="逐步執行">
@@ -175,26 +115,28 @@ td input { width: 4.5rem; font-family: var(--font-mono); font-size: 0.95rem; pad
 
     <div class="row verdict">
       <div class="tug" id="tug"></div>
-      <p class="say" id="say" aria-live="polite"></p>
-      <div class="controls">
-        <button id="btn-reset" type="button">重來</button>
-        <button id="btn-prev" type="button">上一步</button>
-        <button id="btn-next" type="button" class="primary">下一步</button>
-        <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-        <span class="count" id="count"></span>
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
       </div>
     </div>
 
-    <div class="panels">
+    <div class="row work">
       <div class="panel">
-        <p class="panel-title">程式碼</p>
-        <pre class="code"><code id="code"></code></pre>
+        <div class="panel-head"><span>程式碼</span></div>
+        <pre class="pseudo" id="code"></pre>
       </div>
       <div class="panel">
-        <p class="panel-title">呼叫堆疊（最下面是目前這一層）</p>
+        <div class="panel-head"><span>呼叫堆疊</span><span class="sub">最下面是目前這一層</span></div>
         <div class="stack" id="stack"></div>
       </div>
     </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
   </section>
 
   <section class="result">
@@ -206,10 +148,10 @@ td input { width: 4.5rem; font-family: var(--font-mono); font-size: 0.95rem; pad
   <section class="tune">
     <div class="prose">
       <h2>改結合力試試看</h2>
-      <p>同一個運算子的右側比左側大就是左結合，反過來是右結合。不同層級的數字範圍通常不重疊。改下面的數字，上面的結果會立刻重算。</p>
+      <p>同一個運算子的右側比左側大就是<span class="term" data-def="同一個運算子連著出現時先算左邊：a − b − c 解析成 (a − b) − c。右結合則是 a ^ b ^ c 解析成 a ^ (b ^ c)。">左結合</span>，反過來是右結合。不同層級的數字範圍通常不重疊。改下面的數字，上面的結果會立刻重算。</p>
     </div>
     <div class="table-wrap">
-      <table>
+      <table class="cmp">
         <thead><tr><th>運算子</th><th>位置</th><th>左側 l_bp</th><th>右側 r_bp</th><th>結合性</th></tr></thead>
         <tbody id="bp-body"></tbody>
       </table>
@@ -223,8 +165,8 @@ td input { width: 4.5rem; font-family: var(--font-mono); font-size: 0.95rem; pad
   <section class="prose">
     <h2>結語</h2>
     <p>Pratt parser 只有一個遞迴函式加一個迴圈：先取一個運算元當 <code>lhs</code>，然後每遇到一個運算子就拿它的 <code>l_bp</code> 和 <code>min_bp</code> 比，比不過就把 <code>lhs</code> 交回上一層，比得過就用它的 <code>r_bp</code> 當新的 <code>min_bp</code> 遞迴解析右邊。優先級和結合性都只是這兩個數字的大小關係，沒有另外的文法規則。</p>
-    <p>把結合力表換成一個語言真正的運算子表，再把 <code>(tok, lhs, rhs)</code> 換成語法樹節點，就是一個可用的運算式剖析器；Rust 的 <code>rustc</code> 和許多手寫剖析器的運算式部分都是這個結構。</p>
-    <p>這一頁有前綴運算子和括號，但沒有後綴運算子、三元運算子 <code>a ? b : c</code> 這類 mixfix 的寫法，也沒有錯誤回復：式子有錯就直接停下來報一個位置。</p>
+    <p>把結合力表換成一個語言真正的運算子表，再把 <code>(tok, lhs, rhs)</code> 換成<span class="term" data-def="程式的樹狀表示：每個運算子是一個節點，它的運算元是子樹。上面「解析結果」畫的就是這棵樹。">語法樹</span>節點，就是一個可用的運算式剖析器；Rust 的 <code>rustc</code> 和許多手寫剖析器的運算式部分都是這個結構。</p>
+    <p>這一頁有前綴運算子和括號，但沒有後綴運算子、三元運算子 <code>a ? b : c</code> 這類 <span class="term" data-def="運算子的符號不只一個、夾在運算元之間的寫法，例如 a ? b : c 有兩個符號、a[i] 用一對括號。Pratt parser 處理得了，但要在迴圈裡多讀幾個 token。">mixfix</span> 的寫法，也沒有錯誤回復：式子有錯就直接停下來報一個位置。</p>
   </section>
 </main>
 
@@ -426,7 +368,7 @@ function renderTape(s) {
     const cls = ['cell'];
     if (s && i === s.cur) cls.push('cur');
     else if (s && i < s.pos) cls.push('read');
-    if (error && i === error.pos) cls.push('bad');
+    if (error && i === error.pos) cls.push('miss');
     const rCmp = cmp && top.minSrc === i ? ' cmp' : '';
     let bps = '';
     if (roles[i] === 'binary') {
@@ -438,7 +380,7 @@ function renderTape(s) {
     h += `<div class="${cls.join(' ')}"><span class="tok">${esc(tk.text)}</span><span class="bps">${bps}</span></div>`;
   });
   const end = toks.length;
-  h += `<div class="cell eof${s && s.cur === end ? ' cur' : ''}${error && error.pos === end ? ' bad' : ''}"><span class="tok">結束</span><span class="bps"></span></div>`;
+  h += `<div class="cell eof${s && s.cur === end ? ' cur' : ''}${error && error.pos === end ? ' miss' : ''}"><span class="tok">結束</span><span class="bps"></span></div>`;
   el.innerHTML = h;
   const cur = el.querySelector('.cur');
   const wrap = $('tape-wrap');
@@ -481,7 +423,7 @@ function renderStack(s) {
 function renderCode(s) {
   const on = new Set(s ? s.lines : []);
   $('code').innerHTML = CODE.map((line, i) =>
-    `<span class="ln${on.has(i + 1) ? ' on' : ''}" data-n="${i + 1}">${line || ' '}</span>`).join('');
+    `<span class="pl${on.has(i + 1) ? ' on' : ''}" data-n="${i + 1}">${line || ' '}</span>`).join('');
 }
 
 function renderTree() {
@@ -529,18 +471,11 @@ function renderStep() {
   renderStack(s);
   renderCode(s);
   const say = $('say');
-  say.classList.toggle('err', !!error);
-  say.textContent = error ? `無法解析：${error.message}` : narrate(s);
-  const last = trace ? trace.steps.length - 1 : 0;
-  $('btn-reset').disabled = !trace || state.step === 0;
-  $('btn-prev').disabled = !trace || state.step === 0;
-  $('btn-next').disabled = !trace || state.step === last;
-  const range = $('step-range');
-  range.max = last;
-  range.value = state.step;
-  range.disabled = !trace;
-  $('count').textContent = trace ? `步驟 ${state.step + 1} / ${last + 1}` : '';
+  if (error) say.innerHTML = `<span class="warn">無法解析：${esc(error.message)}</span>`;
+  else say.textContent = narrate(s);
 }
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.step = k; renderStep(); } });
 
 function run() {
   state.step = 0;
@@ -555,13 +490,8 @@ function run() {
     state.error = e;
   }
   renderTree();
-  renderStep();
-}
-
-function go(n) {
-  if (!state.trace) return;
-  state.step = Math.max(0, Math.min(state.trace.steps.length - 1, n));
-  renderStep();
+  stepper.setTotal(state.trace ? state.trace.steps.length - 1 : 0);
+  stepper.set(0);
 }
 
 function renderBpTable() {
@@ -585,15 +515,6 @@ function init() {
     run();
   });
   $('expr-input').addEventListener('input', run);
-  $('btn-reset').addEventListener('click', () => go(0));
-  $('btn-prev').addEventListener('click', () => go(state.step - 1));
-  $('btn-next').addEventListener('click', () => go(state.step + 1));
-  $('step-range').addEventListener('input', e => go(Number(e.target.value)));
-  document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT') return;
-    if (e.key === 'ArrowRight') go(state.step + 1);
-    else if (e.key === 'ArrowLeft') go(state.step - 1);
-  });
 
   $('bp-body').addEventListener('input', e => {
     const inp = e.target;

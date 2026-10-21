@@ -6,66 +6,27 @@
 <title>x86-64 暫存器地圖</title>
 <meta name="description" content="點開每一個 x86-64 暫存器，看它的別名怎麼疊、在 SysV 和 Win64 下各扮演什麼角色，再用幾個 C 函式逐步看參數怎麼進暫存器。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
 <style>
 /* Layout: one reading column. Two workbenches — the register map (click a register, see
    its aliases and ABI role) and the call stepper (a C function, its assembly, the register
    file changing line by line). */
+/* 這一頁特有的色彩：讀和寫、參數和回傳值是「兩邊」的對比；callee-saved 是第三類。 */
 :root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --right: #0a6f6a;       /* 寫入、回傳值 */
-  --right-soft: #d5ebe8;
-  --left: #9b2f6b;        /* 讀取、參數 */
-  --left-soft: #f3dbe8;
-  --keep: #8a5a00;        /* callee-saved */
-  --keep-soft: #f6e7c4;
-  --mark: #fdf0b8;        /* 目前這一步 */
-  --bad: #b3261e;
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+  --right: light-dark(#0a6f6a, #56c9c0);       /* 寫入、回傳值 */
+  --right-soft: light-dark(#d5ebe8, #123532);
+  --left: light-dark(#9b2f6b, #ea86b8);        /* 讀取、參數 */
+  --left-soft: light-dark(#f3dbe8, #3a1a2b);
+  --keep: light-dark(#8a5a00, #e0b05a);        /* callee-saved */
+  --keep-soft: light-dark(#f6e7c4, #3a2e12);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --right: #56c9c0; --right-soft: #123532; --left: #ea86b8; --left-soft: #3a1a2b;
-    --keep: #e0b05a; --keep-soft: #3a2e12;
-    --mark: #3d3610; --bad: #ff8a80; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 60rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-h3 { font-size: 1rem; margin: 0; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
 i.r, i.l, i.k { font-style: normal; font-weight: 600; }
 .r { color: var(--right); }
 .l { color: var(--left); }
 .k { color: var(--keep); }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
 
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-:focus-visible { outline: 2px solid var(--right); outline-offset: 2px; }
-
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row, .row + .panels, .panels + .row { border-top: 1px solid var(--line); }
+/* 工具列：ABI 切換、圖例 */
 .toolbar { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; align-items: center; }
 .toolbar label { font-size: 0.85rem; color: var(--muted); }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
@@ -81,8 +42,7 @@ button.primary { background: var(--ink); color: var(--surface); border-color: va
 .legend .sp::before { background: var(--bg); border-style: dashed; border-color: var(--ink); }
 
 /* register grid */
-.grid-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-.grid-title + .grid { margin-bottom: 1rem; }
+.panel-title + .grid { margin-bottom: 1rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.6rem, 1fr)); gap: 0.4rem; }
 @media (min-width: 900px) { .grid { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
 .reg { display: grid; grid-template-rows: auto auto auto; align-content: start; gap: 0.15rem; padding: 0.45rem 0.6rem 0.5rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); text-align: left; min-width: 0; line-height: 1.3; }
@@ -103,8 +63,7 @@ button.primary { background: var(--ink); color: var(--surface); border-color: va
 .reg.wide { grid-column: span 2; }
 
 /* detail */
-.detail { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 1.25rem; }
-@media (max-width: 720px) { .detail { grid-template-columns: minmax(0, 1fr); } }
+.work.detail { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 1.25rem; }
 .detail h3 { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; }
 .detail h3 small { font-family: var(--font-body); font-size: 0.85rem; font-weight: 400; color: var(--muted); margin-left: 0.5rem; }
 .alias { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; }
@@ -133,32 +92,15 @@ button.primary { background: var(--ink); color: var(--surface); border-color: va
 .empty { color: var(--muted); font-size: 0.9rem; }
 
 /* stepper */
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.presets button { font-family: var(--font-mono); font-size: 0.85rem; }
-.presets button.on { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-.panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.panel { padding: 1rem 1.25rem; min-width: 0; }
-.panel + .panel { border-left: 1px solid var(--line); }
-@media (max-width: 720px) {
-  .panels { grid-template-columns: minmax(0, 1fr); }
-  .panel + .panel { border-left: 0; border-top: 1px solid var(--line); }
-}
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-pre.code { margin: 0; overflow-x: auto; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.65; }
-pre.code code { display: inline-block; min-width: 100%; font-size: inherit; }
-pre.code .ln { display: block; padding-right: 0.5rem; border-radius: 3px; white-space: pre; }
-pre.code .ln::before { content: attr(data-n); display: inline-block; width: 2ch; margin-right: 1.5ch; text-align: right; color: var(--muted); opacity: 0.6; }
-pre.code .ln.on { background: var(--mark); }
-pre.code .ln.done { opacity: 0.55; }
-pre.code .cm { color: var(--muted); }
-.csrc { margin-bottom: 1rem; }
-pre.code.csrc .ln { white-space: pre-wrap; text-indent: -3.5ch; padding-left: 3.5ch; }
-.csrc .ln.hl { background: var(--mark); }
-
-.say { max-width: none; min-height: 3.4em; }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--right); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
+.presets button { font-family: var(--font-mono); }
+.work { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.panel .panel-head:not(:first-child) { border-top: 1px solid var(--line); }
+.pbody { padding: 0.75rem; }
+.pseudo .pl::before { content: attr(data-n); display: inline-block; width: 2ch; margin-right: 1.5ch; text-align: right; color: var(--muted); opacity: 0.6; }
+.pseudo .pl.done { opacity: 0.55; }
+.pseudo.csrc { flex: 0 0 auto; white-space: normal; }
+.pseudo.csrc .pl { white-space: pre-wrap; text-indent: -3.5ch; padding-left: 3.5ch; }
+.pseudo.csrc .pl.hl { background: var(--mark); }
 
 .file { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.4rem, 1fr)); gap: 0.35rem; }
 .cellr { border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.5rem; font-family: var(--font-mono); line-height: 1.3; min-width: 0; }
@@ -172,7 +114,6 @@ pre.code.csrc .ln { white-space: pre-wrap; text-indent: -3.5ch; padding-left: 3.
 .cellr.rd { background: var(--left-soft); box-shadow: inset 0 0 0 1px var(--left); }
 .cellr.wr { background: var(--right-soft); box-shadow: inset 0 0 0 1px var(--right); }
 .cellr.rd.wr { background: linear-gradient(135deg, var(--left-soft) 50%, var(--right-soft) 50%); box-shadow: inset 0 0 0 1px var(--right); }
-.file-title { margin-top: 1rem; }
 .stack { display: flex; flex-direction: column; gap: 0.25rem; font-family: var(--font-mono); font-size: 0.8rem; }
 .slot { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.5rem; border: 1px solid var(--line); border-radius: 3px; padding: 0.2rem 0.5rem; }
 .slot .addr { color: var(--muted); }
@@ -182,15 +123,8 @@ pre.code.csrc .ln { white-space: pre-wrap; text-indent: -3.5ch; padding-left: 3.
 .slot .shadow { color: var(--muted); font-family: var(--font-body); font-size: 0.75rem; }
 .ret-line { font-family: var(--font-mono); font-size: 0.9rem; margin-top: 0.75rem; }
 
-/* tables */
-.table-wrap { overflow-x: auto; }
-table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.92rem; }
-th, td { padding: 0.45rem 1.1rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
-td.mono { white-space: nowrap; }
-details { border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem 1.25rem; background: var(--surface); }
-summary { cursor: pointer; font-weight: 700; }
-details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.92rem; }
+/* 架構比較表 */
+.cmp td.mono { white-space: nowrap; font-size: 0.85rem; }
 </style>
 </head>
 <body>
@@ -198,13 +132,13 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
   <header>
     <a class="back" href="../">← Explorables</a>
     <h1><span class="mono">x86-64</span> 暫存器地圖</h1>
-    <p class="lead">CPU 只認得指令，它不知道哪個暫存器該放參數。那些是 ABI 的約定。點開每一個暫存器看它的別名怎麼疊、兩套 ABI 各給它什麼角色，再用幾個 C 函式逐步看參數怎麼進去。</p>
+    <p class="lead">CPU 只認得指令，它不知道哪個暫存器該放參數。那些是 <span class="term" data-def="application binary interface。編譯出來的程式彼此合作的約定：參數放哪、回傳值放哪、哪些暫存器要保存、stack 怎麼對齊。CPU 不檢查，違反了只會在執行時出錯。">ABI</span> 的約定。點開每一個暫存器看它的別名怎麼疊、兩套 ABI 各給它什麼角色，再用幾個 C 函式逐步看參數怎麼進去。</p>
   </header>
 
   <section class="prose">
     <h2>硬體給的是格子，ABI 決定格子怎麼用</h2>
     <p>x86-64 有 16 個 64 位元通用暫存器，每一個對 CPU 來說地位相同。<code>mov rdi, 5</code> 和 <code>mov rcx, 5</code> 都是合法指令，CPU 不會偏好哪一個。</p>
-    <p>但編譯器需要一個約定，讓 caller 和 callee 對得上：參數放哪、回傳值放哪、呼叫過後哪些暫存器還能信。最後這一點把 <code>rsp</code> 以外的每個暫存器分成兩類：<i class="k">callee-saved</i> 是被呼叫的函式要負責還原的，<i class="l">caller-saved</i> 是呼叫方自己要先存好的。參數和回傳值暫存器都屬於後者。Linux、macOS、BSD 用 <strong>System V AMD64 psABI</strong>,Windows 用自己的 <strong>Microsoft x64</strong>。下面的地圖可以切換兩套標籤，同一批暫存器會換上不同顏色。</p>
+    <p>但編譯器需要一個約定，讓 caller 和 callee 對得上：參數放哪、回傳值放哪、呼叫過後哪些暫存器還能信。最後這一點把 <code>rsp</code> 以外的每個暫存器分成兩類：<span class="term" data-def="被呼叫的函式若要用這個暫存器，離開前必須把它還原成進來時的值；所以呼叫方可以放心把值留在裡面跨越 call。"><i class="k">callee-saved</i></span> 是被呼叫的函式要負責還原的，<span class="term" data-def="呼叫方若在 call 之後還需要這個暫存器裡的值，call 之前要自己存起來；被呼叫的函式可以隨意改它。"><i class="l">caller-saved</i></span> 是呼叫方自己要先存好的。參數和回傳值暫存器都屬於後者。Linux、macOS、BSD 用 <strong>System V AMD64 psABI</strong>，Windows 用自己的 <strong>Microsoft x64</strong>。下面的地圖可以切換兩套標籤，同一批暫存器會換上不同顏色。</p>
   </section>
 
   <section class="bench" aria-label="暫存器地圖">
@@ -223,25 +157,25 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
       </div>
     </div>
     <div class="row">
-      <p class="grid-title">通用暫存器 · 64-bit · 16 個</p>
+      <p class="panel-title">通用暫存器 · 64-bit · 16 個</p>
       <div class="grid" id="grid-gpr"></div>
-      <p class="grid-title">控制</p>
+      <p class="panel-title">控制</p>
       <div class="grid" id="grid-ctl"></div>
-      <p class="grid-title">向量 / 浮點 · 128-bit · 16 個（AVX-512 下 32 個）</p>
+      <p class="panel-title">向量 / 浮點 · 128-bit · 16 個（AVX-512 下 32 個）</p>
       <div class="grid" id="grid-xmm"></div>
     </div>
-    <div class="row detail" id="detail"></div>
+    <div class="row work detail" id="detail"></div>
   </section>
 
   <section class="prose">
     <h2>別名不是副本，是同一塊的一部分</h2>
     <p><code>eax</code> 就是 <code>rax</code> 的低 32 位元，<code>ax</code> 是低 16 位元，<code>al</code> 是最低 8 位元。寫 <code>al</code> 會直接改到 <code>rax</code> 的最低一個 byte。這是 8086 → 80386 → x86-64 三代擴充留下來的疊層。</p>
-    <p>唯一一條不對稱的規則：<strong>寫 32 位元別名會把高 32 位元清零</strong>，寫 16 或 8 位元別名則保留高位元不動。所以 <code>mov eax, 1</code> 之後整個 <code>rax</code> 就是 1，編譯器也因此常用 <code>xor eax, eax</code> 來清空 <code>rax</code>，省一個 byte。</p>
+    <p>唯一一條不對稱的規則：<strong>寫 32 位元別名會把高 32 位元清零</strong>，寫 16 或 8 位元別名則保留高位元不動。所以 <code>mov eax, 1</code> 之後整個 <code>rax</code> 就是 1，編譯器也因此常用 <code>xor eax, eax</code> 來清空 <code>rax</code>，省一個 byte。<span class="sn"><code>xor eax, eax</code> 編碼成 2 bytes，<code>xor rax, rax</code> 要多一個 REX prefix 變 3 bytes，<code>mov eax, 0</code> 是 5 bytes。清零的效果三者相同。</span></p>
   </section>
 
   <section class="prose">
     <h2>用 C 函式看參數怎麼進暫存器</h2>
-    <p>下面四個函式都用 <code>clang -O1</code> 編譯，一次指定 <code>--target=x86_64-linux-gnu</code>、一次 <code>--target=x86_64-pc-windows-msvc</code>。C 原始碼一模一樣，只有 ABI 不同。按「下一步」逐條執行，<i class="l">粉色</i>是這一步讀到的暫存器，<i class="r">綠色</i>是寫入的。</p>
+    <p>下面四個函式都用 <code>clang -O1</code> 編譯，一次指定 <code>--target=x86_64-linux-gnu</code>、一次 <code>--target=x86_64-pc-windows-msvc</code>。<span class="sn">組語去掉了標籤、<code>.cfi</code> 指示和對齊填充，只留會執行的指令。</span>C 原始碼一模一樣，只有 ABI 不同。按「下一步」逐條執行，<i class="l">粉色</i>是這一步讀到的暫存器，<i class="r">綠色</i>是寫入的。</p>
   </section>
 
   <section class="bench" aria-label="逐步執行">
@@ -254,42 +188,45 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
         <button type="button" data-abi="win64">Win64</button>
       </div>
     </div>
-    <div class="panels">
-      <div class="panel">
-        <p class="panel-title">C</p>
-        <pre class="code csrc"><code id="csrc"></code></pre>
-        <p class="panel-title">組語 · Intel 語法</p>
-        <pre class="code"><code id="asm"></code></pre>
-      </div>
-      <div class="panel">
-        <p class="panel-title">暫存器</p>
-        <div class="file" id="file"></div>
-        <p class="panel-title file-title">Stack · 高位址在上</p>
-        <div class="stack" id="stack"></div>
-        <div class="ret-line" id="retline"></div>
-      </div>
-    </div>
     <div class="row">
-      <p class="say" id="say" aria-live="polite"></p>
-      <div class="controls">
-        <button id="btn-reset" type="button">重來</button>
-        <button id="btn-prev" type="button">上一步</button>
-        <button id="btn-next" type="button" class="primary">下一步</button>
-        <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-        <span class="count" id="count"></span>
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
       </div>
     </div>
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span>C</span></div>
+        <pre class="pseudo csrc" id="csrc"></pre>
+        <div class="panel-head"><span>組語</span><span class="sub">Intel 語法</span></div>
+        <pre class="pseudo" id="asm"></pre>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>暫存器</span></div>
+        <div class="pbody file" id="file"></div>
+        <div class="panel-head"><span>Stack</span><span class="sub">高位址在上</span></div>
+        <div class="pbody">
+          <div class="stack" id="stack"></div>
+          <div class="ret-line" id="retline"></div>
+        </div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
   </section>
 
   <section class="prose">
     <h2>其他架構怎麼約定</h2>
-    <p>換一顆 CPU，格子的數量和名字都不同，但「參數放哪、回傳放哪、誰負責保存」這三個問題一樣要有人回答。RISC-V 乾脆把 ABI 角色烙進名字裡，組語寫 <code>a0</code> 而不是 <code>x10</code>。NVPTX 更極端，它根本不是真的暫存器，而是給後端分配用的無上限虛擬名字。</p>
+    <p>換一顆 CPU，格子的數量和名字都不同，但「參數放哪、回傳放哪、誰負責保存」這三個問題一樣要有人回答。RISC-V 乾脆把 ABI 角色烙進名字裡，組語寫 <code>a0</code> 而不是 <code>x10</code>。<span class="term" data-def="NVIDIA GPU 的虛擬指令集。CUDA 編譯器先輸出 PTX，再由 ptxas 配置實體暫存器、編成實際的機器碼。">NVPTX</span> 更極端，它根本不是真的暫存器，而是給後端分配用的無上限虛擬名字。</p>
     <div class="table-wrap">
-      <table>
+      <table class="cmp">
         <thead><tr><th>目標</th><th>通用暫存器</th><th>整數參數</th><th>整數回傳</th><th>浮點參數</th><th>callee-saved</th></tr></thead>
         <tbody>
           <tr><td>x86-64 SysV</td><td>16</td><td class="mono">rdi rsi rdx rcx r8 r9</td><td class="mono">rax (rdx)</td><td class="mono">xmm0–7</td><td class="mono">rbx rbp r12–r15</td></tr>
-          <tr><td>x86-64 Win64</td><td>16</td><td class="mono">rcx rdx r8 r9</td><td class="mono">rax</td><td class="mono">xmm0–3(按位置)</td><td class="mono">rbx rbp rsi rdi r12–r15 xmm6–15</td></tr>
+          <tr><td>x86-64 Win64</td><td>16</td><td class="mono">rcx rdx r8 r9</td><td class="mono">rax</td><td class="mono">xmm0–3（按位置）</td><td class="mono">rbx rbp rsi rdi r12–r15 xmm6–15</td></tr>
           <tr><td>AArch64 AAPCS64</td><td>31 + sp</td><td class="mono">x0–x7</td><td class="mono">x0 (x1)</td><td class="mono">v0–v7</td><td class="mono">x19–x28 x29(fp) x30(lr)</td></tr>
           <tr><td>RISC-V LP64D</td><td>32</td><td class="mono">a0–a7 (x10–x17)</td><td class="mono">a0 (a1)</td><td class="mono">fa0–fa7</td><td class="mono">s0–s11 sp</td></tr>
           <tr><td>NVPTX</td><td>無上限虛擬 %r %rd %f %fd</td><td colspan="4">kernel 參數放 param space，由 <code>ld.param</code> 讀入；device 函式呼叫多半被 inline，真正的實體暫存器由 ptxas 分配</td></tr>
@@ -302,20 +239,8 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
     <h2>結語</h2>
     <p>十六個通用暫存器對 CPU 是平等的，參數、回傳值、callee-saved 這些角色都是 ABI 的約定，所以同一份 C 原始碼在 SysV 和 Win64 下會編出不同的暫存器用法。別名是同一塊的一部分，不是副本；寫 32 位元別名會清掉高 32 位元，寫 16 或 8 位元不會。</p>
     <p><code>call</code> 和 <code>ret</code> 怎麼搬動 <code>rsp</code> 和 <code>rip</code>、frame 怎麼疊，在<a href="../call-stack/">函式呼叫與 stack</a> 那一頁；暫存器數量和呼叫慣例在三個 ISA 之間怎麼取捨，在 <a href="../isa/">ISA 比較</a>系列。</p>
-    <p>範例只用整數和指標參數，沒有浮點、struct 傳值和可變參數的規則；地圖只畫通用、控制和向量暫存器，其餘的列在下面的「地圖上沒畫的暫存器」裡。</p>
+    <p>範例只用整數和指標參數，沒有浮點、struct 傳值和可變參數的規則。地圖只畫通用、控制和向量暫存器，沒畫的還有：區段暫存器 <code>cs ds es ss fs gs</code>，64-bit 模式下前四個基底固定為 0，<code>fs</code>、<code>gs</code> 保留 base，Linux 用 <code>fs</code> 指向 thread-local storage，Windows 用 <code>gs</code> 指向 TEB；x87 的 80-bit 浮點堆疊 <code>st0–st7</code> 和跟它共用同一塊實體空間的 MMX <code>mm0–mm7</code>，<code>long double</code> 才會用到；AVX-512 的遮罩 <code>k0–k7</code>，向量指令的 per-lane 開關，<code>k0</code> 代表不遮罩；APX 的 <code>r16–r31</code>，2024 年起 Intel 新增的 16 個通用暫存器，需要 CPU 與 OS 支援，還不在 SysV 預設 ABI 內；AMX 的 <code>tmm0–tmm7</code>，每個最大 1 KB 的矩陣 tile；以及只有 kernel 能碰的控制暫存器 <code>cr0 cr2 cr3 cr4 cr8</code>、除錯暫存器 <code>dr0–dr7</code>、描述表 <code>gdtr idtr ldtr tr</code>，和用 <code>rdmsr</code>/<code>wrmsr</code> 存取的上千個 MSR（例如 <code>IA32_EFER</code>、<code>IA32_LSTAR</code>）。</p>
   </section>
-
-  <details>
-    <summary>地圖上沒畫的暫存器</summary>
-    <ul>
-      <li><strong>區段暫存器</strong> <code>cs ds es ss fs gs</code>:64-bit 模式下前四個基底固定為 0。<code>fs</code>、<code>gs</code> 保留 base,Linux 用 <code>fs</code> 指向 thread-local storage,Windows 用 <code>gs</code> 指向 TEB。</li>
-      <li><strong>x87 / MMX</strong> <code>st0–st7</code>、<code>mm0–mm7</code>:80-bit 浮點堆疊，<code>long double</code> 才會用到。MMX 和 x87 共用同一塊實體空間。</li>
-      <li><strong>AVX-512 遮罩</strong> <code>k0–k7</code>：向量指令的 per-lane 開關，<code>k0</code> 代表不遮罩。</li>
-      <li><strong>APX</strong> <code>r16–r31</code>:2024 年起 Intel 新增的 16 個通用暫存器，需要 CPU 與 OS 支援，還不在 SysV 預設 ABI 內。</li>
-      <li><strong>AMX</strong> <code>tmm0–tmm7</code>：每個最大 1 KB 的矩陣 tile。</li>
-      <li><strong>只有 kernel 能碰的</strong>：控制暫存器 <code>cr0 cr2 cr3 cr4 cr8</code>、除錯暫存器 <code>dr0–dr7</code>、描述表 <code>gdtr idtr ldtr tr</code>、以及用 <code>rdmsr</code>/<code>wrmsr</code> 存取的上千個 MSR(例如 <code>IA32_EFER</code>、<code>IA32_LSTAR</code>)。</li>
-    </ul>
-  </details>
 </main>
 
 <script>
@@ -672,8 +597,8 @@ function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 function renderStepper() {
   const preset = PRESETS.find(p => p.id === presetId);
   const st = steps[cur];
-  $('csrc').innerHTML = preset.c.map((l, i) => `<span class="ln ${i === preset.c.findIndex(x => x.includes('return')) ? 'hl' : ''}" data-n="${i + 1}">${esc(l) || ' '}</span>`).join('');
-  $('asm').innerHTML = preset.asm[abi].map((l, i) => `<span class="ln ${i === st.line ? 'on' : i < st.line ? 'done' : ''}" data-n="${i + 1}">${esc(l)}</span>`).join('');
+  $('csrc').innerHTML = preset.c.map((l, i) => `<span class="pl ${i === preset.c.findIndex(x => x.includes('return')) ? 'hl' : ''}" data-n="${i + 1}">${esc(l) || ' '}</span>`).join('');
+  $('asm').innerHTML = preset.asm[abi].map((l, i) => `<span class="pl ${i === st.line ? 'on' : i < st.line ? 'done' : ''}" data-n="${i + 1}">${esc(l)}</span>`).join('');
 
   const shown = [...GPR, ...XMM.slice(0, 4)];
   $('file').innerHTML = shown.map(r => {
@@ -686,7 +611,7 @@ function renderStepper() {
   const top = st.state.regs.rsp - st.state.RSP0;
   const offs = [...st.state.mem.keys()].filter(o => o >= top).sort((a, b) => b - a);   // 低於 rsp 的已是死區
   const lowest = offs.length ? offs[offs.length - 1] : 8;
-  const reserved = lowest > top ? `<div class="slot top ${st.wr.has('rsp') ? 'wr' : ''}"><span class="addr">[entry rsp${top}] ← rsp</span><span class="shadow">預留 ${lowest - top} bytes:shadow space 給下一個 call，加上 16 對齊</span></div>` : '';
+  const reserved = lowest > top ? `<div class="slot top ${st.wr.has('rsp') ? 'wr' : ''}"><span class="addr">[entry rsp${top}] ← rsp</span><span class="shadow">預留 ${lowest - top} bytes：shadow space 給下一個 call，加上 16 對齊</span></div>` : '';
   $('stack').innerHTML = offs.map(o => {
     const s = st.state.mem.get(o);
     const cls = [o === top ? 'top' : '', st.memRd.has(o) ? 'rd' : '', st.memWr.has(o) ? 'wr' : ''].join(' ');
@@ -699,19 +624,16 @@ function renderStepper() {
   $('retline').innerHTML = st.state.done ? `<span class="r">回傳 ${fmt(st.state.retv[1])}</span>，透過 <code>${st.state.retv[0]}</code>` : '';
 
   $('say').textContent = st.say;
-  $('btn-prev').disabled = cur === 0;
-  $('btn-next').disabled = cur === steps.length - 1;
-  $('step-range').max = steps.length - 1;
-  $('step-range').value = cur;
-  $('count').textContent = `${cur} / ${steps.length - 1}`;
-  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('on', b.dataset.id === presetId));
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', b.dataset.id === presetId));
 }
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { cur = k; renderStepper(); } });
 
 function rebuild(keepStep) {
   const preset = PRESETS.find(p => p.id === presetId);
   steps = buildSteps(preset, abi);
-  cur = keepStep ? Math.min(cur, steps.length - 1) : 0;
-  renderStepper();
+  stepper.setTotal(steps.length - 1);
+  stepper.set(keepStep ? Math.min(cur, steps.length - 1) : 0);
 }
 
 /* ---------- wiring ---------- */
@@ -724,15 +646,6 @@ document.querySelectorAll('.seg button[data-abi]').forEach(b => b.addEventListen
 
 $('presets').innerHTML = PRESETS.map(p => `<button type="button" data-id="${p.id}" title="${p.title}">${p.label}</button>`).join('');
 document.querySelectorAll('#presets button').forEach(b => b.addEventListener('click', () => { presetId = b.dataset.id; rebuild(false); }));
-$('btn-reset').addEventListener('click', () => { cur = 0; renderStepper(); });
-$('btn-prev').addEventListener('click', () => { if (cur > 0) { cur--; renderStepper(); } });
-$('btn-next').addEventListener('click', () => { if (cur < steps.length - 1) { cur++; renderStepper(); } });
-$('step-range').addEventListener('input', e => { cur = Number(e.target.value); renderStepper(); });
-document.addEventListener('keydown', e => {
-  if (e.target.matches('input, textarea')) return;
-  if (e.key === 'ArrowRight') { $('btn-next').click(); }
-  if (e.key === 'ArrowLeft') { $('btn-prev').click(); }
-});
 
 renderGrid(); renderDetail(); rebuild(false);
 </script>

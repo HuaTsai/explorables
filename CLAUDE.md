@@ -27,7 +27,7 @@
 
 ### 共用檔
 
-- `assets/site.css`：色彩 token、排版、按鈕、說明裡的 `.code`、`.cols`、比較表、右側註解、術語提示、workbench 外殼（`.bench`、`.row`、`.presets`、`.top`、`.controls`、`.say`、`.work`、`.panel`、`.pseudo`、`.vars`、`.badge`）和所有響應式規則。頁面的 `<style>` 只放這一頁特有的面板和圖，不重複共用檔裡的東西。
+- `assets/site.css`：色彩 token、排版、按鈕、說明裡的 `.code`、`.cols`、比較表、右側註解、術語提示、workbench 外殼（`.bench`、`.row`、`.presets`、`.top`、`.controls`、`.say`、`.work`、`.panel`、`.panel-head`、`.panel-body`、`.pseudo`、`.vars`、`.badge`）和所有響應式規則。頁面的 `<style>` 只放這一頁特有的面板和圖，不重複共用檔裡的東西。
 - `assets/site.js`：主題切換鈕、右側註解、術語提示、逐步型 workbench 的控制列（`site.stepper`）。在 `<head>` 裡緊接 site.css 之後用 `<script src="…/assets/site.js"></script>` 引入（不加 defer，這樣手動指定的主題不會先閃一下淺色）。演算法、追蹤和面板繪製寫在每頁自己的 `<script>` 裡，放在 `</body>` 前。
 - 引入路徑依目錄深度：`../assets/site.css`、`../../assets/site.css`。
 

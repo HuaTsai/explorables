@@ -6,107 +6,56 @@
 <title>函式呼叫與 Stack 逐步圖解</title>
 <meta name="description" content="用真實位址逐步看 call 和 ret 怎麼搬動 rip 與 rsp、frame 怎麼疊起來又拆掉、為什麼 call 的瞬間 rsp 必須是 16 的倍數，以及返回位址被蓋掉會發生什麼事。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
 <style>
 /* Layout: one reading column. The main workbench shows code on the left, registers and the
    stack (real addresses, high at top) on the right. Two smaller widgets follow: recursion depth
    and buffer overflow. Colours: each function owns a hue so frames read as bands on the stack. */
+/* 這一頁特有的色彩：讀和寫是「兩邊」的對比；canary 用 keep；每個函式一個色相，frame 在 stack 上才看得出一段一段。 */
 :root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --right: #0a6f6a;       /* 寫入 */
-  --right-soft: #d5ebe8;
-  --left: #9b2f6b;        /* 讀取 */
-  --left-soft: #f3dbe8;
-  --keep: #8a5a00;
-  --keep-soft: #f6e7c4;
-  --mark: #fdf0b8;
-  --bad: #b3261e;
-  --bad-soft: #f8d7d3;
-  --ok: #1d7a3a;
-  --ok-soft: #d7efdc;
-  --f0: #5b6b67; --f0-soft: #e3e8e6;   /* main */
-  --f1: #0a6f6a; --f1-soft: #d5ebe8;   /* 第二層 */
-  --f2: #9b2f6b; --f2-soft: #f3dbe8;   /* 第三層 */
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
+  --right: light-dark(#0a6f6a, #56c9c0);       /* 寫入 */
+  --right-soft: light-dark(#d5ebe8, #123532);
+  --left: light-dark(#9b2f6b, #ea86b8);        /* 讀取 */
+  --left-soft: light-dark(#f3dbe8, #3a1a2b);
+  --keep: light-dark(#8a5a00, #e0b05a);        /* canary */
+  --keep-soft: light-dark(#f6e7c4, #3a2e12);
+  --f0: light-dark(#5b6b67, #93a39f); --f0-soft: light-dark(#e3e8e6, #222b29);   /* main */
+  --f1: light-dark(#0a6f6a, #56c9c0); --f1-soft: light-dark(#d5ebe8, #123532);   /* 第二層 */
+  --f2: light-dark(#9b2f6b, #ea86b8); --f2-soft: light-dark(#f3dbe8, #3a1a2b);   /* 第三層 */
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --right: #56c9c0; --right-soft: #123532; --left: #ea86b8; --left-soft: #3a1a2b;
-    --keep: #e0b05a; --keep-soft: #3a2e12; --mark: #3d3610; --bad: #ff8a80; --bad-soft: #3b1a17;
-    --ok: #7fd49a; --ok-soft: #14301c;
-    --f0: #93a39f; --f0-soft: #222b29; --f1: #56c9c0; --f1-soft: #123532; --f2: #ea86b8; --f2-soft: #3a1a2b;
-    color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 60rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
 i.r, i.l { font-style: normal; font-weight: 600; }
 .r { color: var(--right); }
 .l { color: var(--left); }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-a { color: inherit; }
 
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-button.on { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-:focus-visible { outline: 2px solid var(--right); outline-offset: 2px; }
-
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row, .row + .panels, .panels + .row { border-top: 1px solid var(--line); }
+/* 工具列和參數列 */
 .toolbar { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; align-items: center; }
 .toolbar label, .opt label { font-size: 0.85rem; color: var(--muted); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.presets button { font-family: var(--font-mono); font-size: 0.85rem; }
+.presets button { font-family: var(--font-mono); }
 .opt { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; align-items: center; font-size: 0.9rem; }
-.opt input[type="checkbox"] { accent-color: var(--right); }
-.opt input[type="range"] { accent-color: var(--right); vertical-align: middle; }
+.opt input[type="checkbox"], .opt input[type="range"] { accent-color: var(--hit); }
+.opt input[type="range"] { vertical-align: middle; }
 .opt .mono { font-variant-numeric: tabular-nums; }
 
-.panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
-.panel { padding: 1rem 1.25rem; min-width: 0; }
-.panel + .panel { border-left: 1px solid var(--line); }
-@media (max-width: 760px) {
-  .panels { grid-template-columns: minmax(0, 1fr); }
-  .panel + .panel { border-left: 0; border-top: 1px solid var(--line); }
-}
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-.panel-title + .panel-title { margin-top: 1rem; }
+.work { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+.panel .panel-head:not(:first-child) { border-top: 1px solid var(--line); }
+.pbody { padding: 0.75rem; }
 
 /* code blocks, one per function */
 .fn { margin-bottom: 0.9rem; border-left: 3px solid var(--fc); padding-left: 0.6rem; }
+.fn:last-child { margin-bottom: 0; }
 .fn-title { display: flex; justify-content: space-between; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.82rem; margin-bottom: 0.2rem; }
 .fn-title b { color: var(--fc); font-weight: 600; }
 .fn-title span { color: var(--muted); font-size: 0.75rem; }
 .fn-title small { font-family: var(--font-body); color: var(--muted); font-weight: 400; margin-left: 0.4rem; }
-pre.code { margin: 0; overflow-x: auto; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; }
-pre.code code { display: inline-block; min-width: 100%; font-size: inherit; }
+.fn pre { margin: 0; overflow-x: auto; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.6; }
 .ln { display: grid; grid-template-columns: 4.6ch minmax(0, 1fr); gap: 1ch; padding: 0 0.4rem 0 0.2rem; border-radius: 3px; white-space: pre; }
 .ln .ad { color: var(--muted); opacity: 0.6; font-size: 0.72rem; align-self: center; }
 .ln.on { background: var(--mark); }
 .ln.on.half .ad::after { content: " ½"; }
 .ln.done { opacity: 0.5; }
 .ln .cm { color: var(--muted); }
-.csrc { margin: 0 0 1rem; font-size: 0.8rem; }
+.pseudo.csrc { flex: 0 0 auto; font-size: 0.78rem; }
 .csrc .ln { white-space: pre-wrap; }
 
 /* registers */
@@ -120,10 +69,6 @@ pre.code code { display: inline-block; min-width: 100%; font-size: inherit; }
 .rg.wr { background: var(--right-soft); box-shadow: inset 0 0 0 1px var(--right); }
 .rg.rd.wr { background: linear-gradient(135deg, var(--left-soft) 50%, var(--right-soft) 50%); box-shadow: inset 0 0 0 1px var(--right); }
 .rg.sp { border-style: dashed; border-color: var(--ink); }
-.badge { display: inline-block; font-size: 0.68rem; padding: 0 0.35rem; border-radius: 3px; font-weight: 600; font-family: var(--font-mono); }
-.badge.ok { background: var(--ok-soft); color: var(--ok); }
-.badge.bad { background: var(--bad-soft); color: var(--bad); }
-.badge.mid { background: var(--f0-soft); color: var(--muted); }
 
 /* stack */
 .stack { display: flex; flex-direction: column; gap: 2px; font-family: var(--font-mono); font-size: 0.78rem; }
@@ -140,41 +85,23 @@ pre.code code { display: inline-block; min-width: 100%; font-size: inherit; }
 .slot.wr { box-shadow: inset 0 0 0 2px var(--right); }
 .slot.rd.wr { box-shadow: inset 0 0 0 2px var(--right), inset 0 0 0 4px var(--left); }
 .slot.bytes .val { font-size: 0.72rem; letter-spacing: 0.02em; }
-.slot .ovw { color: var(--bad); font-weight: 600; }
-.slot .nul { color: var(--bad); }
+.slot .ovw { color: var(--miss); font-weight: 600; }
+.slot .nul { color: var(--miss); }
 .slot.canary { background: var(--keep-soft); }
-.gap { color: var(--muted); font-size: 0.72rem; text-align: center; padding: 0.1rem; }
 .rz-note { font-size: 0.72rem; color: var(--muted); font-family: var(--font-body); margin-top: 0.3rem; }
 
-.say { max-width: none; min-height: 3.4em; }
-.say.bad { color: var(--bad); }
-.say.ok { color: var(--ok); }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--right); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
-
 /* recursion widget */
-.rec { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 1.25rem; align-items: start; }
-@media (max-width: 760px) { .rec { grid-template-columns: minmax(0, 1fr); } }
+.work.rec { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 1.25rem; align-items: start; }
 .rec dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 1rem; font-size: 0.9rem; }
 .rec dt { color: var(--muted); }
 .rec dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .tower { position: relative; height: 14rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); overflow: hidden; font-family: var(--font-mono); font-size: 0.72rem; }
 .tower .used { position: absolute; left: 0; right: 0; top: 0; background: var(--f1-soft); border-bottom: 2px solid var(--f1); transition: height 0.15s; }
-.tower .guard { position: absolute; left: 0; right: 0; bottom: 0; height: 6%; background: repeating-linear-gradient(135deg, var(--bad-soft), var(--bad-soft) 4px, transparent 4px, transparent 8px); border-top: 2px solid var(--bad); }
+.tower .guard { position: absolute; left: 0; right: 0; bottom: 0; height: 6%; background: repeating-linear-gradient(135deg, var(--miss-soft), var(--miss-soft) 4px, transparent 4px, transparent 8px); border-top: 2px solid var(--miss); }
 .tower .lbl { position: absolute; right: 0.5rem; color: var(--muted); }
-.tower .lbl.t { top: 0.3rem; } .tower .lbl.b { bottom: 0.3rem; color: var(--bad); }
+.tower .lbl.t { top: 0.3rem; } .tower .lbl.b { bottom: 0.3rem; color: var(--miss); }
 .tower .ptr { position: absolute; left: 0.5rem; color: var(--f1); font-weight: 600; transform: translateY(-100%); white-space: nowrap; }
-.tower.crash .used { background: var(--bad-soft); border-color: var(--bad); }
-
-/* tables, details */
-.table-wrap { overflow-x: auto; }
-table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.92rem; }
-th, td { padding: 0.45rem 1.1rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
-details { border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem 1.25rem; background: var(--surface); }
-summary { cursor: pointer; font-weight: 700; }
-details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.92rem; }
+.tower.crash .used { background: var(--miss-soft); border-color: var(--miss); }
 </style>
 </head>
 <body>
@@ -182,13 +109,13 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
   <header>
     <a class="back" href="../">← Explorables</a>
     <h1>函式呼叫與 <span class="mono">Stack</span> 逐步圖解</h1>
-    <p class="lead">一條 <code>call</code> 做了什麼、<code>ret</code> 怎麼知道回哪裡、frame 怎麼疊起來又拆掉。用真實位址一步一步走，順便看為什麼 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數。</p>
+    <p class="lead">一條 <code>call</code> 做了什麼、<code>ret</code> 怎麼知道回哪裡、<span class="term" data-def="stack frame。一次函式呼叫在 stack 上佔的那一段：返回位址、保存下來的暫存器、區域變數。函式返回時整段作廢。">frame</span> 怎麼疊起來又拆掉。用真實位址一步一步走，順便看為什麼 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數。</p>
   </header>
 
   <section class="prose">
     <h2>只有兩個指標在動</h2>
     <p><strong><code>rip</code></strong> 指向下一條要執行的指令，<strong><code>rsp</code></strong> 指向 stack 的頂端。Stack 往低位址長，所以 <code>push</code> 是先把 <code>rsp</code> 減 8 再寫入，<code>pop</code> 是先讀出再把 <code>rsp</code> 加 8。</p>
-    <p><code>call</code> 等於「<code>push</code> 下一條指令的位址，然後 <code>jmp</code>」。<code>ret</code> 等於「<code>pop</code> 到 <code>rip</code>」。這就是全部的硬體機制。其他所有東西，包括 16 bytes 對齊、callee-saved、frame pointer，都是編譯器在這兩條指令之上的約定。下面的 stepper 會把 <code>call</code> 和 <code>ret</code> 各拆成兩個半步，讓 <code>rsp</code> 和 <code>rip</code> 的變化分開看。</p>
+    <p><code>call</code> 等於「<code>push</code> 下一條指令的位址，然後 <code>jmp</code>」。<code>ret</code> 等於「<code>pop</code> 到 <code>rip</code>」。這就是全部的硬體機制。其他所有東西，包括 16 bytes 對齊、<span class="term" data-def="被呼叫的函式若要用這個暫存器，離開前必須把它還原成進來時的值；SysV 下是 rbx、rbp、r12 到 r15。範例裡的 push rbx / pop rbx 就是在盡這個義務。">callee-saved</span>、frame pointer，都是編譯器在這兩條指令之上的約定。下面的 stepper 會把 <code>call</code> 和 <code>ret</code> 各拆成兩個半步，讓 <code>rsp</code> 和 <code>rip</code> 的變化分開看。</p>
     <p>暫存器的角色分配（哪個放參數、哪個要保存）在<a href="../x86-registers/">暫存器地圖</a>那一頁，這裡不重複。</p>
   </section>
 
@@ -198,47 +125,50 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
       <div class="presets" id="presets"></div>
     </div>
     <div class="row opt" id="opt"></div>
-    <div class="panels">
-      <div class="panel">
-        <p class="panel-title">C</p>
-        <pre class="code csrc"><code id="csrc"></code></pre>
-        <p class="panel-title">組語 · Intel 語法 · 位址為示意</p>
-        <div id="code"></div>
-      </div>
-      <div class="panel">
-        <p class="panel-title">暫存器</p>
-        <div class="regs" id="regs"></div>
-        <p class="panel-title" style="margin-top:1rem">Stack · 高位址在上 · 每格 8 bytes</p>
-        <div class="stack" id="stack"></div>
-        <div class="rz-note" id="rz-note"></div>
-      </div>
-    </div>
     <div class="row">
-      <p class="say" id="say" aria-live="polite"></p>
-      <div class="controls">
-        <button id="btn-reset" type="button">重來</button>
-        <button id="btn-prev" type="button">上一步</button>
-        <button id="btn-next" type="button" class="primary">下一步</button>
-        <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-        <span class="count" id="count"></span>
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
       </div>
     </div>
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span>C</span></div>
+        <pre class="pseudo csrc" id="csrc"></pre>
+        <div class="panel-head"><span>組語</span><span class="sub">Intel 語法 · 位址為示意</span></div>
+        <div class="pbody" id="code"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>暫存器</span></div>
+        <div class="pbody regs" id="regs"></div>
+        <div class="panel-head"><span>Stack</span><span class="sub">高位址在上 · 每格 8 bytes</span></div>
+        <div class="pbody">
+          <div class="stack" id="stack"></div>
+          <div class="rz-note" id="rz-note"></div>
+        </div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
   </section>
 
   <section class="prose">
     <h2>為什麼是 16 的倍數</h2>
-    <p>規則原文：執行 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數。因為 <code>call</code> 一定推 8 bytes，所以每個函式進入時 <code>rsp</code> 一定餘 8。編譯器靠這個保證在編譯期就算出 <code>sub rsp, 24</code> 這種常數，讓 stack 上的 16 bytes 物件(<code>xmm</code> spill、<code>long double</code>、<code>__int128</code>)不需要執行期對齊。</p>
+    <p>規則原文：執行 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數。<span class="sn">System V AMD64 psABI 3.2.2 節的寫法是「the end of the input argument area shall be aligned on a 16 byte boundary」，input argument area 的尾端就是 call 之前的 rsp。</span>因為 <code>call</code> 一定推 8 bytes，所以每個函式進入時 <code>rsp</code> 一定餘 8。編譯器靠這個保證在編譯期就算出 <code>sub rsp, 24</code> 這種常數，讓 stack 上的 16 bytes 物件（<code>xmm</code> spill、<code>long double</code>、<code>__int128</code>）不需要執行期對齊。</p>
     <p>硬體不檢查這條規則，違反的後果出現在被呼叫的那一方：它內部用 <code>movaps</code> 存取 stack 時位址對不齊，直接 fault。在第一個範例勾選「拿掉 <code>push rbx</code>」就能看到 <code>printf</code> 內部炸掉。這也是手寫組語或 JIT 最常見的 crash 來源。</p>
     <p>反過來說，任何要 <code>call</code> 別人的函式，進入後都得讓 <code>rsp</code> 再少 8 的奇數倍。大多數函式本來就有 push 的需求，順便就對齊了；真的沒有需求的函式會多一條純補位的 <code>push</code>，或是被優化成 <code>jmp</code> 的 tail call 而完全省掉，見 <code>tail call</code> 那組範例。</p>
   </section>
 
   <section class="prose">
     <h2>遞迴到底能多深</h2>
-    <p>每一層呼叫都在 stack 上留下一個 frame，直到撞上 stack 末端的 guard page。Linux 主執行緒的 stack 預設 8 MiB,frame 大小由編譯器決定。拖動深度看 <code>rsp</code> 往下走到哪裡。</p>
+    <p>每一層呼叫都在 stack 上留下一個 frame，直到撞上 stack 末端的 <span class="term" data-def="stack 末端一頁故意設成不可存取的記憶體。rsp 走到這裡再存取就是 SIGSEGV，讓 stack overflow 立刻以錯誤收場，而不是默默蓋到別的資料。">guard page</span>。Linux 主執行緒的 stack 預設 8 MiB，frame 大小由編譯器決定。<span class="sn"><code>ulimit -s</code> 可以看或改這個上限；其他執行緒的 stack 由 pthread 配置，大小固定，預設也跟著這個值。</span>拖動深度看 <code>rsp</code> 往下走到哪裡。</p>
   </section>
   <section class="bench" aria-label="遞迴深度">
     <div class="row opt" id="rec-opt"></div>
-    <div class="row rec">
+    <div class="row work rec">
       <div>
         <dl id="rec-stats"></dl>
       </div>
@@ -248,33 +178,23 @@ details ul { margin: 0.75rem 0 0; padding-left: 1.2rem; display: flex; flex-dire
 
   <section class="prose">
     <h2>返回位址放在 stack 上的代價</h2>
-    <p>返回位址和區域變數住在同一塊記憶體，只隔幾個 bytes。一個 <code>char buf[8]</code> 配上不檢查長度的 <code>strcpy</code>，多寫幾個字就會蓋到 saved <code>rbx</code>，再多幾個就蓋到返回位址，<code>ret</code> 之後 <code>rip</code> 跳到攻擊者決定的地方。這是 1988 年 Morris worm 到今天所有 stack smashing 的原型。在最後一組範例裡拖動字串長度，再勾選 stack protector 看 canary 怎麼擋。</p>
+    <p>返回位址和區域變數住在同一塊記憶體，只隔幾個 bytes。一個 <code>char buf[8]</code> 配上不檢查長度的 <code>strcpy</code>，多寫幾個字就會蓋到 saved <code>rbx</code>，再多幾個就蓋到返回位址，<code>ret</code> 之後 <code>rip</code> 跳到攻擊者決定的地方。這是 1988 年 Morris worm 到今天所有 stack smashing 的原型。<span class="sn">Morris worm 利用的是 fingerd 裡不檢查長度的 <code>gets()</code>；1996 年 Aleph One 的〈Smashing the Stack for Fun and Profit〉把這個技巧寫成了教學。</span>在最後一組範例裡拖動字串長度，再勾選 stack protector 看 <span class="term" data-def="stack canary。編譯器在返回位址前面放的一個隨機值，函式返回前檢查它有沒有被改，改了就直接中止，不執行 ret。">canary</span> 怎麼擋。</p>
   </section>
   <section class="bench" aria-label="返回位址覆寫">
     <div class="row opt" id="bof-opt"></div>
     <div class="row">
       <p class="panel-title">greet 的 stack · 每格 8 bytes · 高位址在上</p>
       <div class="stack" id="bof-stack"></div>
-      <p class="say" id="bof-verdict" style="margin-top:0.75rem"></p>
     </div>
+    <div class="row"><p class="say" id="bof-verdict" aria-live="polite"></p></div>
   </section>
 
   <section class="prose">
     <h2>結語</h2>
     <p>硬體只提供兩個動作：<code>call</code> 把返回位址推進 stack 再跳走，<code>ret</code> 把它彈回 <code>rip</code>。Frame、16 bytes 對齊、callee-saved 都是編譯器疊在這兩個動作上的約定，硬體不檢查，所以違反的後果不在違反的那一行，而在被呼叫的函式裡炸開。返回位址和區域變數住在同一塊記憶體，這是 stack smashing 能成立的全部原因。</p>
     <p>哪個暫存器放參數、哪些要保存，在<a href="../x86-registers/">暫存器地圖</a>那一頁；把同一個問題拿到 ARM 和 RISC-V 上比，在 <a href="../isa/calling-convention/">ISA 比較的呼叫慣例</a>那一篇。</p>
-    <p>這一頁只走 SysV AMD64，位址是示意的，frame 大小也是為了畫圖挑的；Win64 的 shadow space、exception unwinding、32 位元的 cdecl 和硬體 shadow stack 列在下面的「這一頁沒講的」裡，沒有展開。</p>
+    <p>這一頁只走 SysV AMD64，位址是示意的，frame 大小也是為了畫圖挑的。沒有展開的還有：Win64 同樣要求 <code>call</code> 時 16 對齊，但 caller 要多留 32 bytes shadow space，參數暫存器的差異見暫存器地圖；exception unwinding 和 <code>setjmp</code>/<code>longjmp</code> 一次跳過多層 frame，靠 <code>.eh_frame</code> 表而不是 <code>rbp</code> 鏈；32 位元的 cdecl 參數全部走 stack、caller 負責清理，x86-64 已經不用；Intel 2020 年起的硬體 shadow stack（CET）把返回位址另外存一份在 CPU 保護的區域，<code>ret</code> 時比對，專門對付這頁最後一個範例。</p>
   </section>
-
-  <details>
-    <summary>這一頁沒講的</summary>
-    <ul>
-      <li><strong>Win64 的差異</strong>：同樣要求 <code>call</code> 時 16 對齊，另外 caller 要多留 32 bytes shadow space。參數暫存器的差異見暫存器地圖。</li>
-      <li><strong>Exception unwinding、<code>setjmp</code>/<code>longjmp</code></strong>：一次跳過多層 frame 的機制，靠 <code>.eh_frame</code> 表而不是 <code>rbp</code> 鏈。</li>
-      <li><strong>32 位元的 cdecl</strong>：參數全部走 stack,caller 負責清理。x86-64 已經不用。</li>
-      <li><strong>Shadow stack / CET</strong>:Intel 2020 年起的硬體機制，把返回位址另外存一份在 CPU 保護的區域，<code>ret</code> 時比對，專門對付這頁最後一個範例。</li>
-    </ul>
-  </details>
 </main>
 
 <script>
@@ -526,7 +446,7 @@ function renderCode(step) {
       const cls = ['ln', on ? 'on' : '', on && step.half ? 'half' : ''].join(' ');
       return `<div class="${cls}"><span class="ad">${addr}</span><span>${esc(ln)}</span></div>`;
     }).join('');
-    return `<div class="fn" style="--fc:${ownerColor(f.name, funcs)}"><div class="fn-title"><b>${f.name}:</b>${f.note ? `<small>${f.note}</small>` : ''}</div><pre class="code"><code>${lines}</code></pre></div>`;
+    return `<div class="fn" style="--fc:${ownerColor(f.name, funcs)}"><div class="fn-title"><b>${f.name}:</b>${f.note ? `<small>${f.note}</small>` : ''}</div><pre>${lines}</pre></div>`;
   }).join('');
 }
 
@@ -536,7 +456,7 @@ function renderRegs(step) {
     const v = step.regs[r];
     const rd = step.rd && step.rd.has(r), wr = step.wr && step.wr.has(r);
     let sub = '';
-    if (r === 'rsp') { const m = ((v % 16) + 16) % 16; sub = `<small>mod 16 = ${m} <span class="badge ${m === 0 ? 'ok' : 'mid'}">${m === 0 ? '可 call' : '餘 ' + m}</span></small>`; }
+    if (r === 'rsp') { const m = ((v % 16) + 16) % 16; sub = `<small>mod 16 = ${m} <span class="badge ${m === 0 ? 'hit' : 'outline'}">${m === 0 ? '可 call' : '餘 ' + m}</span></small>`; }
     if (r === 'rip') sub = `<small>下一條指令</small>`;
     return `<div class="rg ${rd ? 'rd' : ''} ${wr ? 'wr' : ''} ${r === 'rsp' ? 'sp' : ''}"><b>${r}</b><span class="${v === undefined ? 'unk' : ''}">${fmtVal(r, v)}</span>${sub}</div>`;
   }).join('');
@@ -565,30 +485,28 @@ function renderStack(step) {
   }
   $('stack').innerHTML = rows.join('');
   const leaf = funcs[step.curFi] && funcs[step.curFi].redzone;
-  $('rz-note').innerHTML = leaf ? '虛線格子在 rsp 下方，屬於 red zone:leaf function 不調整 rsp 也能安全使用的 128 bytes。' : '';
+  $('rz-note').innerHTML = leaf ? '虛線格子在 rsp 下方，屬於 red zone：leaf function 不調整 rsp 也能安全使用的 128 bytes。' : '';
 }
 
 function renderStepper() {
   const step = steps[stepIdx];
   renderCode(step); renderRegs(step); renderStack(step);
   const say = $('say');
-  say.textContent = step.say;
-  say.className = 'say' + (step.crash || step.danger ? ' bad' : step.done ? ' ok' : '');
-  $('btn-prev').disabled = stepIdx === 0;
-  $('btn-next').disabled = stepIdx === steps.length - 1;
-  $('step-range').max = steps.length - 1;
-  $('step-range').value = stepIdx;
-  $('count').textContent = `${stepIdx} / ${steps.length - 1}`;
+  if (step.crash || step.danger) say.innerHTML = `<span class="warn">${esc(step.say)}</span>`;
+  else say.textContent = step.say;
 }
 
 function renderCsrc() {
   $('csrc').innerHTML = curScn.c.map(l => `<div class="ln"><span></span><span>${esc(l)}</span></div>`).join('');
 }
 
-function rebuild(resetStep) {
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { stepIdx = k; renderStepper(); } });
+
+function rebuild() {
   steps = buildSteps(curScn, curOpts);
-  stepIdx = resetStep ? 0 : Math.min(stepIdx, steps.length - 1);
-  renderCsrc(); renderStepper();
+  renderCsrc();
+  stepper.setTotal(steps.length - 1);
+  stepper.set(0);
 }
 
 function renderOptions() {
@@ -596,7 +514,7 @@ function renderOptions() {
   if (!curScn.options || !curScn.options.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
   box.style.display = 'flex';
   box.innerHTML = curScn.options.map(o => `<label><input type="checkbox" data-opt="${o.id}" ${curOpts[o.id] ? 'checked' : ''}> ${o.label}</label>`).join('');
-  box.querySelectorAll('input').forEach(el => el.addEventListener('change', () => { curOpts[el.dataset.opt] = el.checked; rebuild(true); }));
+  box.querySelectorAll('input').forEach(el => el.addEventListener('change', () => { curOpts[el.dataset.opt] = el.checked; rebuild(); }));
 }
 
 /* ---------- recursion depth widget ---------- */
@@ -611,11 +529,11 @@ function renderRec() {
   const crash = used > STACK_LIMIT;
   $('rec-stats').innerHTML = [
     ['遞迴深度', depth.toLocaleString() + ' 層'],
-    ['每層 frame', REC_FRAME + ' bytes(push rax + 返回位址)'],
+    ['每層 frame', REC_FRAME + ' bytes（push rax + 返回位址）'],
     ['已用 stack', (used / 1024 / 1024).toFixed(2) + ' MiB'],
-    ['stack 上限', '8.00 MiB(Linux 主執行緒預設)'],
+    ['stack 上限', '8.00 MiB（Linux 主執行緒預設）'],
     ['rsp 位置', hexp(rsp)],
-    ['狀態', crash ? '⚠ 撞上 guard page,SIGSEGV(stack overflow)' : '正常'],
+    ['狀態', crash ? '⚠ 撞上 guard page，SIGSEGV（stack overflow）' : '正常'],
   ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   const tower = $('tower');
   tower.className = 'tower' + (crash ? ' crash' : '');
@@ -654,7 +572,7 @@ function renderBof() {
       cells.push(c ? `<span class="${c.c === 'ovw' ? 'ovw' : 'nul'}">${c.t}</span>` : `<span style="opacity:.4">··</span>`);
     }
     const overwritten = touched && r.k !== 'buf';
-    const colour = r.k === 'canary' ? 'var(--keep)' : r.k === 'buf' ? 'var(--f1)' : overwritten ? 'var(--bad)' : 'var(--muted)';
+    const colour = r.k === 'canary' ? 'var(--keep)' : r.k === 'buf' ? 'var(--f1)' : overwritten ? 'var(--miss)' : 'var(--muted)';
     return `<div class="slot bytes ${r.k === 'canary' ? 'canary' : ''}" style="--fc:${colour}">
       <span class="addr">${r.label}</span>
       <span class="val">${cells.join(' ')}</span>
@@ -671,37 +589,30 @@ function renderBof() {
   } else {
     if (len <= 8) { verdict = `寫了 ${len} bytes，剛好在 buf 內（含 NUL）。正常。`; cls = 'ok'; }
     else if (len <= 16) { verdict = `寫了 ${len} bytes，蓋掉了 saved rbx。函式還能返回，但 rbx 還原成垃圾，之後用到 rbx 的地方會出錯。`; cls = ''; }
-    else { verdict = `寫了 ${len} bytes，蓋掉了返回位址。ret 會跳到 0x4141...('AAAA')，控制流被劫持。把那串 'A' 換成精心設計的位址，就是經典的 stack smashing。`; cls = 'bad'; }
+    else { verdict = `寫了 ${len} bytes，蓋掉了返回位址。ret 會跳到 0x4141...（'AAAA'），控制流被劫持。把那串 'A' 換成精心設計的位址，就是經典的 stack smashing。`; cls = 'bad'; }
   }
-  const sv = $('bof-verdict'); sv.textContent = verdict; sv.className = 'say ' + cls;
+  const sv = $('bof-verdict');
+  if (cls === 'bad') sv.innerHTML = `<span class="warn">${esc(verdict)}</span>`;
+  else sv.textContent = verdict;
 }
 
 /* ---------- wiring ---------- */
-$('presets').innerHTML = SCENARIOS.map((s, i) => `<button type="button" data-i="${i}" ${i === 0 ? 'class="on"' : ''} title="${s.title}">${s.label}</button>`).join('');
+$('presets').innerHTML = SCENARIOS.map((s, i) => `<button type="button" data-i="${i}" ${i === 0 ? 'class="chosen"' : ''} title="${s.title}">${s.label}</button>`).join('');
 $('presets').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-  $('presets').querySelectorAll('button').forEach(x => x.classList.remove('on'));
-  b.classList.add('on');
+  $('presets').querySelectorAll('button').forEach(x => x.classList.remove('chosen'));
+  b.classList.add('chosen');
   curScn = SCENARIOS[Number(b.dataset.i)]; curOpts = {};
-  renderOptions(); rebuild(true);
+  renderOptions(); rebuild();
 }));
-$('btn-reset').addEventListener('click', () => { stepIdx = 0; renderStepper(); });
-$('btn-prev').addEventListener('click', () => { if (stepIdx > 0) { stepIdx--; renderStepper(); } });
-$('btn-next').addEventListener('click', () => { if (stepIdx < steps.length - 1) { stepIdx++; renderStepper(); } });
-$('step-range').addEventListener('input', e => { stepIdx = Number(e.target.value); renderStepper(); });
-document.addEventListener('keydown', e => {
-  if (e.target.matches('input, textarea')) return;
-  if (e.key === 'ArrowRight') $('btn-next').click();
-  if (e.key === 'ArrowLeft') $('btn-prev').click();
-});
 
 $('rec-opt').innerHTML = `<label>遞迴深度 <input id="rec-depth" type="range" min="0" max="700" value="100" style="width:16rem"></label><span class="mono" style="font-size:0.85rem;color:var(--muted)">理論上限約 <b id="rec-maxdepth"></b> 層</span>`;
 $('rec-opt').querySelector('#rec-depth').addEventListener('input', renderRec);
 
-$('bof-opt').innerHTML = `<label>輸入字串長度 <input id="bof-len" type="range" min="0" max="28" value="4" style="width:14rem"> <span class="mono" id="bof-lenval"></span></label><label><input id="bof-prot" type="checkbox"> 開啟 stack protector(canary)</label>`;
+$('bof-opt').innerHTML = `<label>輸入字串長度 <input id="bof-len" type="range" min="0" max="28" value="4" style="width:14rem"> <span class="mono" id="bof-lenval"></span></label><label><input id="bof-prot" type="checkbox"> 開啟 stack protector（canary）</label>`;
 $('bof-opt').querySelector('#bof-len').addEventListener('input', () => { $('bof-lenval').textContent = $('bof-len').value + ' bytes'; renderBof(); });
 $('bof-opt').querySelector('#bof-prot').addEventListener('change', renderBof);
 
-renderOptions(); rebuild(true); renderRec();
+renderOptions(); rebuild(); renderRec();
 $('bof-lenval').textContent = '4 bytes'; renderBof();
 </script>
 </body>
