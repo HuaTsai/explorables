@@ -23,6 +23,7 @@
 
 /* ---- 基本排版 ---- */
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { overflow-x: hidden; }
 body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; overflow-x: hidden; }
 .page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
@@ -75,8 +76,8 @@ details ol, details ul { margin: 0.6rem 0 0; padding-left: 1.2rem; display: flex
 .cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .cols3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
 @media (max-width: 760px) { .cols, .cols3 { grid-template-columns: minmax(0, 1fr); } }
-.col { min-width: 0; }
-.col p { font-size: 0.88rem; color: var(--muted); margin-top: 0.4rem; }
+.col { min-width: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.col p { font-size: 0.88rem; color: var(--muted); }
 
 /* 比較表：頁面不橫捲，表在自己的框內橫捲 */
 .table-wrap { overflow-x: auto; }
@@ -116,7 +117,7 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 
 /* 輸入區和執行區那一排 */
 .top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .bench .top { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .bench .top { grid-template-columns: minmax(0, 1fr) !important; } }
 textarea, input[type="number"], input[type="text"] { font: inherit; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; }
 textarea { width: 100%; min-height: 10rem; resize: vertical; tab-size: 4; }
 .errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
@@ -139,9 +140,9 @@ textarea { width: 100%; min-height: 10rem; resize: vertical; tab-size: 4; }
 .say .warn::before { content: "⚠ "; }
 .say .note { display: block; margin-top: 0.35rem; color: var(--muted); font-size: 0.9rem; }
 
-/* 面板：頁面自己決定欄數和比例，980px 以下一律單欄 */
+/* 面板：頁面自己決定欄數和比例（可以寫 .work.a、.work.b），980px 以下一律單欄，用 !important 壓過頁面的比例 */
 .work { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 980px) { .bench .work { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 980px) { .bench .work { grid-template-columns: minmax(0, 1fr) !important; } }
 .panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
 .panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
 .panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }

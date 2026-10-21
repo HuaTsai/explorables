@@ -6,111 +6,27 @@
 <title>Heap 與 heapsort：一個陣列怎麼假裝成一棵樹</title>
 <meta name="description" content="把 Introduction to Algorithms 第六章的 heap 一步步跑給你看：陣列和樹並排，MAX-HEAPIFY 怎麼把一個節點沉下去、BUILD-MAX-HEAP 為什麼從中間倒著走、HEAPSORT 怎麼靠縮 heap-size 把排好的部分藏起來，以及同一個 heap 當 max-priority queue 時 insert、extract-max、increase-key 做了什麼。可以自己改陣列和操作。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has presets, the editable input, the mode switch
    and the step controls on top, then the array strip, then two panels: tree and pseudocode + variables. */
-:root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* 這一步比較或交換到的節點 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* 警告、錯誤 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;         /* 目前的 i */
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-sub { font-size: 0.72em; line-height: 0; }
-i.hit, i.miss { font-style: normal; font-weight: 700; }
-i.hit { color: var(--hit); }
-i.miss { color: var(--miss); }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-details { border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 1.1rem; background: var(--surface); }
-summary { cursor: pointer; font-weight: 700; }
-details > :not(summary) { margin-top: 0.6rem; }
-details p + p { margin-top: 0.6rem; }
-details ol, details ul { margin: 0.6rem 0 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.col { display: flex; flex-direction: column; gap: 0.6rem; }
+.col p { margin-top: 0; }
 details .m { font-family: var(--font-mono); font-size: 0.9em; }
 
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-
-/* static pseudocode in prose */
-.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow-x: auto; white-space: pre; }
-.code b { color: var(--hit); font-weight: 600; }
-.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
-.col { display: flex; flex-direction: column; gap: 0.6rem; }
-.col p { font-size: 0.88rem; color: var(--muted); }
-
-/* a small static figure: array on top, tree below */
+/* a small static figure: pseudocode on the left, tree on the right */
 .fig { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 1rem 1.25rem; }
 @media (max-width: 640px) { .fig { grid-template-columns: minmax(0, 1fr); } }
 .fig p { font-size: 0.88rem; color: var(--muted); }
 
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.presets button { font-size: 0.88rem; }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
-textarea, input[type="number"] { font: inherit; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; }
-textarea { width: 100%; resize: vertical; }
+/* inputs */
 #src { min-height: 3.2rem; }
 #ops { min-height: 6rem; }
 input[type="number"] { width: 5rem; padding-block: 0.25rem; }
 .field { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.75rem; }
 .field .lbl { font-size: 0.85rem; color: var(--muted); }
 .field.inline { flex-direction: row; align-items: center; gap: 0.6rem; }
-.errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
-.modes { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
-.modes .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.modes button { font-size: 0.88rem; }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
-.jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
-.jumps button { font-size: 0.82rem; padding: 0.15rem 0.6rem; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
-.say { font-size: 0.95rem; min-height: 3.2em; }
-.say .warn { display: block; margin-top: 0.35rem; color: var(--miss); }
-.say .warn::before { content: "⚠ "; }
-.say .note { display: block; margin-top: 0.35rem; color: var(--muted); font-size: 0.9rem; }
 
 /* array strip */
 .strip { display: flex; flex-direction: column; gap: 0.4rem; }
@@ -127,12 +43,8 @@ input[type="number"] { width: 5rem; padding-block: 0.25rem; }
 .cell.swap { background: var(--hit-soft); border-color: var(--hit); box-shadow: inset 0 0 0 1px var(--hit); }
 .cell.bad { background: var(--miss-soft); border-color: var(--miss); }
 
-/* two panels */
-.work { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 1rem; }
-@media (max-width: 900px) { .work { grid-template-columns: minmax(0, 1fr); } }
-.panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
-.panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
-.panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+/* two panels: tree, pseudocode + variables */
+.work { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
 
 /* tree */
 .treebox { padding: 0.5rem; background: var(--bg); flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow-x: auto; }
@@ -151,17 +63,7 @@ input[type="number"] { width: 5rem; padding-block: 0.25rem; }
 .nd.bad circle { fill: var(--miss-soft); stroke: var(--miss); stroke-width: 2.5; }
 .tree .empty { font-family: var(--font-body); font-size: 13px; fill: var(--muted); text-anchor: middle; }
 
-/* pseudocode + variables */
-.pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.65; white-space: pre; overflow-x: auto; background: var(--bg); flex: 1; }
-.pseudo .pl { display: block; padding: 0 0.3rem; border-radius: 3px; }
-.pseudo .pl.on { background: var(--mark); font-weight: 600; }
-.pseudo .pl.head { font-weight: 600; }
-.pseudo .gap { display: block; height: 0.6em; }
-.vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.78rem; display: flex; flex-wrap: wrap; gap: 0.3rem; }
-.var { display: inline-flex; align-items: baseline; gap: 0.3rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
-.var .k { color: var(--muted); font-size: 0.72rem; }
-.var .v { font-weight: 600; min-width: 1em; }
-.var.chg { border-color: var(--hit); background: var(--hit-soft); }
+/* call chain under the variables */
 .stack { padding: 0.4rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); line-height: 1.6; }
 .stack b { color: var(--ink); font-weight: 600; }
 </style>
@@ -176,7 +78,7 @@ input[type="number"] { width: 5rem; padding-block: 0.25rem; }
 
   <section class="prose">
     <h2>陣列裡藏著一棵樹</h2>
-    <p>書上的陣列從 1 開始編號。<code>A[1]</code> 是根，第 i 格的左小孩在 <code>2i</code>，右小孩在 <code>2i + 1</code>，父節點在 <code>⌊i/2⌋</code>。這三個運算在二進位裡就是左移、左移加一、右移，所以「找父子」不用存任何指標。這樣讀出來的樹一定是<strong>完全二元樹</strong>：每一層都填滿，只有最底層可能缺右邊幾個。</p>
+    <p>書上的陣列從 1 開始編號。<code>A[1]</code> 是根，第 i 格的左小孩在 <code>2i</code>，右小孩在 <code>2i + 1</code>，父節點在 <code>⌊i/2⌋</code>。這三個運算在二進位裡就是左移、左移加一、右移，所以「找父子」不用存任何指標。這樣讀出來的樹一定是<span class="term" data-def="每一層都填滿、只有最底層可能缺右邊幾個的二元樹；n 個節點的高度一定是 ⌊lg n⌋。"><strong>完全二元樹</strong></span>：每一層都填滿，只有最底層可能缺右邊幾個。</p>
     <div class="fig">
       <div>
 <pre class="code">PARENT(i)
@@ -202,7 +104,7 @@ RIGHT(i)
     <details>
       <summary>證明：MAX-HEAPIFY 是 O(lg n)</summary>
       <p>設 T(n) 是對一棵 n 個節點的子樹呼叫 MAX-HEAPIFY 的時間。除了遞迴呼叫以外的工作是 Θ(1)，遞迴只會進入其中一棵子樹，所以要問的是：子樹最大能有多大？</p>
-      <p>最壞的情況是最底層剛好填滿一半：左子樹比右子樹多一整層。設樹高 h，左子樹是高 h − 1 的滿樹，有 2<sup>h</sup> − 1 個節點；右子樹是高 h − 2 的滿樹，有 2<sup>h−1</sup> − 1 個；全部 n = 3 · 2<sup>h−1</sup> − 1。左子樹佔 (2<sup>h</sup> − 1)/(3 · 2<sup>h−1</sup> − 1)，h 越大越接近 2/3，而且永遠不超過 2/3。所以 T(n) ≤ T(2n/3) + Θ(1)，套 master theorem 的第二種情況（a = 1、b = 3/2、f(n) = Θ(1) = Θ(n<sup>log<sub>b</sub> a</sup>)）得到 T(n) = O(lg n)。用高度說就是 O(h)。</p>
+      <p>最壞的情況是最底層剛好填滿一半：左子樹比右子樹多一整層。設樹高 h，左子樹是高 h − 1 的滿樹，有 2<sup>h</sup> − 1 個節點；右子樹是高 h − 2 的滿樹，有 2<sup>h−1</sup> − 1 個；全部 n = 3 · 2<sup>h−1</sup> − 1。左子樹佔 (2<sup>h</sup> − 1)/(3 · 2<sup>h−1</sup> − 1)，h 越大越接近 2/3，而且永遠不超過 2/3。所以 T(n) ≤ T(2n/3) + Θ(1)，套 <span class="term" data-def="第四章解 T(n) = aT(n/b) + f(n) 這類遞迴式的定理：比較 f(n) 和 n<sup>log<sub>b</sub> a</sup> 的大小，分三種情況直接給出答案。">master theorem</span> 的第二種情況（a = 1、b = 3/2、f(n) = Θ(1) = Θ(n<sup>log<sub>b</sub> a</sup>)）得到 T(n) = O(lg n)。用高度說就是 O(h)。</p>
     </details>
   </section>
   <div class="cols">
@@ -218,12 +120,12 @@ RIGHT(i)
  8  if largest ≠ i
  9      exchange A[i] with A[largest]
 10      MAX-HEAPIFY(A, largest)</pre>
-      <p>第 3 到 7 行在 i、l、r 三個裡挑最大的，超過 heap-size 的小孩不算，比較用的是嚴格大於，相等不交換。第 8 到 10 行：如果最大的不是 i，交換，然後到被換下去的那個位置繼續。最後一行是尾遞迴，習題 6.2-5 要你改成 while 迴圈；workbench 右下的「呼叫」那一行會顯示遞迴永遠只是一條鏈。</p>
+      <p>第 3 到 7 行在 i、l、r 三個裡挑最大的，超過 heap-size 的小孩不算，比較用的是嚴格大於，相等不交換。第 8 到 10 行：如果最大的不是 i，交換，然後到被換下去的那個位置繼續。最後一行是<span class="term" data-def="函式的最後一個動作就是呼叫自己，回來之後沒有別的事要做，所以不需要堆疊，可以直接改成迴圈。">尾遞迴</span>，workbench 右下的「呼叫」那一行會顯示遞迴永遠只是一條鏈。<span class="sn">習題 6.2-5 要你把這個尾遞迴改成 while 迴圈，不用遞迴堆疊。</span></p>
 <pre class="code">BUILD-MAX-HEAP(A)
  1  A.heap-size = A.length
  2  for i = ⌊A.length/2⌋ downto 1
  3      MAX-HEAPIFY(A, i)</pre>
-      <p>從最後一個非葉節點倒著走到根。倒著走是為了滿足 MAX-HEAPIFY 的前提（習題 6.3-2）：處理 i 的時候，它的兩個小孩已經處理過了。第 ⌊n/2⌋ + 1 到 n 格是葉子，對葉子呼叫 MAX-HEAPIFY 什麼都不會發生（習題 6.2-4），所以不用管。</p>
+      <p>從最後一個非葉節點倒著走到根。倒著走是為了滿足 MAX-HEAPIFY 的前提：處理 i 的時候，它的兩個小孩已經處理過了。第 ⌊n/2⌋ + 1 到 n 格是葉子，對葉子呼叫 MAX-HEAPIFY 什麼都不會發生，所以不用管。<span class="sn">習題 6.3-2 問的是為什麼迴圈要倒著走，6.2-4 問對葉子呼叫 MAX-HEAPIFY 會怎樣，答案都在這一段。</span></p>
     </div>
     <div class="col">
 <pre class="code">HEAPSORT(A)
@@ -235,7 +137,7 @@ RIGHT(i)
       <p>每一輪把最大值換到 heap 的最後一格，把那一格劃出 heap，再修根。n − 1 輪之後整個陣列由小到大，而且沒有多用一格空間：排好的部分就藏在 heap-size 之外。</p>
       <details>
         <summary>證明：HEAPSORT 的正確性（習題 6.4-2）</summary>
-        <p>Loop invariant：每一輪開始時，<code>A[1..i]</code> 是一個 max-heap，裝著 A 裡最小的 i 個元素；<code>A[i+1..n]</code> 裝著最大的 n − i 個，而且已經排好。</p>
+        <p><span class="term" data-def="迴圈每一輪開始前都成立的性質。證明它一開始成立、每一輪都維持、迴圈結束時給出想要的結論，就證明了迴圈是對的（第二章）。">Loop invariant</span>：每一輪開始時，<code>A[1..i]</code> 是一個 max-heap，裝著 A 裡最小的 i 個元素；<code>A[i+1..n]</code> 裝著最大的 n − i 個，而且已經排好。</p>
         <ol>
           <li>初始：BUILD-MAX-HEAP 之後 <code>A[1..n]</code> 是 max-heap，<code>A[n+1..n]</code> 是空的，invariant 成立。</li>
           <li>維持：<code>A[1]</code> 是 <code>A[1..i]</code> 裡最大的，換到 <code>A[i]</code> 之後，<code>A[i..n]</code> 排好而且是最大的 n − i + 1 個。heap-size 減成 i − 1，根可能壞掉，MAX-HEAPIFY(A, 1) 把 <code>A[1..i−1]</code> 修回 max-heap。下一輪的 invariant 成立。</li>
@@ -266,7 +168,7 @@ MAX-HEAP-INSERT(A, key)
  1  A.heap-size = A.heap-size + 1
  2  A[A.heap-size] = −∞
  3  HEAP-INCREASE-KEY(A, A.heap-size, key)</pre>
-      <p>Priority queue 的四個操作。取最大值和 heapsort 的一輪幾乎一樣：把最後一格搬到根，heap-size 減一，那一格的舊值還留在陣列裡，只是不算在 heap 裡了。把 key 變大是反方向的動作，節點往上浮。插入先在尾端放一個 −∞，這樣一定不違反 max-heap property，再把它「變大」成要插的值，往上浮的程式只要寫一次。</p>
+      <p><span class="term" data-def="支援插入元素、取出 key 最大（或最小）那個元素的集合；heap 是最常見的實作。">Priority queue</span> 的四個操作。取最大值和 heapsort 的一輪幾乎一樣：把最後一格搬到根，heap-size 減一，那一格的舊值還留在陣列裡，只是不算在 heap 裡了。把 key 變大是反方向的動作，節點往上浮。插入先在尾端放一個 −∞，這樣一定不違反 max-heap property，再把它「變大」成要插的值，往上浮的程式只要寫一次。</p>
     </div>
   </div>
 
@@ -288,16 +190,13 @@ MAX-HEAP-INSERT(A, key)
       <div>
         <p class="panel-title">執行</p>
         <div class="modes" id="modes"><span class="lbl">模式</span></div>
-        <div class="controls">
-          <button id="btn-reset" type="button">重來</button>
-          <button id="btn-prev" type="button">上一步</button>
-          <button id="btn-next" type="button" class="primary">下一步</button>
-          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-          <span class="count" id="count"></span>
-        </div>
-        <div class="jumps">
-          <button id="btn-unit" type="button">跳到下一次呼叫</button>
-          <button id="btn-end" type="button">跑完</button>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
         </div>
         <p class="hint" id="phint"></p>
         <p class="hint">陣列和樹上，<span class="mono">黃底</span>是目前的 i，<i class="hit">綠色虛線</i>是正在比較的小孩，<i class="hit">綠色實線</i>是目前最大的那個，<i class="hit">綠底</i>是這一步交換的兩格，<i class="miss">紫底</i>是違反 max-heap property 的地方。虛線的格子已經不在 heap 裡。</p>
@@ -655,8 +554,9 @@ const total = () => state.trace.length;
 const INIT = () => ({ lines: [], A: [null, ...(state.parsed ? state.parsed.arr : [])], heapSize: null,
   v: { oi: null, i: null, l: null, r: null, largest: null, key: null, max: null, swaps: 0 }, stack: [], unit: 0, hl: {}, chV: [], say: '', note: '', warn: '' });
 const cur = () => state.k === 0 ? INIT() : state.trace[state.k - 1];
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
 
-function rebuild(keepStep) {
+function rebuild() {
   state.parsed = parseArray($('src').value);
   state.err = state.parsed.errors.slice();
   const extra = {};
@@ -671,7 +571,9 @@ function rebuild(keepStep) {
     extra.ops = po.ops;
   }
   state.trace = state.err.length ? [] : buildTrace(state.mode, state.parsed.arr, extra);
-  state.k = keepStep ? Math.min(state.k, total()) : 0;
+  state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
 }
 
 // ---- rendering ----
@@ -785,17 +687,10 @@ function renderVars(s) {
 
 function renderAll() {
   const bad = state.err.length > 0;
-  const T = total();
   document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && presetActive()));
   document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('chosen', b.dataset.mode === state.mode));
   $('errs').innerHTML = state.err.map(e => `<span>${esc(e)}</span>`).join('');
   $('phint').textContent = presetActive() ? PRESETS[state.pi].hint : '';
-  $('step-range').max = T; $('step-range').value = state.k;
-  $('count').textContent = `第 ${state.k} / ${T} 步`;
-  $('btn-prev').disabled = state.k === 0;
-  $('btn-next').disabled = bad || state.k >= T;
-  $('btn-unit').disabled = bad || state.k >= T;
-  $('btn-end').disabled = bad || state.k >= T;
   const s = bad ? INIT() : cur();
   renderCells(s);
   renderTree(s);
@@ -816,25 +711,9 @@ function setMode(m) {
   renderAll();
 }
 
-$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
-$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
-$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
-$('btn-unit').addEventListener('click', () => {
-  const now = cur().unit;
-  const idx = state.trace.findIndex((s, j) => j >= state.k && s.unit !== now);
-  state.k = idx >= 0 ? idx + 1 : total();
-  renderAll();
-});
-$('btn-end').addEventListener('click', () => { state.k = total(); renderAll(); });
-$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
 $('src').addEventListener('input', () => { rebuild(); renderAll(); });
 $('ops').addEventListener('input', () => { rebuild(); renderAll(); });
 $('idx').addEventListener('input', () => { rebuild(); renderAll(); });
-document.addEventListener('keydown', e => {
-  if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
-  if (e.key === 'ArrowRight') $('btn-next').click();
-  if (e.key === 'ArrowLeft') $('btn-prev').click();
-});
 
 // static figure in the prose
 (() => {

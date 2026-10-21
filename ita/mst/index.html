@@ -6,104 +6,29 @@
 <title>Kruskal 與 Prim：最小生成樹</title>
 <meta name="description" content="把 Introduction to Algorithms 第二十三章的最小生成樹一步步跑給你看：cut 和 light edge 為什麼決定哪條邊是安全的、Kruskal 怎麼靠 disjoint set 判斷兩端是不是同一棵樹（含 union by rank 和 path compression）、Prim 怎麼用 min-priority queue 從一棵樹往外長。可以自己改圖、自己畫 cut。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has presets, the editable weighted edge list, the mode switch
    and the step controls on top, then two panels (graph, pseudocode + variables), then the vertex table
    and the mode-specific list (sorted edges / queue / crossing edges). */
 :root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* 目前看的邊、剛改動的值、穿過 cut 的邊 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* 被丟掉的邊、警告 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;         /* 目前的虛擬碼行 */
-  --gray: #b9c4c0;         /* Prim：在 Q 裡而且 key 有限 */
-  --s1: #f6d7a7; --s2: #c9e3f7; --s3: #d9e7b8; --s4: #ead4f2; --s5: #f7c9c9; --s6: #cfe9e2; --s7: #f3e4b4; --s8: #dcd9f5;
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; --gray: #4a5955;
-    --s1: #5a4420; --s2: #1f3a50; --s3: #37461d; --s4: #45304d; --s5: #512a2a; --s6: #1f3f37; --s7: #4e4520; --s8: #32305a;
-    color-scheme: dark;
-  }
+  --gray: light-dark(#b9c4c0, #4a5955);         /* Prim：在 Q 裡而且 key 有限 */
+  --s1: light-dark(#f6d7a7, #5a4420); --s2: light-dark(#c9e3f7, #1f3a50); --s3: light-dark(#d9e7b8, #37461d); --s4: light-dark(#ead4f2, #45304d); --s5: light-dark(#f7c9c9, #512a2a); --s6: light-dark(#cfe9e2, #1f3f37); --s7: light-dark(#f3e4b4, #4e4520); --s8: light-dark(#dcd9f5, #32305a);   /* Kruskal：每個集合一種顏色 */
 }
 
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-h3 { font-size: 1rem; margin: 0.5rem 0 0; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-sub { font-size: 0.72em; line-height: 0; }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-details { border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 1.1rem; background: var(--surface); }
-summary { cursor: pointer; font-weight: 700; }
-details > :not(summary) { margin-top: 0.6rem; }
-details p + p { margin-top: 0.6rem; }
-details ol, details ul { margin: 0.6rem 0 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-
-/* static pseudocode in prose */
-.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow-x: auto; white-space: pre; }
-.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
 .col { display: flex; flex-direction: column; gap: 0.6rem; }
-.col p { font-size: 0.88rem; color: var(--muted); }
+.col p { margin-top: 0; }
 table.def { border-collapse: collapse; font-size: 0.9rem; }
 .def th, .def td { text-align: left; padding: 0.3rem 0.75rem 0.3rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 .def th { font-weight: 700; white-space: nowrap; }
 
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.presets button { font-size: 0.88rem; }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
-textarea, input[type="text"] { font: inherit; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; }
-textarea { width: 100%; min-height: 11rem; resize: vertical; }
+/* inputs and the legend */
+textarea { min-height: 11rem; }
 input[type="text"] { width: 5rem; padding-block: 0.25rem; }
 input#cutS { width: 14rem; max-width: 100%; }
 .field { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.75rem; flex-wrap: wrap; }
 .field .lbl { font-size: 0.85rem; color: var(--muted); }
-.errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
-.modes { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.6rem; }
-.modes .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.modes button { font-size: 0.88rem; }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
-.jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
-.jumps button { font-size: 0.82rem; padding: 0.15rem 0.6rem; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
 .legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; margin-top: 0.6rem; font-size: 0.8rem; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
 .legend i { display: inline-block; width: 1.4rem; height: 0; border-top: 2.5px solid var(--ink); }
@@ -117,18 +42,11 @@ input#cutS { width: 14rem; max-width: 100%; }
 .legend b.black { background: var(--ink); }
 .legend b.inS { background: var(--hit-soft); border-color: var(--hit); }
 .legend b.comp { background: var(--s1); }
-.say { font-size: 0.95rem; min-height: 3.2em; }
-.say .warn { display: block; margin-top: 0.35rem; color: var(--miss); }
-.say .warn::before { content: "⚠ "; }
-.say .note { display: block; margin-top: 0.35rem; color: var(--muted); font-size: 0.9rem; }
 
-/* panels */
-.work { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 1rem; }
-.work2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
-@media (max-width: 900px) { .work, .work2 { grid-template-columns: minmax(0, 1fr); } }
-.panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
-.panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
-.panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+/* two rows of panels: graph + pseudocode, then vertex table + list.
+   :where() keeps the specificity at one class so the shared 980px single-column rule still wins. */
+.work:where(.a) { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+.work:where(.b) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* graph */
 .graphbox { padding: 0.5rem; background: var(--bg); flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow-x: auto; }
@@ -159,17 +77,7 @@ input#cutS { width: 14rem; max-width: 100%; }
 .graph .vx.s5 ellipse { fill: var(--s5); } .graph .vx.s6 ellipse { fill: var(--s6); } .graph .vx.s7 ellipse { fill: var(--s7); } .graph .vx.s8 ellipse { fill: var(--s8); }
 .graph .empty { font-family: var(--font-body); font-size: 13px; fill: var(--muted); text-anchor: middle; }
 
-/* pseudocode + variables */
-.pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.65; white-space: pre; overflow-x: auto; background: var(--bg); flex: 1; }
-.pseudo .pl { display: block; padding: 0 0.3rem; border-radius: 3px; }
-.pseudo .pl.on { background: var(--mark); font-weight: 600; }
-.pseudo .pl.head { font-weight: 600; }
-.pseudo .gap { display: block; height: 0.6em; }
-.vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.78rem; display: flex; flex-wrap: wrap; gap: 0.3rem; }
-.var { display: inline-flex; align-items: baseline; gap: 0.3rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
-.var .k { color: var(--muted); font-size: 0.72rem; }
-.var .v { font-weight: 600; min-width: 1em; }
-.var.chg { border-color: var(--hit); background: var(--hit-soft); }
+/* call chain under the variables */
 .stack { padding: 0.4rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); line-height: 1.6; }
 .stack b { color: var(--ink); font-weight: 600; }
 
@@ -212,8 +120,8 @@ table.tb { border-collapse: collapse; width: 100%; }
 
   <section class="prose">
     <h2>問題，和一個通用的框架</h2>
-    <p>給一張連通的無向圖 G = (V, E)，每條邊有權重 <code>w(u, v)</code>，代表把 u 和 v 接起來的成本。要找一個邊的子集合 T ⊆ E，讓所有頂點連通，而且總權重 w(T) = Σ w(u, v) 最小。只要權重都是正的，最省的 T 一定沒有環：有環就能拿掉環上一條邊，還是連通但更便宜（習題 23.1-7；權重可以是 0 或負數時這句話不成立）。所以 T 是一棵樹，剛好 |V| − 1 條邊，叫做 G 的 <strong>minimum spanning tree</strong>。MST 不一定唯一，權重平手時可能有好幾棵，但每一棵的總權重一樣，連排序後的權重列表都一模一樣（習題 23.1-8）。</p>
-    <p>書上的兩個演算法是同一個 greedy 骨架的特例。維護一個邊的集合 A，loop invariant 是：<strong>每一輪開始前，A 是某棵 MST 的子集合。</strong>每一輪找一條加進去之後仍維持這個性質的邊，叫做對 A 的 <strong>safe edge</strong>，加進 A；做 |V| − 1 輪，A 就是一棵 MST。框架本身的正確性沒什麼好說的：空集合是任何 MST 的子集合；每次只加 safe edge；結束時 A 是某棵 MST 的子集合又已經是一棵 spanning tree，所以就是那棵 MST。真正的問題只有一個：怎麼有效率地認出 safe edge。</p>
+    <p>給一張連通的無向圖 G = (V, E)，每條邊有權重 <code>w(u, v)</code>，代表把 u 和 v 接起來的成本。要找一個邊的子集合 T ⊆ E，讓所有頂點連通，而且總權重 w(T) = Σ w(u, v) 最小。只要權重都是正的，最省的 T 一定沒有環：有環就能拿掉環上一條邊，還是連通但更便宜。<span class="sn">習題 23.1-7。權重可以是 0 或負數時這句話不成立，拿掉權重 0 的邊不會更便宜。</span>所以 T 是一棵樹，剛好 |V| − 1 條邊，叫做 G 的 <strong>minimum spanning tree</strong>。MST 不一定唯一，權重平手時可能有好幾棵，但每一棵的總權重一樣，連排序後的權重列表都一模一樣（習題 23.1-8）。</p>
+    <p>書上的兩個演算法是同一個 greedy 骨架的特例。維護一個邊的集合 A，<span class="term" data-def="迴圈每一輪開始前都成立的性質。證明它一開始成立、每一輪都維持、迴圈結束時給出想要的結論，就證明了迴圈是對的（第二章）。">loop invariant</span> 是：<strong>每一輪開始前，A 是某棵 MST 的子集合。</strong>每一輪找一條加進去之後仍維持這個性質的邊，叫做對 A 的 <strong>safe edge</strong>，加進 A；做 |V| − 1 輪，A 就是一棵 MST。框架本身的正確性沒什麼好說的：空集合是任何 MST 的子集合；每次只加 safe edge；結束時 A 是某棵 MST 的子集合又已經是一棵 spanning tree，所以就是那棵 MST。真正的問題只有一個：怎麼有效率地認出 safe edge。</p>
 <pre class="code">GENERIC-MST(G, w)
 1  A = ∅
 2  while A does not form a spanning tree
@@ -246,25 +154,25 @@ table.tb { border-collapse: collapse; width: 100%; }
   <section class="prose">
     <h2>Kruskal：一座森林，照權重從小到大</h2>
     <p>Kruskal 把 A 當成森林。一開始每個頂點自己是一棵樹；把所有邊照權重從小到大排好，依序看每一條 <code>(u, v)</code>。若 u 和 v 在不同的樹裡，這條邊就是連接這兩棵樹的所有邊裡最輕的（更輕的邊都已經看過了，而看過卻沒加的邊，兩端當時就已經在同一棵樹裡），由 Corollary 23.2 它是 safe 的：加進 A，把兩棵樹合併成一棵。若 u 和 v 已經在同一棵樹裡，加進去會形成環，丟掉。「兩端在不在同一棵樹」正是 disjoint-set 資料結構的 <code>FIND-SET</code>，合併是 <code>UNION</code>，下一節講。</p>
-    <p>時間：第 4 行排序 O(E lg E)。第 2、3 行和第 5 到 8 行是 |V| 次 <code>MAKE-SET</code>、2|E| 次 <code>FIND-SET</code>、最多 |V| − 1 次 <code>UNION</code>，用 disjoint-set forest 總共 O((V + E) α(V))；G 連通時 |E| ≥ |V| − 1，所以是 O(E α(V))。α 長得比 lg 慢得多，α(V) = O(lg V) = O(lg E)，整體被排序主宰，是 O(E lg E)；又因為 |E| &lt; |V|²，lg E = O(lg V)，寫成 <strong>O(E lg V)</strong>。平手的邊怎麼排會決定選出哪一棵 MST，但任何一棵 MST 都能靠某種排法選出來（習題 23.2-1：把那棵樹的邊在同權重裡排前面，Kruskal 就一定會先收它們）。權重若是 1 到 |V| 的整數，排序可以用 counting sort 做到 O(V + E)，整體變成 O(E α(V))（習題 23.2-4）。</p>
+    <p>時間：第 4 行排序 O(E lg E)。第 2、3 行和第 5 到 8 行是 |V| 次 <code>MAKE-SET</code>、2|E| 次 <code>FIND-SET</code>、最多 |V| − 1 次 <code>UNION</code>，用 disjoint-set forest 總共 O((V + E) α(V))；G 連通時 |E| ≥ |V| − 1，所以是 O(E α(V))。<span class="term" data-def="inverse Ackermann function，Ackermann 函數的反函數，長得極慢：對任何實際遇得到的 n 都 ≤ 4。">α</span> 長得比 lg 慢得多，α(V) = O(lg V) = O(lg E)，整體被排序主宰，是 O(E lg E)；又因為 |E| &lt; |V|²，lg E = O(lg V)，寫成 <strong>O(E lg V)</strong>。平手的邊怎麼排會決定選出哪一棵 MST，但任何一棵 MST 都能靠某種排法選出來。<span class="sn">習題 23.2-1：把那棵樹的邊在同權重裡排前面，Kruskal 就一定會先收它們。</span>權重若是 1 到 |V| 的整數，排序可以用 counting sort 做到 O(V + E)，整體變成 O(E α(V))（習題 23.2-4）。</p>
   </section>
 
   <section class="prose">
     <h2>Disjoint set：Kruskal 需要的資料結構</h2>
-    <p>Disjoint-set 資料結構（第二十一章）維護一群互不相交的動態集合，每個集合用裡面某個成員當<strong>代表</strong>（representative）。三個操作：<code>MAKE-SET(x)</code> 建一個只有 x 的集合；<code>FIND-SET(x)</code> 回傳 x 所在集合的代表；<code>UNION(x, y)</code> 把 x 和 y 所在的兩個集合合併成一個。「u 和 v 是不是同一個集合」就是比 <code>FIND-SET(u)</code> 和 <code>FIND-SET(v)</code> 是不是同一個代表。書上第一個應用就是算無向圖的連通元件（<code>CONNECTED-COMPONENTS</code>：每個頂點 <code>MAKE-SET</code>，每條邊兩端不同集合就 <code>UNION</code>），和 Kruskal 只差邊沒有排序、沒有把邊收進 A。</p>
+    <p>Disjoint-set 資料結構（第二十一章）維護一群互不相交的動態集合，每個集合用裡面某個成員當<span class="term" data-def="representative，每個集合裡被選出來代表整個集合的那個成員；兩個元素在同一個集合，當且僅當 FIND-SET 回傳同一個代表。"><strong>代表</strong></span>。三個操作：<code>MAKE-SET(x)</code> 建一個只有 x 的集合；<code>FIND-SET(x)</code> 回傳 x 所在集合的代表；<code>UNION(x, y)</code> 把 x 和 y 所在的兩個集合合併成一個。「u 和 v 是不是同一個集合」就是比 <code>FIND-SET(u)</code> 和 <code>FIND-SET(v)</code> 是不是同一個代表。書上第一個應用就是算無向圖的連通元件（<code>CONNECTED-COMPONENTS</code>：每個頂點 <code>MAKE-SET</code>，每條邊兩端不同集合就 <code>UNION</code>），和 Kruskal 只差邊沒有排序、沒有把邊收進 A。</p>
     <p>21.3 的做法是 <strong>disjoint-set forest</strong>：每個集合是一棵有根樹，每個節點記一個指標 <code>x.p</code> 指向父節點，根的 p 指向自己，根就是代表。<code>FIND-SET</code> 沿著 p 一路往上走到根；<code>UNION</code> 是把一棵樹的根接到另一棵樹的根下面（<code>LINK</code>）。只這樣做樹可能退化成一條鏈，<code>FIND-SET</code> 要 Θ(n)，所以加兩個 heuristic：</p>
     <ul>
       <li><strong>Union by rank</strong>：每個節點記一個 rank，是以它為根的子樹高度的上界。<code>LINK</code> 時把 rank 小的根接到 rank 大的根下面，rank 不變；兩邊 rank 相同時任選一邊當新的根，它的 rank 加一。這樣每棵樹的高度最多 O(lg n)。</li>
-      <li><strong>Path compression</strong>：<code>FIND-SET</code> 走到根之後，把路上每個節點的 p 直接改成指向根。遞迴寫法只有三行：先遞迴找到根，回來的路上順便改 p。下次再查這些節點就一步到位。注意壓縮之後 rank 不再是精確的高度，只是上界，所以書上不叫它 height。</li>
+      <li><strong>Path compression</strong>：<code>FIND-SET</code> 走到根之後，把路上每個節點的 p 直接改成指向根。遞迴寫法只有三行：先遞迴找到根，回來的路上順便改 p。下次再查這些節點就一步到位。<span class="sn">壓縮之後 rank 不再是精確的高度，只是上界，所以書上不叫它 height。</span></li>
     </ul>
-    <p>兩個一起用，m 次操作（其中 n 次 <code>MAKE-SET</code>）總共 <strong>O(m α(n))</strong>，α 是一個長得極慢的函數（Ackermann 函數的反函數），對任何實際遇得到的 n 都 ≤ 4，所以實務上就是線性。證明是 21.4 整節的事，這一頁不講。Workbench 的 Kruskal 模式會把每次 <code>FIND-SET</code> 走過的路徑、壓縮改了哪些 p、<code>LINK</code> 比較了哪兩個 rank 都寫出來，頂點表列出每個節點的 p 和 rank，圖上同一個集合塗同一種顏色。</p>
+    <p>兩個一起用，m 次操作（其中 n 次 <code>MAKE-SET</code>）總共 <strong>O(m α(n))</strong>，<span class="term" data-def="inverse Ackermann function，Ackermann 函數的反函數，長得極慢：對任何實際遇得到的 n 都 ≤ 4。">α</span> 是一個長得極慢的函數，對任何實際遇得到的 n 都 ≤ 4，所以實務上就是線性。證明是 21.4 整節的事，這一頁不講。Workbench 的 Kruskal 模式會把每次 <code>FIND-SET</code> 走過的路徑、壓縮改了哪些 p、<code>LINK</code> 比較了哪兩個 rank 都寫出來，頂點表列出每個節點的 p 和 rank，圖上同一個集合塗同一種顏色。</p>
   </section>
 
   <section class="prose">
     <h2>Prim：一棵樹，從 r 往外長</h2>
     <p>Prim 讓 A 永遠是一棵樹，從指定的根 r 開始往外長。每一步加一條連接「樹上頂點」和「樹外頂點」的最輕邊：這條邊是 cut (V<sub>A</sub>, V − V<sub>A</sub>) 的 light edge，由 Corollary 23.2 是 safe 的。要有效率地找到它，每個樹外頂點 v 記 <code>v.key</code>：v 和樹上任何頂點之間最輕的那條邊的權重（沒有邊就是 ∞），<code>v.π</code> 是那條邊的另一端。所有樹外頂點放在一個 min-priority queue Q 裡照 key 排。每一輪 <code>EXTRACT-MIN</code> 拿出 key 最小的 u，<code>(u.π, u)</code> 就是那條 light edge，u 進入樹；然後掃 u 的鄰居，還在 Q 裡的 v 若經由 u 有更輕的邊，就更新 <code>v.key</code> 和 <code>v.π</code>，這就是 priority queue 的 <code>DECREASE-KEY</code>。</p>
     <p>書上的寫法把 A 藏在 π 裡：A = {(v, v.π) : v ∈ V − {r} − Q}，也就是每個已經出 Q 的頂點（根除外）和它的 π 連成的邊。Loop invariant 有三條。第一，A 就是上面那個式子；第二，已經在樹上的頂點就是 V − Q；第三，對 Q 裡每個 v，若 v.π ≠ NIL 則 v.key &lt; ∞，而且 v.key 是連接 v 和樹的 light edge <code>(v, v.π)</code> 的權重。第 7 行取出的 u 因此是穿過 cut <code>(V − Q, Q)</code> 的 light edge 在樹外的那一端，第 8 到 11 行在 u 進樹之後把第三條維護好。它和第二十四章的 Dijkstra 幾乎一模一樣，差別只在 key 的意義：Prim 的 key 是「連到樹的那一條邊」的權重，Dijkstra 的是「從來源走到這裡的整條路」的長度。</p>
-    <p>時間看 Q 怎麼實作。用 binary min-heap（<a href="../heap/">第六章</a>）：第 1 到 5 行建 Q 是 O(V)；|V| 次 <code>EXTRACT-MIN</code> 共 O(V lg V)；第 8 到 11 行總共掃過 2|E| 個 adjacency list 項目，「v ∈ Q」用每個頂點一個 bit 就能 O(1) 判斷，每次更新是一次 <code>DECREASE-KEY</code> O(lg V)，共 O(E lg V）；總共 <strong>O(E lg V)</strong>，和 Kruskal 一樣。用 Fibonacci heap，<code>DECREASE-KEY</code> 攤銷只要 O(1)，就是 O(E + V lg V)，在 |E| 遠大於 |V| 時比較好（習題 23.2-3：|E| = ω(V) 才有差；稠密圖 |E| = Θ(V²) 時是 O(V² lg V) 對 O(V²)）。稠密圖還有更簡單的做法：用 adjacency matrix，不用 heap，每一輪線性掃一遍找 key 最小的頂點，O(V²)（習題 23.2-2）。</p>
+    <p>時間看 Q 怎麼實作。用 binary min-heap（<a href="../heap/">第六章</a>）：第 1 到 5 行建 Q 是 O(V)；|V| 次 <code>EXTRACT-MIN</code> 共 O(V lg V)；第 8 到 11 行總共掃過 2|E| 個 adjacency list 項目，「v ∈ Q」用每個頂點一個 bit 就能 O(1) 判斷，每次更新是一次 <code>DECREASE-KEY</code> O(lg V)，共 O(E lg V)；總共 <strong>O(E lg V)</strong>，和 Kruskal 一樣。用 <span class="term" data-def="第十九章的 heap：EXTRACT-MIN 攤銷 O(lg n)，DECREASE-KEY 攤銷只要 O(1)，代價是實作複雜、常數大。">Fibonacci heap</span>，<code>DECREASE-KEY</code> 攤銷只要 O(1)，就是 O(E + V lg V)，在 |E| 遠大於 |V| 時比較好。<span class="sn">習題 23.2-3：|E| = ω(V) 才有差；稠密圖 |E| = Θ(V²) 時是 O(V² lg V) 對 O(V²)。</span>稠密圖還有更簡單的做法：用 adjacency matrix，不用 heap，每一輪線性掃一遍找 key 最小的頂點，O(V²)（習題 23.2-2）。</p>
     <p>實作上另一個常見的寫法是不用 <code>DECREASE-KEY</code>：發現更好的邊就直接再 push 一個 <code>(w, v)</code> 進 heap，<code>EXTRACT-MIN</code> 拿到已經在樹上的頂點就跳過。Heap 裡最多 O(E) 個項目，時間還是 O(E lg E) = O(E lg V)，好處是任何現成的 priority queue 都能用。Workbench 照書上的寫法用 <code>DECREASE-KEY</code>；key 平手時用 G.V 的順序打破，真的 heap 不保證這件事，所以平手時選出的樹可能和你手算的不同，但總權重一定一樣。</p>
   </section>
 
@@ -332,25 +240,20 @@ FIND-SET(x)
       <div>
         <p class="panel-title">執行</p>
         <div class="modes" id="modes"><span class="lbl">模式</span></div>
-        <div id="stepctl">
-          <div class="controls">
-            <button id="btn-reset" type="button">重來</button>
-            <button id="btn-prev" type="button">上一步</button>
-            <button id="btn-next" type="button" class="primary">下一步</button>
-            <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-            <span class="count" id="count"></span>
-          </div>
-          <div class="jumps">
-            <button id="btn-unit" type="button">跳到下一條邊</button>
-            <button id="btn-end" type="button">跑完</button>
-          </div>
+        <div class="controls" data-stepper id="stepctl">
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
         </div>
         <p class="hint" id="phint"></p>
         <div class="legend" id="legend"></div>
       </div>
     </div>
 
-    <div class="row work">
+    <div class="row work a">
       <div class="panel">
         <div class="panel-head"><span id="gtitle">圖 G</span><span class="sub" id="gstat"></span></div>
         <div class="graphbox"><svg class="graph" id="graph" aria-label="圖"></svg></div>
@@ -363,7 +266,7 @@ FIND-SET(x)
       </div>
     </div>
 
-    <div class="row work2">
+    <div class="row work b">
       <div class="panel">
         <div class="panel-head"><span>頂點</span><span class="sub" id="vstat"></span></div>
         <div class="tables" id="vtable"></div>
@@ -394,8 +297,8 @@ const MAXV = 26;
 const NCOL = 8;
 
 const MODES = [
-  { id: 'kruskal', label: 'Kruskal', procs: ['K', 'M', 'F', 'U', 'L'], list: '排序後的邊', unit: '跳到下一條邊' },
-  { id: 'prim', label: 'Prim', procs: ['P'], list: 'Q（min-priority queue）', unit: '跳到下一個頂點' },
+  { id: 'kruskal', label: 'Kruskal', procs: ['K', 'M', 'F', 'U', 'L'], list: '排序後的邊' },
+  { id: 'prim', label: 'Prim', procs: ['P'], list: 'Q（min-priority queue）' },
   { id: 'cut', label: 'Cut 與 light edge', procs: ['G'], list: '穿過 cut 的邊' },
 ];
 const MODE = Object.fromEntries(MODES.map(m => [m.id, m]));
@@ -783,8 +686,9 @@ const INIT = () => {
   return { lines: [], DS, col, V, A: [], status: {}, sorted: null, st: { u: null, v: null, x: null, y: null }, unit: 0, cur: {}, chV: [], chRows: [], say: '', note: '', warn: '', calls: '' };
 };
 const cur = () => state.mode === 'cut' ? state.cut : (state.k === 0 ? INIT() : state.trace[state.k - 1]);
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
 
-function rebuild(keepStep) {
+function rebuild() {
   state.G = parseGraph($('src').value);
   state.err = state.G.errors.slice();
   const names = state.G.names;
@@ -803,7 +707,9 @@ function rebuild(keepStep) {
   else if (state.mode === 'kruskal') { state.trace = kruskalTrace(state.G); state.cut = null; }
   else if (state.mode === 'prim') { state.trace = primTrace(state.G, r); state.cut = null; }
   else { state.trace = []; state.cut = cutState(state.G, S); }
-  state.k = keepStep ? Math.min(state.k, total()) : 0;
+  state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
 }
 
 // ---- rendering ----
@@ -846,7 +752,6 @@ function renderPseudoShell() {
   $('s-field').style.display = state.mode === 'cut' ? '' : 'none';
   $('stepctl').style.display = state.mode === 'cut' ? 'none' : '';
   $('ltitle').textContent = MODE[state.mode].list;
-  if (MODE[state.mode].unit) $('btn-unit').textContent = MODE[state.mode].unit;
   const LEG = {
     kruskal: '<span><b></b>自己一個集合</span><span><b class="comp"></b>同色 = 同一個集合</span><span><i class="cur"></i>正在看的邊</span><span><i></i>A 裡的邊</span><span><i class="rej"></i>丟掉的邊</span>',
     prim: '<span><b></b>key = ∞</span><span><b class="gray"></b>在 Q 裡，有候選邊</span><span><b class="black"></b>在樹上</span><span><i class="cur"></i>正在看的邊</span><span><i></i>A 裡的邊</span><span><i class="cand"></i>候選邊 <code>(v, v.π)</code></span>',
@@ -989,18 +894,11 @@ function renderList(s) {
 
 function renderAll() {
   const bad = state.err.length > 0;
-  const T = total();
   const isCut = state.mode === 'cut';
   document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && presetActive()));
   document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('chosen', b.dataset.mode === state.mode));
   $('errs').innerHTML = state.err.map(e => `<span>${esc(e)}</span>`).join('');
   $('phint').innerHTML = presetActive() ? PRESETS[state.pi].hint : (isCut ? '點圖上的頂點把它移進或移出 S。' : '');
-  $('step-range').max = T; $('step-range').value = state.k;
-  $('count').textContent = `第 ${state.k} / ${T} 步`;
-  $('btn-prev').disabled = state.k === 0;
-  $('btn-next').disabled = bad || state.k >= T;
-  $('btn-unit').disabled = bad || state.k >= T;
-  $('btn-end').disabled = bad || state.k >= T;
   const s = bad ? INIT() : cur();
   if (bad && isCut) { s.S = new Set(); s.crossing = []; s.light = []; s.mst = new Set(); s.mstW = 0; s.min = null; }
   renderGraph(s);
@@ -1024,17 +922,6 @@ function setMode(m) {
   renderAll();
 }
 
-$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
-$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
-$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
-$('btn-unit').addEventListener('click', () => {
-  const now = cur().unit;
-  const idx = state.trace.findIndex((s, j) => j >= state.k && s.unit !== now);
-  state.k = idx >= 0 ? idx + 1 : total();
-  renderAll();
-});
-$('btn-end').addEventListener('click', () => { state.k = total(); renderAll(); });
-$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
 $('src').addEventListener('input', () => { rebuild(); renderAll(); });
 $('root').addEventListener('input', () => { rebuild(); renderAll(); });
 $('cutS').addEventListener('input', () => { rebuild(); renderAll(); });
@@ -1047,11 +934,6 @@ $('graph').addEventListener('click', e => {
   if (i >= 0) S.splice(i, 1); else S.push(nm);
   $('cutS').value = S.join(' ');
   rebuild(); renderAll();
-});
-document.addEventListener('keydown', e => {
-  if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
-  if (e.key === 'ArrowRight') $('btn-next').click();
-  if (e.key === 'ArrowLeft') $('btn-prev').click();
 });
 
 renderPresets();

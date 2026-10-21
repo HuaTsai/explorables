@@ -6,106 +6,28 @@
 <title>BFS、DFS 與 SCC：走一張圖的兩種方法</title>
 <meta name="description" content="把 Introduction to Algorithms 第二十二章的圖搜尋一步步跑給你看：BFS 怎麼用 queue 一圈一圈往外算距離、DFS 的時間戳怎麼變成括號結構、邊怎麼依顏色分成 tree、back、forward、cross 四種、拓樸排序為什麼是完成順序倒過來，以及 Kosaraju 的兩次 DFS 怎麼找出強連通元件。可以自己改圖。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has presets, the editable edge list, the mode switch
    and the step controls on top, then two panels (graph, pseudocode + variables), then the vertex table
    and the mode-specific list (queue / parentheses / topological order / components). */
 :root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* 目前探索的邊、剛改動的值 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* back edge、警告 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;         /* 目前的 u */
-  --gray: #b9c4c0;         /* GRAY 頂點 */
-  --scc1: #f6d7a7; --scc2: #c9e3f7; --scc3: #d9e7b8; --scc4: #ead4f2; --scc5: #f7c9c9; --scc6: #cfe9e2;
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; --gray: #4a5955;
-    --scc1: #5a4420; --scc2: #1f3a50; --scc3: #37461d; --scc4: #45304d; --scc5: #512a2a; --scc6: #1f3f37;
-    color-scheme: dark;
-  }
+  --gray: light-dark(#b9c4c0, #4a5955);         /* GRAY 頂點 */
+  --scc1: light-dark(#f6d7a7, #5a4420); --scc2: light-dark(#c9e3f7, #1f3a50); --scc3: light-dark(#d9e7b8, #37461d); --scc4: light-dark(#ead4f2, #45304d); --scc5: light-dark(#f7c9c9, #512a2a); --scc6: light-dark(#cfe9e2, #1f3f37);   /* 每個 SCC 一種顏色 */
 }
 
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-h3 { font-size: 1rem; margin: 0.5rem 0 0; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-sub { font-size: 0.72em; line-height: 0; }
-i.hit, i.miss { font-style: normal; font-weight: 700; }
-i.hit { color: var(--hit); }
-i.miss { color: var(--miss); }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-details { border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 1.1rem; background: var(--surface); }
-summary { cursor: pointer; font-weight: 700; }
-details > :not(summary) { margin-top: 0.6rem; }
-details p + p { margin-top: 0.6rem; }
-details ol, details ul { margin: 0.6rem 0 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-
-/* static pseudocode in prose */
-.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow-x: auto; white-space: pre; }
-.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
 .col { display: flex; flex-direction: column; gap: 0.6rem; }
-.col p { font-size: 0.88rem; color: var(--muted); }
+.col p { margin-top: 0; }
 table.def { border-collapse: collapse; font-size: 0.9rem; }
 .def th, .def td { text-align: left; padding: 0.3rem 0.75rem 0.3rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 .def th { font-weight: 700; white-space: nowrap; }
 
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.presets button { font-size: 0.88rem; }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
-textarea, input[type="text"] { font: inherit; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.75rem; }
-textarea { width: 100%; min-height: 11rem; resize: vertical; }
+/* inputs and the legend */
+textarea { min-height: 11rem; }
 input[type="text"] { width: 5rem; padding-block: 0.25rem; }
 .field { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.75rem; }
 .field .lbl { font-size: 0.85rem; color: var(--muted); }
-.errs { color: var(--miss); font-size: 0.85rem; margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
-.modes { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.6rem; }
-.modes .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.modes button { font-size: 0.88rem; }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
-.jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
-.jumps button { font-size: 0.82rem; padding: 0.15rem 0.6rem; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
 .legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; margin-top: 0.6rem; font-size: 0.8rem; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
 .legend i { display: inline-block; width: 1.4rem; height: 0; border-top: 2.5px solid var(--ink); }
@@ -116,18 +38,11 @@ input[type="text"] { width: 5rem; padding-block: 0.25rem; }
 .legend b { display: inline-block; width: 0.9rem; height: 0.9rem; border-radius: 50%; border: 1.5px solid var(--ink); }
 .legend b.gray { background: var(--gray); }
 .legend b.black { background: var(--ink); }
-.say { font-size: 0.95rem; min-height: 3.2em; }
-.say .warn { display: block; margin-top: 0.35rem; color: var(--miss); }
-.say .warn::before { content: "⚠ "; }
-.say .note { display: block; margin-top: 0.35rem; color: var(--muted); font-size: 0.9rem; }
 
-/* panels */
-.work { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 1rem; }
-.work2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
-@media (max-width: 900px) { .work, .work2 { grid-template-columns: minmax(0, 1fr); } }
-.panel { border: 1px solid var(--line); border-radius: 4px; min-width: 0; display: flex; flex-direction: column; }
-.panel-head { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
-.panel-head .sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+/* two rows of panels: graph + pseudocode, then vertex table + list.
+   :where() keeps the specificity at one class so the shared 980px single-column rule still wins. */
+.work:where(.a) { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+.work:where(.b) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* graph */
 .graphbox { padding: 0.5rem; background: var(--bg); flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow-x: auto; }
@@ -154,17 +69,7 @@ input[type="text"] { width: 5rem; padding-block: 0.25rem; }
 .graph .vx.s1 text.nm, .graph .vx.s2 text.nm, .graph .vx.s3 text.nm, .graph .vx.s4 text.nm, .graph .vx.s5 text.nm, .graph .vx.s6 text.nm { fill: var(--ink); }
 .graph .empty { font-family: var(--font-body); font-size: 13px; fill: var(--muted); text-anchor: middle; }
 
-/* pseudocode + variables */
-.pseudo { margin: 0; padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.65; white-space: pre; overflow-x: auto; background: var(--bg); flex: 1; }
-.pseudo .pl { display: block; padding: 0 0.3rem; border-radius: 3px; }
-.pseudo .pl.on { background: var(--mark); font-weight: 600; }
-.pseudo .pl.head { font-weight: 600; }
-.pseudo .gap { display: block; height: 0.6em; }
-.vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.78rem; display: flex; flex-wrap: wrap; gap: 0.3rem; }
-.var { display: inline-flex; align-items: baseline; gap: 0.3rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
-.var .k { color: var(--muted); font-size: 0.72rem; }
-.var .v { font-weight: 600; min-width: 1em; }
-.var.chg { border-color: var(--hit); background: var(--hit-soft); }
+/* call chain under the variables */
 .stack { padding: 0.4rem 0.75rem; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); line-height: 1.6; }
 .stack b { color: var(--ink); font-weight: 600; }
 
@@ -207,8 +112,8 @@ table.tb { border-collapse: collapse; width: 100%; }
 
   <section class="prose">
     <h2>BFS：一圈一圈往外</h2>
-    <p>從來源 s 開始，先找到所有距離 1 的頂點，再找所有距離 2 的，依此類推。做法是一個 FIFO queue：取出一個頂點 u，把它所有還沒見過的鄰居 v 標成見過、記 <code>v.d = u.d + 1</code>、記 <code>v.π = u</code>、放進 queue。顏色是書上的說法：<strong>白</strong>是還沒發現，<strong>灰</strong>是發現了但鄰居還沒掃完，<strong>黑</strong>是掃完了。灰的頂點永遠是「已發現」和「未發現」的邊界，而且 queue 的內容就是圖上所有灰的頂點，照發現的順序排。</p>
-    <p>跑完之後 <code>v.d</code> 就是 s 到 v 的最短距離 δ(s, v)（用邊數算），走不到的是 ∞。π 連起來是一棵 <strong>breadth-first tree</strong>，從 s 到任何頂點沿著樹走就是一條最短路徑。證明的核心是 queue 的性質：queue 裡的 d 值永遠是「不遞減的，而且頭尾最多差 1」（Lemma 22.3），所以頂點是按距離一層一層被取出的。時間 O(V + E)：每個頂點進出 queue 一次，每個 adjacency list 掃一次。注意 d 在入列的那一刻就定了，之後不會改；後面第二十四章的 Dijkstra 長得很像，但那裡的 d 是估計值，會一路被 relax。這裡每條邊都算 1，第一次發現就是最短。</p>
+    <p>從來源 s 開始，先找到所有距離 1 的頂點，再找所有距離 2 的，依此類推。做法是一個 <span class="term" data-def="first in, first out 的佇列：從尾端放進去，從前端取出來，先放的先出。">FIFO queue</span>：取出一個頂點 u，把它所有還沒見過的鄰居 v 標成見過、記 <code>v.d = u.d + 1</code>、記 <code>v.π = u</code>、放進 queue。顏色是書上的說法：<strong>白</strong>是還沒發現，<strong>灰</strong>是發現了但鄰居還沒掃完，<strong>黑</strong>是掃完了。灰的頂點永遠是「已發現」和「未發現」的邊界，而且 queue 的內容就是圖上所有灰的頂點，照發現的順序排。</p>
+    <p>跑完之後 <code>v.d</code> 就是 s 到 v 的最短距離 δ(s, v)（用邊數算），走不到的是 ∞。π 連起來是一棵 <strong>breadth-first tree</strong>，從 s 到任何頂點沿著樹走就是一條最短路徑。證明的核心是 queue 的性質：queue 裡的 d 值永遠是「不遞減的，而且頭尾最多差 1」（Lemma 22.3），所以頂點是按距離一層一層被取出的。時間 O(V + E)：每個頂點進出 queue 一次，每個 adjacency list 掃一次。注意 d 在入列的那一刻就定了，之後不會改；這裡每條邊都算 1，第一次發現就是最短。<span class="sn">第二十四章的 Dijkstra 長得很像，但那裡的 d 是估計值，會一路被 relax。</span></p>
     <details>
       <summary>證明：BFS 算出的 d 就是最短距離（Lemma 22.3、Theorem 22.5）</summary>
       <p>先記兩個簡單的事實。Lemma 22.1：對任何邊 <code>(u, v)</code>，δ(s, v) ≤ δ(s, u) + 1，因為從 s 到 u 的最短路徑接上這條邊就是一條到 v 的路徑。Lemma 22.2：執行過程中永遠有 v.d ≥ δ(s, v)，用歸納：v.d 被設成 u.d + 1 的那一刻，u.d ≥ δ(s, u)，所以 v.d ≥ δ(s, u) + 1 ≥ δ(s, v)，而且 d 設了就不再改。</p>
@@ -240,7 +145,7 @@ table.tb { border-collapse: collapse; width: 100%; }
       <tr><th>v 是黑的，且 u.d &lt; v.d</th><td><strong>forward edge</strong>：v 是 u 的子孫，但不是透過這條邊發現的。</td></tr>
       <tr><th>v 是黑的，且 u.d &gt; v.d</th><td><strong>cross edge</strong>：v 在另一棵子樹，或另一棵樹裡，兩邊沒有祖先關係。</td></tr>
     </table>
-    <p>黑的 v 要再比一次 d，因為「完成了」有兩種可能：u.d &lt; v.d 表示 v 是在 u 發現之後才被發現、又在 u 完成前完成，區間巢狀在 u 裡面，所以是子孫；反過來 v 比 u 早發現又已經完成，兩個區間完全分開。Self-loop <code>(u, u)</code> 探索時 u 自己是灰的，所以算 back edge，書上 Figure 22.4 的 z → z 就是。</p>
+    <p>黑的 v 要再比一次 d，因為「完成了」有兩種可能：u.d &lt; v.d 表示 v 是在 u 發現之後才被發現、又在 u 完成前完成，區間巢狀在 u 裡面，所以是子孫；反過來 v 比 u 早發現又已經完成，兩個區間完全分開。<span class="term" data-def="從一個頂點連回它自己的邊。">Self-loop</span> <code>(u, u)</code> 探索時 u 自己是灰的，所以算 back edge。<span class="sn">書上 Figure 22.4 的 z → z 就是一條 self-loop，範例「DFS 書上的例子」會把它標成 back。</span></p>
     <p>無向圖簡單得多：每條邊從兩頭各會被探索一次，以先碰到的那一次為準，而且只會是 tree 或 back（Theorem 22.10）。</p>
     <details>
       <summary>證明：無向圖只有 tree 和 back（Theorem 22.10）</summary>
@@ -250,8 +155,8 @@ table.tb { border-collapse: collapse; width: 100%; }
 
   <section class="prose">
     <h2>拓樸排序：完成順序倒過來</h2>
-    <p>一個 DAG（有向無環圖）的 <strong>topological sort</strong> 是把頂點排成一列，讓每條邊 <code>(u, v)</code> 的 u 都排在 v 前面。做法只有一行：跑 DFS，每個頂點<strong>完成</strong>的時候插到一個 linked list 的最前面。理由是 Lemma 22.12：對 DAG 裡的任何邊 <code>(u, v)</code>，一定有 v.f &lt; u.f。探索 <code>(u, v)</code> 時 v 不可能是灰的（那會是 back edge，DAG 沒有環），白的話 v 會先完成，黑的話 v 早就完成了。所以 f 越大越前面。</p>
-    <p>反過來，Lemma 22.11 說有向圖無環當且僅當 DFS 不產生 back edge。所以同一次 DFS 也順便檢查了輸入是不是 DAG：workbench 遇到 back edge 會標紫色並警告。另一種常見做法是反覆拿掉 in-degree 為 0 的頂點（Kahn 的演算法），書上沒講；DFS 版的好處是多個起點不用特別處理，外層迴圈自然會掃到。</p>
+    <p>一個 <span class="term" data-def="directed acyclic graph，有向而且沒有環的圖。">DAG</span> 的 <strong>topological sort</strong> 是把頂點排成一列，讓每條邊 <code>(u, v)</code> 的 u 都排在 v 前面。做法只有一行：跑 DFS，每個頂點<strong>完成</strong>的時候插到一個 linked list 的最前面。理由是 Lemma 22.12：對 DAG 裡的任何邊 <code>(u, v)</code>，一定有 v.f &lt; u.f。探索 <code>(u, v)</code> 時 v 不可能是灰的（那會是 back edge，DAG 沒有環），白的話 v 會先完成，黑的話 v 早就完成了。所以 f 越大越前面。</p>
+    <p>反過來，Lemma 22.11 說有向圖無環當且僅當 DFS 不產生 back edge。所以同一次 DFS 也順便檢查了輸入是不是 DAG：workbench 遇到 back edge 會標紫色並警告。另一種常見做法是反覆拿掉 <span class="term" data-def="指向這個頂點的邊的數量。">in-degree</span> 為 0 的頂點，書上沒講；DFS 版的好處是多個起點不用特別處理，外層迴圈自然會掃到。<span class="sn">反覆拿掉 in-degree 為 0 的頂點這個做法通常叫 Kahn 的演算法：先算每個頂點的 in-degree，用一個 queue 裝目前 in-degree 為 0 的頂點，取出一個就把它的出邊拿掉、更新鄰居的 in-degree。</span></p>
     <details>
       <summary>證明：無環 ⇔ 沒有 back edge（Lemma 22.11），以及 TOPOLOGICAL-SORT 的正確性（Lemma 22.12）</summary>
       <p>Lemma 22.11（⇒）：若 DFS 產生 back edge <code>(u, v)</code>，v 是 u 的祖先，樹上有一條 v 到 u 的路徑，接上這條邊就是環。（⇐）：若 G 有環 c，設 v 是 c 上第一個被發現的頂點，<code>(u, v)</code> 是 c 上進入 v 的邊。在 v.d 那一刻，c 上從 v 到 u 的路徑全是白的，由 white-path theorem u 會成為 v 的子孫，所以探索 <code>(u, v)</code> 時 v 是灰的，它是 back edge。</p>
@@ -350,16 +255,16 @@ DFS-VISIT(G, u)
         <p class="panel-title">執行</p>
         <div class="modes" id="modes"><span class="lbl">模式</span></div>
         <div class="modes" id="dirs"><span class="lbl">圖</span><button type="button" data-dir="directed">有向</button><button type="button" data-dir="undirected">無向</button></div>
-        <div class="controls">
-          <button id="btn-reset" type="button">重來</button>
-          <button id="btn-prev" type="button">上一步</button>
-          <button id="btn-next" type="button" class="primary">下一步</button>
-          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-          <span class="count" id="count"></span>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
         </div>
-        <div class="jumps">
-          <button id="btn-unit" type="button">跳到下一個頂點</button>
-          <button id="btn-end" type="button">跑完</button>
+        <div class="jumps" id="jumps" style="display: none">
+          <button id="btn-phase2" type="button">跳到第二次 DFS（Gᵀ）</button>
         </div>
         <p class="hint" id="phint"></p>
         <div class="legend">
@@ -369,7 +274,7 @@ DFS-VISIT(G, u)
       </div>
     </div>
 
-    <div class="row work">
+    <div class="row work a">
       <div class="panel">
         <div class="panel-head"><span id="gtitle">圖</span><span class="sub" id="gstat"></span></div>
         <div class="graphbox"><svg class="graph" id="graph" aria-label="圖"></svg></div>
@@ -382,7 +287,7 @@ DFS-VISIT(G, u)
       </div>
     </div>
 
-    <div class="row work2">
+    <div class="row work b">
       <div class="panel">
         <div class="panel-head"><span>頂點</span><span class="sub" id="vstat"></span></div>
         <div class="tables" id="vtable"></div>
@@ -853,8 +758,9 @@ const INIT = () => {
   return { lines: [], V, EC: {}, st: { u: null, v: null, time: 0 }, stack: [], unit: 0, Q: [], L: [], paren: [], sccs: [], phase: 'G', forder: null, cur: {}, chV: [], chRows: [], say: '', note: '', warn: '' };
 };
 const cur = () => state.k === 0 ? INIT() : state.trace[state.k - 1];
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
 
-function rebuild(keepStep) {
+function rebuild() {
   const directed = state.dir === 'directed';
   state.G = parseGraph($('src').value, directed);
   state.err = state.G.errors.slice();
@@ -874,7 +780,9 @@ function rebuild(keepStep) {
   }
   state.lay = state.err.length ? null : layout(state.G);
   state.trace = state.err.length ? [] : buildTrace(state.mode, state.G, extra);
-  state.k = keepStep ? Math.min(state.k, total()) : 0;
+  state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
 }
 
 // ---- rendering ----
@@ -915,6 +823,7 @@ function renderPseudoShell() {
     `<span class="pl${k === 0 ? ' head' : ''}" data-l="${id}">${esc(LINE[id])}</span>`).join('')).join('<span class="gap"></span>');
   $('src-field').style.display = state.mode === 'bfs' ? '' : 'none';
   $('ltitle').textContent = MODE[state.mode].list;
+  $('jumps').style.display = state.mode === 'scc' ? '' : 'none';
   const forced = state.mode === 'topo' || state.mode === 'scc';
   document.querySelectorAll('#dirs button').forEach(b => { b.disabled = forced && b.dataset.dir === 'undirected'; b.title = b.disabled ? '拓樸排序和 SCC 只對有向圖有意義' : ''; });
 }
@@ -1030,18 +939,12 @@ function renderList(s) {
 
 function renderAll() {
   const bad = state.err.length > 0;
-  const T = total();
   document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && presetActive()));
   document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('chosen', b.dataset.mode === state.mode));
   document.querySelectorAll('#dirs button').forEach(b => b.classList.toggle('chosen', b.dataset.dir === state.dir));
   $('errs').innerHTML = state.err.map(e => `<span>${esc(e)}</span>`).join('');
   $('phint').textContent = presetActive() ? PRESETS[state.pi].hint : '';
-  $('step-range').max = T; $('step-range').value = state.k;
-  $('count').textContent = `第 ${state.k} / ${T} 步`;
-  $('btn-prev').disabled = state.k === 0;
-  $('btn-next').disabled = bad || state.k >= T;
-  $('btn-unit').disabled = bad || state.k >= T;
-  $('btn-end').disabled = bad || state.k >= T;
+  $('btn-phase2').disabled = bad || !state.trace.some(t => t.phase === 'GT');
   const s = bad ? INIT() : cur();
   renderGraph(s);
   renderPseudo(s);
@@ -1070,24 +973,13 @@ function setDir(d) {
   renderAll();
 }
 
-$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
-$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
-$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
-$('btn-unit').addEventListener('click', () => {
-  const now = cur().unit;
-  const idx = state.trace.findIndex((s, j) => j >= state.k && s.unit !== now);
-  state.k = idx >= 0 ? idx + 1 : total();
-  renderAll();
+$('btn-phase2').addEventListener('click', () => {
+  // SCC 的第二階段：第一個在 Gᵀ 上的步驟
+  const idx = state.trace.findIndex(t => t.phase === 'GT');
+  if (idx >= 0) stepper.set(idx + 1);
 });
-$('btn-end').addEventListener('click', () => { state.k = total(); renderAll(); });
-$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
 $('src').addEventListener('input', () => { rebuild(); renderAll(); });
 $('source').addEventListener('input', () => { rebuild(); renderAll(); });
-document.addEventListener('keydown', e => {
-  if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
-  if (e.key === 'ArrowRight') $('btn-next').click();
-  if (e.key === 'ArrowLeft') $('btn-prev').click();
-});
 
 renderPresets();
 applyPreset(0);
