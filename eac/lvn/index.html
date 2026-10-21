@@ -288,7 +288,7 @@ c ← x + y      命中，改寫成 c ← a   ✗  a 現在是 17</pre>
   <section class="prose">
     <h2>結語</h2>
     <p>值編號回答「這算出來是哪個值」，名字只回答「它暫時放在哪」；名字被覆寫就換編號，所以長得一樣的運算式不一定是同一個值，長得不一樣的也可能是。key 由值編號組成，所以不會過期，會過期的是 key 底下記的名字，改寫成 <code>T ← x</code> 之前要確認 x 還裝著那個值，或一開始就用 SSA 名字。擴展版的功能都插在固定的兩個位置：組 key 之前整理 key，建新 key 的時候順手算，核心迴圈還是「查表、沒有就新增、把編號給 T」。</p>
-    <p>LVN 只看一個 block，表在 block 開頭是空的。書上第八章接著把它推到 extended basic block 和整個 CFG（superlocal 和 global value numbering），表要能沿著 CFG 的路徑繼承和回收，那需要先有 <a href="../cfg/">CFG</a>。同一章的 <a href="../tree-balance/">樹高平衡</a>是另一種 block 內的變換，和 LVN 一樣靠「每個名字只定義一次」才好做。</p>
+    <p>LVN 只看一個 block，表在 block 開頭是空的。書上第八章接著把它推到 extended basic block 和整個 CFG（<a href="../svn/">superlocal</a> 和 global value numbering），表要能沿著 CFG 的路徑繼承和回收，那需要先有 <a href="../cfg/">CFG</a>。同一章的 <a href="../tree-balance/">樹高平衡</a>是另一種 block 內的變換，和 LVN 一樣靠「每個名字只定義一次」才好做。</p>
     <p>這一頁只有暫存器之間的算術，load 和 store 要考慮位址是否相同、中間有沒有別的 store，書上在後面才處理。改寫成 <code>T ← x</code> 之後如果 T 沒人用，整條可以刪掉，那是另一個 pass 的事。恆等式書上列了二十幾條，這裡只做加減乘除最常見的幾條，<code>a ÷ a = 1</code> 假設 a ≠ 0。常數摺疊照 JavaScript 的整數運算做，除法向零截斷，除以零不摺疊，真的編譯器要照目標機器的語意。naming 問題這裡只標出錯誤，沒有實作「找別的有效名字」或 SSA 改名。</p>
   </section>
 

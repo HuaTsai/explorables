@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>超區域值編號 SVN：讓 hash 表沿著 EBB 往下傳</title>
+<meta name="description" content="把 Engineering a Compiler 第八章的 superlocal value numbering 一步步跑給你看：extended basic block 怎麼定義、只有一個前驅的 block 為什麼可以繼承前驅的 hash 表、scoped hash table 怎麼在進入 block 時開新表、離開時整張丟掉，以及名字不是 SSA 時表為什麼會漏。可以自己改 block 和邊。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<style>
+/* 這一頁特有的：CFG 圖、分 block 的程式碼列表、一層一層的 scoped hash 表。 */
+textarea { min-height: 14rem; font-size: 0.82rem; }
+.work { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.3fr) minmax(0, 1fr); }
+
+/* CFG */
+.graph { padding: 0.5rem; background: var(--bg); border-bottom: 1px solid var(--line); display: flex; justify-content: center; }
+.graph svg { width: 100%; height: auto; max-width: 20rem; font-family: var(--font-mono); overflow: visible; }
+.graph .node rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.graph .node.done rect { stroke: var(--muted); }
+.graph .node.wl rect { stroke: var(--ink); stroke-dasharray: 3 2; }
+.graph .node.path rect { fill: var(--hit-soft); stroke: var(--hit); stroke-width: 1.6; }
+.graph .node.cur rect { fill: var(--mark); stroke: var(--ink); stroke-width: 1.6; }
+.graph .node.unreach rect { stroke-dasharray: 2 2; }
+.graph .node.unreach text { fill: var(--muted); }
+.graph .node text { fill: var(--ink); font-size: 12px; font-weight: 600; }
+.graph .edge { fill: none; stroke: var(--ink); stroke-width: 1.3; }
+.graph .edge.join { stroke: var(--muted); stroke-dasharray: 4 3; }
+.graph .edge.new { stroke: var(--hit); stroke-width: 2.4; stroke-dasharray: none; }
+
+/* 分 block 的程式碼列表 */
+.listing { padding: 0.5rem; background: var(--bg); overflow-x: auto; font-family: var(--font-mono); font-size: 0.76rem; line-height: 1.6; display: flex; flex-direction: column; gap: 0.12rem; flex: 1; }
+.bh { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; padding: 0.15rem 0.45rem; margin-top: 0.4rem; border-radius: 3px; border-bottom: 1px solid var(--line); }
+.bh:first-child { margin-top: 0; }
+.bh .bn { font-weight: 600; }
+.bh .bi { color: var(--muted); font-family: var(--font-body); font-size: 0.7rem; white-space: nowrap; }
+.bh.cur { background: var(--mark); }
+.bh.path { background: var(--hit-soft); }
+.bh.unreach { opacity: 0.55; }
+.op { display: grid; grid-template-columns: 1.1rem minmax(max-content, 1fr) max-content; align-items: center; gap: 0.4rem; padding: 0.1rem 0.4rem; border-radius: 3px; border: 1px solid transparent; border-left-width: 3px; white-space: nowrap; }
+.op .num { color: var(--muted); font-size: 0.72rem; text-align: right; }
+.op.todo { opacity: 0.55; }
+.op.cur { background: var(--mark); border-color: var(--line); border-left-color: var(--ink); opacity: 1; }
+.op.done { border-left-color: var(--line); }
+.op.br { color: var(--muted); }
+.op .orig.gone { color: var(--muted); text-decoration: line-through; }
+.op .new { color: var(--hit); font-weight: 600; }
+.op .new.bad { color: var(--miss); }
+.op .arrow { color: var(--muted); margin-inline: 0.35rem; }
+.badge.reuse { border: 1px solid var(--hit); color: var(--hit); }
+
+/* scoped hash 表 */
+.tables { padding: 0.5rem 0.6rem; background: var(--bg); flex: 1; display: flex; flex-direction: column; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.76rem; overflow-x: auto; }
+.scope { border: 1px solid var(--line); border-radius: 4px; padding: 0.35rem 0.5rem 0.45rem; background: var(--surface); display: flex; flex-direction: column; gap: 0.4rem; }
+.scope.top { border-color: var(--ink); }
+.scope h3 { margin: 0; font-family: var(--font-body); font-size: 0.75rem; font-weight: 700; color: var(--ink); display: flex; justify-content: space-between; gap: 0.5rem; }
+.scope h3 .sub { color: var(--muted); font-weight: 400; }
+.scope .empty { color: var(--muted); font-family: var(--font-body); font-size: 0.76rem; }
+table.tb { border-collapse: collapse; width: 100%; }
+.tb th, .tb td { padding: 0.12rem 0.45rem; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: baseline; }
+.tb th { font-family: var(--font-body); font-size: 0.68rem; color: var(--muted); font-weight: 700; }
+.tb tr:last-child td { border-bottom: 0; }
+.tb tr.chg td { background: var(--hit-soft); }
+.tb .vn { font-weight: 600; }
+.tb .c { color: var(--muted); }
+.tb .stale { color: var(--miss); text-decoration: line-through; }
+.tb .tag { font-family: var(--font-body); font-size: 0.64rem; font-weight: 700; margin-left: 0.3rem; }
+.tb .tag.leak { color: var(--miss); }
+.tb .tag.wr { color: var(--muted); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Engineering a Compiler 筆記</a>
+    <h1><span class="mono">SVN</span> 超區域值編號：讓 hash 表沿著 EBB 往下傳</h1>
+    <p class="lead"><a href="../lvn/">LVN</a> 的 hash 表在每個 block 開頭都是空的，所以 B<sub>0</sub> 算過的 a + b 到 B<sub>3</sub> 又得重算。Engineering a Compiler 第八章的 superlocal value numbering（SVN）把範圍放大到 extended basic block：只有一個前驅的 block 可以直接接著前驅的表往下算，用 <span class="term" data-def="一串接在一起的 hash 表，查詢時從最內層往外找，新 entry 寫進最內層；進入一個作用域開一張新表，離開時整張丟掉。">scoped hash table</span> 沿著路徑傳下去、回頭時整張丟掉。這一頁用書上的 CFG 一步步跑給你看，也可以自己改 block 和邊。</p>
+  </header>
+
+  <section class="prose">
+    <h2>LVN 的表在 block 邊界歸零</h2>
+    <p>拿書上的例子，七個 block 的程式碼如下，名字都是 SSA 形式（每個名字只定義一次，後面會講為什麼要這樣）。B<sub>0</sub> 算了 a<sub>0</sub> + b<sub>0</sub>，B<sub>3</sub> 的 q<sub>0</sub> 又算一次。a<sub>0</sub>、b<sub>0</sub> 中間沒被改過，所以 q<sub>0</sub> 是多餘的。LVN 抓不到：它一次只看一個 block，進 B<sub>3</sub> 的時候表是空的，B<sub>0</sub> 發過的<span class="term" data-def="value number。LVN 給每個「值」一個編號，名字只是值暫時放的位置；兩條運算的運算子和運算元的值編號都相同，算的就是同一個值。">值編號</span>全忘了。</p>
+  </section>
+  <div class="cols3">
+    <div class="col">
+<pre class="code">B<sub>0</sub>: m<sub>0</sub> ← a<sub>0</sub> + b<sub>0</sub>
+    n<sub>0</sub> ← a<sub>0</sub> + b<sub>0</sub>
+    (a<sub>0</sub> &gt; b<sub>0</sub>) → B<sub>1</sub>, B<sub>3</sub>
+B<sub>1</sub>: p<sub>0</sub> ← c<sub>0</sub> + d<sub>0</sub>
+    r<sub>0</sub> ← c<sub>0</sub> + d<sub>0</sub>
+    → B<sub>2</sub>
+B<sub>2</sub>: r<sub>2</sub> ← φ(r<sub>0</sub>, r<sub>1</sub>)
+    y<sub>0</sub> ← a<sub>0</sub> + b<sub>0</sub>
+    z<sub>0</sub> ← c<sub>0</sub> + d<sub>0</sub>
+    → exit</pre>
+    </div>
+    <div class="col">
+<pre class="code">B<sub>3</sub>: q<sub>0</sub> ← a<sub>0</sub> + b<sub>0</sub>
+    r<sub>1</sub> ← c<sub>0</sub> + d<sub>0</sub>
+    (a<sub>0</sub> &gt; b<sub>0</sub>) → B<sub>4</sub>, B<sub>6</sub>
+B<sub>4</sub>: e<sub>0</sub> ← b<sub>0</sub> + 18
+    s<sub>0</sub> ← a<sub>0</sub> + b<sub>0</sub>
+    u<sub>0</sub> ← e<sub>0</sub> + f<sub>0</sub>
+    → B<sub>5</sub>
+B<sub>6</sub>: e<sub>1</sub> ← a<sub>0</sub> + 17
+    t<sub>0</sub> ← c<sub>0</sub> + d<sub>0</sub>
+    u<sub>1</sub> ← e<sub>1</sub> + f<sub>0</sub>
+    → B<sub>5</sub></pre>
+    </div>
+    <div class="col">
+<pre class="code">B<sub>5</sub>: e<sub>2</sub> ← φ(e<sub>0</sub>, e<sub>1</sub>)
+    u<sub>2</sub> ← φ(u<sub>0</sub>, u<sub>1</sub>)
+    v<sub>0</sub> ← a<sub>0</sub> + b<sub>0</sub>
+    w<sub>0</sub> ← c<sub>0</sub> + d<sub>0</sub>
+    x<sub>0</sub> ← e<sub>2</sub> + f<sub>0</sub>
+    → B<sub>2</sub>
+
+<span class="c">邊：B<sub>0</sub> → B<sub>1</sub>, B<sub>3</sub>　B<sub>1</sub> → B<sub>2</sub>
+　　B<sub>3</sub> → B<sub>4</sub>, B<sub>6</sub>　B<sub>4</sub> → B<sub>5</sub>
+　　B<sub>6</sub> → B<sub>5</sub>　B<sub>5</sub> → B<sub>2</sub></span></pre>
+      <p>右邊的 CFG 在下面的 workbench 裡畫出來了。</p>
+    </div>
+  </div>
+  <section class="prose">
+    <p>什麼時候可以不忘？如果 B 只有一個前驅 P，那每次執行到 B 都是剛從 P 過來，P 的表裡每一條「這個 key 的值放在名字 x 裡」在 B 的開頭都還成立，B 可以接著 P 的表往下算。如果 B 有兩個以上的前驅，執行到 B 時不知道是從哪一邊來的，哪一邊的表都不能信，只能從空表開始。SVN 整個就是這一個觀察，剩下的是把它做得有效率。</p>
+  </section>
+
+  <section class="prose">
+    <h2>Extended basic block</h2>
+    <p>把「只有一個前驅就能繼承」沿著邊一路往下推，得到的區域叫 <strong>extended basic block</strong>（EBB）。</p>
+    <div class="defn">
+      <p>CFG 中的 block 集合 S，連同 S 裡指定的一個入口 B<sub>1</sub>，滿足兩個條件時是一個 EBB：</p>
+      <ol>
+        <li>S 裡除了 B<sub>1</sub> 以外的每個 block 都恰好有一個前驅，而且那個前驅屬於 S。</li>
+        <li>S 是極大的：不存在真包含 S 的集合 S′，對某個入口 B<sub>1</sub>′ 也滿足條件 1。S′ 的入口可以和 S 的不同。</li>
+      </ol>
+      <p>只含一個 block 的 EBB 叫 <strong>trivial EBB</strong>，含兩個以上的叫 <strong>nontrivial EBB</strong>。</p>
+    </div>
+    <p>條件 1 說每個非入口的 block 都只能從集合裡面的一個 block 進來，所以 S 在 CFG 裡的形狀是一棵以 B<sub>1</sub> 為根的樹，從根到任何一個 block 的路徑上沒有別的入口匯進來。條件 2 是為了讓 EBB 唯一：沒有極大性的話，任何一個 block 自己、任何一棵子樹都算 EBB，「trivial」就沒有意義了。<span class="sn">書的邊欄定義只寫「a set of blocks」沒寫 maximal，但正文數出 Figure 8-12 有三個 EBB，只有取極大集合才數得出三個；Cooper 自己的課程投影片則明寫 maximal set，並把單一 block 的 EBB 叫 degenerate EBB。</span>從極大性可以推出兩件判斷用的事：</p>
+    <ul>
+      <li><strong>一個 block 是 EBB 的入口，若且唯若它是 CFG 的入口或有兩個以上的前驅。</strong>只有一個前驅的 block 會被那個前驅收進同一個 EBB，自己當入口就不極大。</li>
+      <li><strong>以 B 為入口的 EBB 是 trivial，若且唯若 B 的每個後繼都有兩個以上的前驅，或 B 沒有後繼。</strong>只要有一個後繼只有 B 這一個前驅，它就非收進來不可。</li>
+    </ul>
+    <p>套到上面的 CFG：B<sub>1</sub>、B<sub>3</sub>、B<sub>4</sub>、B<sub>6</sub> 各只有一個前驅，都被收進 B<sub>0</sub> 的樹，所以 {B<sub>0</sub>, B<sub>1</sub>, B<sub>3</sub>, B<sub>4</sub>, B<sub>6</sub>} 是一個 nontrivial EBB，裡面有三條路徑 ⟨B<sub>0</sub>, B<sub>1</sub>⟩、⟨B<sub>0</sub>, B<sub>3</sub>, B<sub>4</sub>⟩、⟨B<sub>0</sub>, B<sub>3</sub>, B<sub>6</sub>⟩。B<sub>5</sub> 和 B<sub>2</sub> 各有兩個前驅，是 <span class="term" data-def="有兩個以上前驅的 block。執行到這裡時不知道是從哪一條邊進來的，所以前驅的分析結果都不能直接沿用。">join point</span>，各自成為 trivial EBB。在 trivial EBB 上沒有表可以繼承，SVN 退化成 LVN。「superlocal」這個詞指的就是這個範圍：比一個 block 大，比整個 CFG 小，剛好是一個 EBB。</p>
+  </section>
+
+  <section class="prose">
+    <h2>每條路徑都像一個 block，但前綴要重用</h2>
+    <p>EBB 裡從入口到某個 block 的每條路徑，執行起來就像一段直線程式碼：⟨B<sub>0</sub>, B<sub>3</sub>, B<sub>4</sub>⟩ 可以看成 m<sub>0</sub>、n<sub>0</sub>、q<sub>0</sub>、r<sub>1</sub>、e<sub>0</sub>、s<sub>0</sub>、u<sub>0</sub> 七條運算接在一起，對它跑 LVN 就能抓到 q<sub>0</sub> 和 s<sub>0</sub> 重複。最笨的做法是對每條路徑各跑一次 LVN，但路徑會共用前綴：B<sub>0</sub> 會被分析三次，B<sub>3</sub> 兩次。要重用前綴的分析結果，處理完 ⟨B<sub>0</sub>, B<sub>3</sub>, B<sub>4</sub>⟩ 之後得有辦法把表恢復到 ⟨B<sub>0</sub>, B<sub>3</sub>⟩ 末端的狀態，再接著處理 B<sub>6</sub>。書上列了三種做法：</p>
+    <ul>
+      <li>在每個 block 的邊界把表的狀態記下來，需要的時候恢復。</li>
+      <li>反向走一遍路徑，把正向走的時候做的改動一條一條撤銷。</li>
+      <li>用一串接在一起的 hash 表（scoped hash table）當值表。進入一個 block 時開一張新表接在前驅的表外面，要撤銷這個 block 的影響，把它那張表刪掉就好。<span class="sn">這就是書上 4.5.1 節符號表的結構：進入一個語法作用域開一張表，查名字由內往外找。編譯器前端通常已經有一份實作。</span></li>
+    </ul>
+    <p>三種都可行，書上選第三種：最簡單、最快，而且前端的符號表通常已經有這個實作可以直接拿來用。每張表的大小可以照 block 的大小估。</p>
+  </section>
+
+  <section class="prose">
+    <h2>虛擬碼</h2>
+    <p>書上把演算法寫成一個 <span class="term" data-def="待處理清單。把還沒處理的項目放進去，每次取一個出來處理，處理中發現的新項目再放進去，直到清單空了為止。這裡放的是每個 EBB 的入口。">worklist</span> 迴圈加一個遞迴的 SVN 程序。這裡假設 LVN 已經改成在一串表上工作：查名字、查 key 都從最內層的表往外找，新的 entry 寫進最內層。LVN 的其他部分完全不變。</p>
+  </section>
+  <div class="cols">
+    <div class="col">
+<pre class="code"><span class="c">// Start the process</span>
+WorkList ← { entry block }
+Empty ← new table for Block
+while (WorkList is not empty) do
+  remove Block from WorkList
+  SVN(Block, Empty)
+free Empty</pre>
+      <p>WorkList 裡放的是每個 EBB 的入口。Empty 是一張永遠空著的表，當作每個 EBB 最外層的作用域。<span class="sn">「Empty ← new table for Block」是書上原文，這一行其實不屬於任何 block，只是開一張空表讓每個 EBB 入口有外層可以接。</span></p>
+    </div>
+    <div class="col">
+<pre class="code"><span class="c">// Superlocal value numbering algorithm</span>
+SVN(Block, Table)
+  t ← new table for Block
+  link Table as the surrounding scope for t
+  LVN(Block, t)
+  for each successor s of Block do
+    if |preds(s)| = 1 then
+      SVN(s, t)
+    else if s has not been processed then
+      add s to WorkList
+  free t</pre>
+      <p>只有一個前驅的後繼帶著 t 遞迴下去；其他後繼是新 EBB 的入口，丟進 WorkList。</p>
+    </div>
+  </div>
+  <section class="prose">
+    <ul>
+      <li><strong>遞迴就是在走 EBB 這棵樹。</strong>任何時刻活著的那串表，由內到外就是從目前的 block 回到 EBB 入口的路徑。SVN(B<sub>4</sub>, t) 回來的時候 B<sub>4</sub> 的表已經 free 掉，接下來 SVN(B<sub>6</sub>, t) 拿到的 t 正好是 ⟨B<sub>0</sub>, B<sub>3</sub>⟩ 末端的狀態，這就是上一節要的「恢復」。</li>
+      <li><strong>|preds(s)| = 1 的判斷在說「s 和我同一個 EBB」。</strong>s 只有一個前驅，而且那個前驅就是現在的 Block，所以執行到 s 時 t 裡的每一條都還成立。有兩個以上前驅的 s 是另一個 EBB 的入口，它的表要從 Empty 開始。</li>
+      <li><strong>WorkList 是集合，每個 block 只處理一次。</strong>B<sub>5</sub> 會被 B<sub>4</sub> 和 B<sub>6</sub> 各看到一次，「s has not been processed」擋掉第二次。取出的順序書上沒規定，這一頁先進先出。從入口到不了的 block 永遠不會進 WorkList，SVN 不會處理它。</li>
+      <li><strong>free t 等於撤銷這個 block 的所有影響。</strong>這句話成立的前提是 block 的影響全部寫在 t 裡面，下一節講它什麼時候不成立。</li>
+    </ul>
+  </section>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">CFG 和程式碼（可以改）</p>
+        <textarea id="src" spellcheck="false" aria-label="CFG 和程式碼"></textarea>
+        <div class="errs" id="errs"></div>
+        <p class="hint"><code>B0:</code> 開始一個 block，第一個 block 是入口。block 裡每行一條運算，格式 <code>a ← b + c</code>、<code>a ← 17</code> 或 <code>a ← φ(b, c)</code>，箭頭可以打 <code>&lt;-</code> 或 <code>=</code>。block 最後一行 <code>→ B1, B3</code> 列出後繼，前面可以加 <code>(a &gt; b)</code> 之類的條件，<code>→ exit</code> 或不寫代表沒有後繼，沒有 fall-through。φ 的結果當成一個新值。LVN 用基本版，沒有交換律和常數摺疊。</p>
+      </div>
+      <div>
+        <p class="panel-title">執行</p>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
+        </div>
+        <p class="hint" id="phint"></p>
+        <p class="hint">CFG 裡實線的邊通到只有一個前驅的 block（同一個 EBB），虛線通到 join point。<i class="hit">綠底</i>的 block 是目前這串表的路徑，虛線框是在 WorkList 裡等著的。程式碼列表裡 <i class="hit">綠色</i> 是改寫後的運算，實心的 badge 是跨 block 的重用，<i class="miss">紫色</i> 是錯的改寫。右邊的表由內到外排，<i class="hit">綠底</i> 是這一步動到的 entry。</p>
+      </div>
+    </div>
+
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span>CFG 和運算</span><span class="sub" id="nlabel"></span></div>
+        <div class="graph" id="graph"></div>
+        <div class="listing" id="listing"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>虛擬碼</span><span class="sub" id="phase"></span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+        <div class="vars" id="vars"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>scoped hash 表</span><span class="sub" id="tstat"></span></div>
+        <div class="tables" id="tables"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>名字只能定義一次，否則表會漏</h2>
+    <p>LVN 的虛擬碼寫「if T<sub>i</sub> has no table entry then create a table entry」，然後「store k's value number in the table entry for T<sub>i</sub>」。放到一串表上，T<sub>i</sub> 的 entry 是在 EBB 裡第一次定義它的那個 block 的表裡建的，之後再定義 T<sub>i</sub>，找到的是那個舊 entry，新值編號直接寫進去。假設 x 在 B<sub>0</sub>、B<sub>4</sub>、B<sub>6</sub> 都有定義：B<sub>0</sub> 建了 x 的 entry，B<sub>4</sub> 重新定義 x 時把新值編號寫進 B<sub>0</sub> 的表，然後 B<sub>4</sub> 的表被 free，B<sub>0</sub> 的表裡 x 的值編號還是 B<sub>4</sub> 寫的那個。接著處理 B<sub>6</sub>，它讀到的 x 是 B<sub>4</sub> 的值，但執行到 B<sub>6</sub> 根本不會經過 B<sub>4</sub>。free t 沒有撤銷乾淨，表漏了。</p>
+    <p>書上的解法是在 <span class="term" data-def="static single assignment。每個名字在整段程式裡只被賦值一次；同一個變數在不同地方的賦值改成不同的名字（x<sub>0</sub>、x<sub>1</sub>），控制流匯合處用 φ 函數選值。"><strong>SSA 形式</strong></span>上跑 SVN。SSA 保證每個名字只在一個地方定義，所以名字的 entry 一定建在定義它的那個 block 的表裡，不會有「第二次定義寫進別人的表」這回事，free 掉定義它的那張表就等於把它的影響全部收回。同時 SSA 也解掉 LVN 那一頁講的 naming 問題：key 底下記的名字永遠不會被覆寫。範例「非 SSA 名字」會跑出一條錯的改寫，「改成 SSA 名字」是同一段程式用 SSA 名字重寫，錯誤就消失了。<span class="sn">另一個書上沒走的修法是讓重新定義永遠寫進最內層的表，像符號表處理同名變數那樣遮蔽外層。但那會讓「key 底下的名字還有不有效」更難判斷，不如直接用 SSA。</span></p>
+  </section>
+
+  <section class="prose">
+    <h2>書上的例子跑出什麼</h2>
+    <p>跑完「書上的例子」，五條運算被改寫。<span class="sn">Cooper 的課程投影片用同一張 CFG，但 block 標成 A 到 G，對應是 A=B<sub>0</sub>、B=B<sub>1</sub>、C=B<sub>3</sub>、D=B<sub>4</sub>、E=B<sub>6</sub>、F=B<sub>5</sub>、G=B<sub>2</sub>。</span>B<sub>0</sub> 的 n<sub>0</sub> 和 B<sub>1</sub> 的 r<sub>0</sub> 是同一個 block 內的重複，LVN 本來就抓得到。另外三條是 SVN 多抓到的：B<sub>3</sub> 的 q<sub>0</sub> 和 B<sub>4</sub> 的 s<sub>0</sub> 命中 B<sub>0</sub> 表裡的 m<sub>0</sub>，B<sub>6</sub> 的 t<sub>0</sub> 命中 B<sub>3</sub> 表裡的 r<sub>1</sub>。注意 c<sub>0</sub>、d<sub>0</sub> 這些從 EBB 外面進來的值，是在第一次遇到它們的 block 的表裡發編號的，所以 B<sub>1</sub> 和 B<sub>3</sub> 各發了一套；不同路徑之間本來就不會互相比，所以沒有影響。</p>
+    <p>B<sub>5</sub> 和 B<sub>2</sub> 什麼都沒抓到。v<sub>0</sub> ← a<sub>0</sub> + b<sub>0</sub> 其實在進 B<sub>5</sub> 的每一條路徑上都算過了（B<sub>4</sub> 的 s<sub>0</sub>、B<sub>6</sub> 的 e<sub>1</sub> 之前的 q<sub>0</sub>，往上追都是 B<sub>0</sub> 的 m<sub>0</sub>），但 B<sub>5</sub> 是 join point，從空表開始，看不到。這是 SVN 的邊界：它只用「唯一前驅」這個最保守的條件，不去問「所有前驅是不是都經過同一個地方」。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>EBB 是 CFG 裡「只能從根進來」的一棵樹，樹上每條路徑執行起來都像一條 block。SVN 就是 LVN 加一串 scoped hash table：進入 block 開一張表接在前驅的表外面，離開時整張丟掉，任何時刻活著的那串表正好是從 EBB 入口到目前 block 的路徑。只有一個前驅的後繼帶著表遞迴下去，join point 當作新 EBB 的入口丟進 worklist、從空表開始。「丟掉表就等於撤銷」這件事要靠 SSA 才成立，名字能重複定義的話，新值會寫進別人的表，free 不乾淨。</p>
+    <p>join point 從空表開始是浪費的：B<sub>5</sub> 的兩個前驅都經過 B<sub>3</sub>，B<sub>3</sub> 表裡的東西在 B<sub>5</sub> 其實都還成立。把「唯一前驅」換成「<span class="term" data-def="從入口到 B 的每一條路徑都經過 D，就說 D 支配（dominate）B。B 的所有前驅都經過的最近那個 block 叫 B 的 immediate dominator。">dominator</span>」，就是書上 8.5.2 節的 dominator-based value numbering，需要先算出第九章的 dominator 樹；再往上是整個 CFG 的 global value numbering。同一章末的復習題問把<a href="../tree-balance/">樹高平衡</a>推到 superlocal 範圍會遇到什麼：沿著 ⟨B<sub>0</sub>, B<sub>3</sub>, B<sub>4</sub>⟩ 做完之後要處理 ⟨B<sub>0</sub>, B<sub>3</sub>, B<sub>6</sub>⟩，B<sub>3</sub> 裡已經被改寫過的樹要怎麼復原，和這一頁的「前綴要重用」是同一個問題，但樹的改寫比 hash 表難撤銷。</p>
+    <p>這一頁把 φ 的結果當成新值，沒有比較它的參數；WorkList 的取出順序書上沒規定，這裡先進先出；LVN 用的是基本版，沒有交換律、常數摺疊和恆等式，那些在 <a href="../lvn/">LVN 頁</a>，接上來的方式一樣。load 和 store、跨 block 之後的死碼刪除，都不在這裡。</p>
+  </section>
+
+  <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, Chapter 8, Section 8.5.1（Superlocal Value Numbering）。虛擬碼和範例照書上的寫法；中譯本（第二版）裡是圖 8-12 和圖 8-13，EBB 的定義在同章 8.3 節。「非 SSA 名字」範例照 8.5.1 正文描述的情況編的。結語提到的題目是 8.5 節末的復習題 1。</p>
+</main>
+
+<script src="../../assets/site.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const OPS = { '+': '+', '-': '−', '*': '×', '/': '÷' };
+
+const PRESETS = [
+  { title: '書上的例子', hint: '{B0, B1, B3, B4, B6} 是一個 EBB，B5 和 B2 是 join point。看 B3 怎麼在 B0 的表裡找到 a0 + b0，B6 怎麼在 B3 的表裡找到 c0 + d0，以及 B5 為什麼什麼都找不到。',
+    src: `B0: m0 ← a0 + b0
+    n0 ← a0 + b0
+    (a0 > b0) → B1, B3
+B1: p0 ← c0 + d0
+    r0 ← c0 + d0
+    → B2
+B2: r2 ← φ(r0, r1)
+    y0 ← a0 + b0
+    z0 ← c0 + d0
+    → exit
+B3: q0 ← a0 + b0
+    r1 ← c0 + d0
+    (a0 > b0) → B4, B6
+B4: e0 ← b0 + 18
+    s0 ← a0 + b0
+    u0 ← e0 + f0
+    → B5
+B6: e1 ← a0 + 17
+    t0 ← c0 + d0
+    u1 ← e1 + f0
+    → B5
+B5: e2 ← φ(e0, e1)
+    u2 ← φ(u0, u1)
+    v0 ← a0 + b0
+    w0 ← c0 + d0
+    x0 ← e2 + f0
+    → B2` },
+  { title: '非 SSA 名字', hint: 'x 在 B0 定義、在 B4 重新定義。B4 把新值編號寫進 B0 的表，free B4 的表撤銷不掉，B6 讀到的 x 是錯的，寫出一條錯的改寫。',
+    src: `B0: x ← a + b
+    (a > b) → B1, B3
+B1: y ← x + c
+    → B2
+B3: p ← d + c
+    (a > b) → B4, B6
+B4: x ← d
+    → B5
+B6: w ← x + c
+    → B5
+B5: → B2
+B2: → exit` },
+  { title: '改成 SSA 名字', hint: '同一段程式，x 的兩次定義改名成 x0 和 x1。x1 的 entry 建在 B4 自己的表裡，free 掉就乾淨了，B6 的 x0 還是 B0 的值。',
+    src: `B0: x0 ← a + b
+    (a > b) → B1, B3
+B1: y ← x0 + c
+    → B2
+B3: p ← d + c
+    (a > b) → B4, B6
+B4: x1 ← d
+    → B5
+B6: w ← x0 + c
+    → B5
+B5: → B2
+B2: → exit` },
+  { title: '迴圈', hint: 'B1 的前驅是 B0 和它自己，所以 B1 是 EBB 入口，從空表開始，t0 ← a0 + b0 沒被認出和 n0 重複。B2 只有 B1 一個前驅，接著 B1 的表，u0 命中 t0。B1 看到後繼 B1 時它已經處理過，不會再加進 WorkList。',
+    src: `B0: i0 ← 0
+    n0 ← a0 + b0
+    → B1
+B1: i1 ← φ(i0, i2)
+    t0 ← a0 + b0
+    i2 ← i1 + 1
+    (i2 < n0) → B1, B2
+B2: u0 ← a0 + b0
+    → exit` },
+];
+
+const LINE = {
+  Dh: '// Start the process',
+  D0: 'WorkList ← { entry block }',
+  D1: 'Empty ← new table for Block',
+  D2: 'while (WorkList is not empty) do',
+  D3: '  remove Block from WorkList',
+  D4: '  SVN(Block, Empty)',
+  D5: 'free Empty',
+  Sh: '// Superlocal value numbering algorithm',
+  S0: 'SVN(Block, Table)',
+  S1: '  t ← new table for Block',
+  S2: '  link Table as the surrounding scope for t',
+  S3: '  LVN(Block, t)',
+  S4: '  for each successor s of Block do',
+  S5: '    if |preds(s)| = 1 then',
+  S6: '      SVN(s, t)',
+  S7: '    else if s has not been processed then',
+  S8: '      add s to WorkList',
+  S9: '  free t',
+};
+const PSEUDO = { drv: ['Dh', 'D0', 'D1', 'D2', 'D3', 'D4', 'D5'], svn: ['Sh', 'S0', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'] };
+
+// ---- parser: "Name:" starts a block, ops one per line, "→ A, B" ends it ----
+function parse(src) {
+  const blocks = [], errors = [];
+  let cur = null;
+  const operand = s => /^-?\d+$/.test(s) ? { kind: 'const', v: Number(s), key: String(Number(s)) }
+    : /^[A-Za-z_]\w*$/.test(s) ? { kind: 'name', v: s, key: s } : null;
+  src.split('\n').forEach((raw, idx) => {
+    const ln = idx + 1;
+    let t = raw.replace(/(#|\/\/).*$/, '').trim();
+    if (!t) return;
+    const bh = t.match(/^([A-Za-z_]\w*)\s*:\s*(.*)$/);
+    if (bh) {
+      if (blocks.some(b => b.name === bh[1])) errors.push(`第 ${ln} 行：block ${bh[1]} 定義了兩次。`);
+      cur = { name: bh[1], ops: [], succs: null, ln };
+      blocks.push(cur);
+      t = bh[2].trim();
+      if (!t) return;
+    }
+    if (!cur) { errors.push(`第 ${ln} 行：要先寫 block 的名字加冒號，例如 B0 那樣，運算才能放在它底下。`); return; }
+    const norm = t.replace(/->/g, '→').replace(/<-|←|:=/g, '=').replace(/−/g, '-').replace(/×/g, '*').replace(/÷/g, '/');
+    const br = norm.match(/^(?:\(.*\)\s*)?→\s*(.*)$/);
+    if (br) {
+      if (cur.succs) { errors.push(`第 ${ln} 行：block ${cur.name} 已經有一行後繼了。`); return; }
+      const list = br[1].trim();
+      cur.succs = list === '' || /^exit$/i.test(list) ? [] : list.split(/\s*,\s*/);
+      cur.succs.forEach(s => { if (!/^[A-Za-z_]\w*$/.test(s)) errors.push(`第 ${ln} 行：後繼「${s}」不是 block 的名字。`); });
+      return;
+    }
+    if (cur.succs) { errors.push(`第 ${ln} 行：後繼那一行要放在 block 的最後，「${t}」在它後面。`); return; }
+    let m = norm.match(/^([A-Za-z_]\w*)\s*=\s*(?:φ|phi)\s*\(([^)]*)\)$/i);
+    if (m) {
+      const args = m[2].split(/\s*,\s*/).map(s => s.trim()).filter(Boolean);
+      cur.ops.push({ ln, dst: m[1], phi: args, text: `${m[1]} ← φ(${args.join(', ')})` }); return;
+    }
+    m = norm.match(/^([A-Za-z_]\w*)\s*=\s*(-?\w+)\s*([-+*\/])\s*(-?\w+)$/);
+    if (m) {
+      const L = operand(m[2]), R = operand(m[4]);
+      if (!L || !R) { errors.push(`第 ${ln} 行：運算元要是名字或整數，「${!L ? m[2] : m[4]}」不是。`); return; }
+      cur.ops.push({ ln, dst: m[1], L, op: m[3], R, text: `${m[1]} ← ${L.key} ${OPS[m[3]]} ${R.key}` }); return;
+    }
+    m = norm.match(/^([A-Za-z_]\w*)\s*=\s*(-?\w+)$/);
+    if (m) {
+      const L = operand(m[2]);
+      if (!L) { errors.push(`第 ${ln} 行：運算元要是名字或整數，「${m[2]}」不是。`); return; }
+      cur.ops.push({ ln, dst: m[1], L, op: null, R: null, text: `${m[1]} ← ${L.key}` }); return;
+    }
+    errors.push(`第 ${ln} 行：看不懂「${t}」。格式是 a ← b + c、a ← 17、a ← φ(b, c)，或後繼 → B1, B2。`);
+  });
+  if (!blocks.length) errors.push('至少要有一個 block。');
+  const byName = new Map(blocks.map(b => [b.name, b]));
+  blocks.forEach(b => {
+    b.succs = [...new Set(b.succs || [])];
+    b.succs.forEach(s => { if (!byName.has(s)) errors.push(`block ${b.name} 的後繼 ${s} 不存在。`); });
+    b.preds = [];
+  });
+  if (errors.length) return { blocks, byName, errors };
+  blocks.forEach(b => b.succs.forEach(s => byName.get(s).preds.push(b.name)));
+  // reachability and EBB membership
+  const reach = new Set([blocks[0].name]), q = [blocks[0].name];
+  while (q.length) byName.get(q.shift()).succs.forEach(s => { if (!reach.has(s)) { reach.add(s); q.push(s); } });
+  blocks.forEach(b => { b.reach = reach.has(b.name); b.root = b.reach && (b === blocks[0] || b.preds.length !== 1); b.ebb = null; });
+  blocks.filter(b => b.root).forEach(r => {
+    const walk = n => { const b = byName.get(n); if (b.ebb) return; b.ebb = r.name; b.succs.forEach(s => { if (byName.get(s).preds.length === 1 && !byName.get(s).root) walk(s); }); };
+    walk(r.name);
+  });
+  blocks.forEach(b => { b.ebbSize = blocks.filter(o => o.ebb === b.name).length; });
+  return { blocks, byName, errors };
+}
+
+// ---- graph layout: levels by longest path on the DAG (back edges ignored) ----
+const NW = 46, NH = 26, GX = 30, GY = 32;
+function layoutGraph(P) {
+  const blocks = P.blocks, byName = P.byName, entry = blocks[0].name;
+  const state = new Map(), back = new Set(), post = [];
+  const dfs = u => { state.set(u, 1); byName.get(u).succs.forEach(v => { if (state.get(v) === 1) back.add(u + '>' + v); else if (!state.has(v)) dfs(v); }); state.set(u, 2); post.push(u); };
+  dfs(entry);
+  const topo = post.reverse();
+  const level = new Map(topo.map(n => [n, 0]));
+  topo.forEach(u => byName.get(u).succs.forEach(v => { if (!back.has(u + '>' + v)) level.set(v, Math.max(level.get(v), level.get(u) + 1)); }));
+  let maxL = Math.max(...level.values());
+  blocks.filter(b => !level.has(b.name)).forEach(b => level.set(b.name, maxL + 1));
+  const rows = [];
+  blocks.forEach(b => { const l = level.get(b.name); (rows[l] ||= []).push(b.name); });
+  const pos = new Map();
+  rows.forEach((row, l) => {
+    if (l > 0) {
+      const bary = n => { const ps = byName.get(n).preds.filter(p => pos.has(p)); return ps.length ? ps.reduce((a, p) => a + pos.get(p).x, 0) / ps.length : 0; };
+      row.sort((a, b) => bary(a) - bary(b));
+    }
+    row.forEach((n, i) => pos.set(n, { x: (i - (row.length - 1) / 2) * (NW + GX), y: l * (NH + GY), l }));
+  });
+  const widest = Math.max(...rows.map(r => r.length));
+  return { pos, back, width: widest * (NW + GX), height: rows.length * (NH + GY) - GY };
+}
+
+// ---- run SVN, snapshotting after every pseudocode line and every LVN operation ----
+function buildTrace(P) {
+  const blocks = P.blocks, byName = P.byName, entry = blocks[0];
+  const steps = [];
+  const EMPTY = { owner: 'Empty', names: new Map(), keys: new Map() };
+  const chain = [EMPTY];                                   // outermost first; innermost = last
+  const inner = () => chain[chain.length - 1];
+  const path = () => chain.slice(1).map(t => t.owner);
+  const chainText = () => chain.slice().reverse().map(t => t.owner).join(' → ');
+  const processed = [], worklist = [], rw = {};
+  let nextVN = 1;
+  const st = { block: null, s: null, np: null };
+  const vn = v => v == null ? '–' : `#${v}`;
+  const tbl = t => t.owner === 'Empty' ? 'Empty' : `${t.owner} 的表`;
+  const tag = (t, k) => `${t.owner}:${k}`;
+  const snapChain = () => chain.slice().reverse().map(t => ({ owner: t.owner,
+    names: [...t.names].map(([nm, e]) => ({ nm, vn: e.vn, lit: e.lit, writer: e.writer })),
+    keys: [...t.keys].map(([ks, e]) => ({ ks, vn: e.vn, name: e.name })) }));
+  const snap = (proc, lines, x) => steps.push(Object.assign({
+    proc, lines, block: st.block, s: st.s, np: st.np, op: null, opIdx: null, edge: null, nextVN,
+    worklist: worklist.slice(), processed: processed.slice(), path: path(), chain: snapChain(),
+    rw: Object.assign({}, rw), chN: [], chK: [], chV: [], say: '', warn: '', note: '',
+  }, x));
+  const findName = nm => { for (let i = chain.length - 1; i >= 0; i--) if (chain[i].names.has(nm)) return { e: chain[i].names.get(nm), t: chain[i] }; return null; };
+  const findKey = ks => { for (let i = chain.length - 1; i >= 0; i--) if (chain[i].keys.has(ks)) return { e: chain[i].keys.get(ks), t: chain[i] }; return null; };
+
+  const runOp = (B, op, idx) => {
+    const t = inner(), id = `${B}.${idx}`, T = op.dst;
+    const chN = [], chK = [], leaks = [];
+    let say = '', warn = '', note = '';
+    const getVN = o => {
+      const f = findName(o.key);
+      if (f) {
+        if (f.e.writer !== f.t.owner && !path().includes(f.e.writer)) leaks.push({ nm: o.key, e: f.e, t: f.t });
+        return { e: f.e, desc: `${o.key} 是 ${vn(f.e.vn)}${f.t === t ? '' : `（在 ${tbl(f.t)} 找到）`}` };
+      }
+      const e = { vn: nextVN++, lit: o.kind === 'const', writer: B };
+      t.names.set(o.key, e); chN.push(tag(t, o.key));
+      return { e, desc: `${o.key} 第一次出現，給新值編號 ${vn(e.vn)}${o.kind === 'const' ? '（常數）' : ''}，寫進 ${B} 的表` };
+    };
+    const storeT = v => {
+      const f = findName(T);
+      if (f) {
+        const old = f.e.vn; f.e.vn = v; f.e.writer = B; f.e.lit = false; chN.push(tag(f.t, T));
+        if (f.t !== t) warn = `${T} 已經有 entry，但在 ${tbl(f.t)}，不在 ${B} 自己的表裡。照 LVN 虛擬碼「store k's value number in the table entry for T」，值編號 ${vn(v)} 直接寫進那一格。等一下 free ${B} 的表時，這個改動不會被撤銷。`;
+        else if (old !== v) note = `${T} 原本是 ${vn(old)}，在同一個 block 裡被覆寫。`;
+      } else { t.names.set(T, { vn: v, lit: false, writer: B }); chN.push(tag(t, T)); }
+    };
+    const leakWarn = () => leaks.map(l => `${l.nm} 的值編號 ${vn(l.e.vn)} 是 ${l.e.writer} 在 ${tbl(l.t)} 裡寫的，${l.e.writer} 已經不在目前路徑上，執行到 ${B} 根本不會經過它。在 ${B} 裡 ${l.nm} 不是那個值，查到的東西是錯的。`).join('');
+    if (op.phi) {
+      const v = nextVN++;
+      say = `${op.text}：φ 把不同路徑進來的值合併成一個新值。這一頁不查它的參數，直接發新值編號 ${vn(v)} 給 ${T}。`;
+      storeT(v);
+    } else if (op.op === null) {
+      const L = getVN(op.L);
+      say = `${op.text}：單純賦值。${L.desc}，${T} 直接拿同一個值編號 ${vn(L.e.vn)}。`;
+      if (leaks.length) warn = leakWarn() + warn;
+      storeT(L.e.vn);
+    } else {
+      const L = getVN(op.L), R = getVN(op.R);
+      const ks = `⟨${vn(L.e.vn)}, ${OPS[op.op]}, ${vn(R.e.vn)}⟩`;
+      say = `${op.text}：${L.desc}；${R.desc}。key 是 ${ks}，`;
+      const hit = findKey(ks);
+      if (hit) {
+        const x = hit.e.name, cx = findName(x), cross = hit.t !== t;
+        const stale = !cx || cx.e.vn !== hit.e.vn;
+        let kind = cross ? 'cross' : 'reuse';
+        say += `在 ${tbl(hit.t)} 找到，底下的名字是 ${x}。改寫成 ${T} ← ${x}` + (cross ? `，這個值是 ${hit.t.owner} 算的，LVN 看不到它。` : '，同一個 block 裡的重複。');
+        if (leaks.length) { kind = 'bad'; warn = leakWarn() + `所以 ${T} ← ${x} 這條改寫是錯的。`; }
+        else if (stale) { kind = 'bad'; warn = `但 ${x} 現在的值編號不是 ${vn(hit.e.vn)}，它被覆寫過，${T} ← ${x} 拿到的不是這個值。這是 LVN 頁講的 naming 問題，SSA 名字不會發生。`; }
+        rw[id] = { text: `${T} ← ${x}`, kind, from: hit.t.owner };
+        chK.push(tag(hit.t, ks));
+        storeT(hit.e.vn);
+      } else {
+        const v = nextVN++;
+        t.keys.set(ks, { vn: v, name: T }); chK.push(tag(t, ks));
+        say += `整串表都沒有，在 ${B} 的表建新 entry，值編號 ${vn(v)}，記下名字 ${T}。`;
+        if (leaks.length) warn = leakWarn() + '這條沒命中，所以沒寫出錯的程式，但 key 本身就建錯了。';
+        storeT(v);
+      }
+    }
+    snap('svn', ['S3'], { op: id, opIdx: idx, chN, chK, chV: ['nextVN'], say, warn, note });
+  };
+
+  const svn = B => {
+    const blk = byName.get(B);
+    processed.push(B);
+    st.block = B; st.s = null; st.np = null;
+    const outer = inner();
+    const t = { owner: B, names: new Map(), keys: new Map() };
+    chain.push(t);
+    snap('svn', ['S0', 'S1', 'S2'], { opIdx: -1, chV: ['block', 'path', 'processed'], say: `SVN(${B}, ${tbl(outer)})：為 ${B} 開一張新表 t，外層作用域接到 ${tbl(outer)}。現在這串表由內到外是 ${chainText()}。` });
+    if (!blk.ops.length) snap('svn', ['S3'], { say: `LVN(${B}, t)：${B} 沒有運算，t 維持空的。` });
+    blk.ops.forEach((op, i) => runOp(B, op, i));
+    if (!blk.succs.length) snap('svn', ['S4'], { say: `${B} 沒有後繼，不用往下走。` });
+    for (const s of blk.succs) {
+      const sb = byName.get(s);
+      st.s = s; st.np = sb.preds.length;
+      if (sb.preds.length === 1) {
+        if (processed.includes(s)) {
+          snap('svn', ['S4', 'S5', 'S6'], { edge: [B, s], chV: ['s', 'np'], warn: `${s} 只有一個前驅，照虛擬碼要遞迴 SVN(${s}, t)，但 ${s} 已經處理過了：它是 CFG 的入口，唯一的前驅是從迴圈繞回來的 ${B}。再遞迴會無限迴圈，這裡跳過。` });
+          continue;
+        }
+        snap('svn', ['S4', 'S5', 'S6'], { edge: [B, s], chV: ['s', 'np'], say: `後繼 ${s} 只有一個前驅，就是 ${B}，所以執行到 ${s} 時 ${B} 一定剛跑完，t 裡的每一條都還成立。${s} 屬於同一個 EBB，帶著 t 遞迴 SVN(${s}, t)。` });
+        svn(s);
+        st.block = B; st.s = s; st.np = sb.preds.length;
+        snap('svn', ['S4'], { chV: ['block', 'path'], say: `SVN(${s}, t) 回來了，${s} 的表已經丟掉，這串表又是 ${chainText()}，正好是走到 ${B} 末端的狀態。繼續看 ${B} 的下一個後繼。` });
+      } else {
+        const done = processed.includes(s), inWl = worklist.includes(s);
+        if (!done && !inWl) {
+          worklist.push(s);
+          snap('svn', ['S4', 'S5', 'S7', 'S8'], { edge: [B, s], chV: ['s', 'np', 'worklist'], say: `後繼 ${s} 有 ${sb.preds.length} 個前驅，是 join point：執行到 ${s} 時不知道是從哪一邊來的，${B} 的表不能用。${s} 是另一個 EBB 的入口，加進 WorkList，之後從空表開始處理。` });
+        } else {
+          snap('svn', ['S4', 'S5', 'S7'], { edge: [B, s], chV: ['s', 'np'], say: `後繼 ${s} 有 ${sb.preds.length} 個前驅，是 join point，` + (done ? `而且已經處理過了，不再處理。` : `已經在 WorkList 裡了。WorkList 是集合，每個 block 只處理一次。`) });
+        }
+      }
+    }
+    chain.pop();
+    st.s = null; st.np = null;
+    const leaked = [];
+    chain.forEach(o => o.names.forEach((e, nm) => { if (e.writer === B) leaked.push(`${nm}（${tbl(o)}）`); }));
+    snap('svn', ['S9'], { chV: ['path'], say: `free t：丟掉 ${B} 的表，裡面 ${t.names.size} 個名字、${t.keys.size} 個 key 一起消失。${B} 對值表的影響到此撤銷。`,
+      warn: leaked.length ? `但 ${B} 寫進外層表的 ${leaked.join('、')}還留著。這些值編號只在經過 ${B} 的路徑上成立，之後同一個 EBB 裡別的路徑讀到它們就錯了。` : '' });
+  };
+
+  worklist.push(entry.name);
+  snap('drv', ['D0', 'D1'], { chV: ['worklist'], say: `WorkList 一開始只有入口 ${entry.name}。Empty 是一張永遠空著的表，當作每個 EBB 最外層的作用域。` });
+  while (worklist.length) {
+    const B = worklist.shift();
+    st.block = B;
+    const blk = byName.get(B);
+    snap('drv', ['D2', 'D3', 'D4'], { chV: ['worklist', 'block'], say: `WorkList 還有東西，取出 ${B}（${B === entry.name ? 'CFG 的入口' : `${blk.preds.length} 個前驅的 join point`}）。它是一個 EBB 的入口${blk.ebbSize > 1 ? `，這個 EBB 有 ${blk.ebbSize} 個 block` : '，而且是 trivial EBB，SVN 在這裡退化成 LVN'}。呼叫 SVN(${B}, Empty)。` });
+    svn(B);
+    st.block = null;
+  }
+  const all = Object.values(rw), cross = all.filter(r => r.kind === 'cross').length, bad = all.filter(r => r.kind === 'bad').length;
+  const unreach = blocks.filter(b => !b.reach).map(b => b.name);
+  snap('drv', ['D2', 'D5'], { chV: ['worklist', 'block'], say: `WorkList 空了，free Empty。總共改寫 ${all.length} 條` + (cross ? `，其中 ${cross} 條是跨 block 的重用，LVN 抓不到。` : '，沒有跨 block 的重用。') + (bad ? `${bad} 條是錯的改寫，見紫色標記。` : '') + (unreach.length ? `${unreach.join('、')} 從入口到不了，沒有處理。` : '') });
+  return steps;
+}
+
+// ---- UI ----
+const INIT = { proc: null, lines: [], block: null, s: null, np: null, op: null, opIdx: null, edge: null, nextVN: 1, worklist: [], processed: [], path: [], chain: [{ owner: 'Empty', names: [], keys: [] }], rw: {}, chN: [], chK: [], chV: [], say: '', warn: '', note: '' };
+const state = { pi: 0, k: 0, parsed: null, trace: [], layout: null };
+const total = () => state.trace.length;
+const cur = () => state.k === 0 ? INIT : state.trace[state.k - 1];
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
+
+function rebuild() {
+  state.parsed = parse($('src').value);
+  const ok = !state.parsed.errors.length;
+  state.layout = ok ? layoutGraph(state.parsed) : null;
+  state.trace = ok ? buildTrace(state.parsed) : [];
+  state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
+}
+
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.pi = i; $('src').value = c.src; rebuild(); renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderPseudoShell() {
+  $('pseudo').innerHTML = ['drv', 'svn'].map(proc =>
+    `<span class="proc" data-p="${proc}">` + PSEUDO[proc].map(id =>
+      `<span class="pl${id.endsWith('h') ? ' cm' : ''}${id === 'S0' ? ' head' : ''}" data-l="${id}">${LINE[id]}</span>`).join('') + '</span>').join('');
+}
+
+function renderGraph(s) {
+  const P = state.parsed, L = state.layout;
+  if (!L) { $('graph').innerHTML = ''; return; }
+  const W = Math.max(L.width, NW + 20) + 60, H = L.height + 24;
+  const cx = W / 2, top = 12;
+  const X = n => cx + L.pos.get(n).x - NW / 2, Y = n => top + L.pos.get(n).y;
+  const wl = new Set(s.worklist), done = new Set(s.processed), path = new Set(s.path);
+  let out = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="控制流程圖">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker>
+      <marker id="arr-join" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+      <marker id="arr-new" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--hit)"/></marker>
+    </defs>`;
+  P.blocks.forEach(b => b.succs.forEach(t => {
+    const isNew = s.edge && s.edge[0] === b.name && s.edge[1] === t;
+    const tb = P.byName.get(t), join = tb.preds.length !== 1 || tb.root;
+    const x1 = X(b.name) + NW / 2, y1 = Y(b.name), x2 = X(t) + NW / 2, y2 = Y(t);
+    const l1 = L.pos.get(b.name).l, l2 = L.pos.get(t).l;
+    let d;
+    if (b.name === t) d = `M ${x1 + NW / 2} ${y1 + 6} C ${x1 + NW / 2 + 26} ${y1 - 8}, ${x1 + NW / 2 + 26} ${y1 + NH + 8}, ${x1 + NW / 2} ${y1 + NH - 6}`;
+    else if (l2 <= l1) { const k = 26 + 8 * (l1 - l2); d = `M ${x1 + NW / 2} ${y1 + NH / 2} C ${x1 + NW / 2 + k} ${y1 + NH / 2}, ${x2 + NW / 2 + k} ${y2 + NH / 2}, ${x2 + NW / 2} ${y2 + NH / 2}`; }
+    else if (l2 === l1 + 1) d = `M ${x1} ${y1 + NH} L ${x2} ${y2}`;
+    else { const dx = (x1 <= cx ? -1 : 1) * (NW * 0.6 + 8 * (l2 - l1)); d = `M ${x1} ${y1 + NH} C ${x1 + dx} ${y1 + NH + 24}, ${x2 + dx} ${y2 - 24}, ${x2} ${y2}`; }
+    out += `<path class="edge${join ? ' join' : ''}${isNew ? ' new' : ''}" d="${d}" marker-end="url(#${isNew ? 'arr-new' : join ? 'arr-join' : 'arr'})"/>`;
+  }));
+  P.blocks.forEach(b => {
+    const n = b.name;
+    const cls = 'node' + (s.block === n ? ' cur' : path.has(n) ? ' path' : done.has(n) ? ' done' : wl.has(n) ? ' wl' : '') + (b.reach ? '' : ' unreach');
+    out += `<g class="${cls}"><rect x="${X(n)}" y="${Y(n)}" width="${NW}" height="${NH}" rx="4"/><text x="${X(n) + NW / 2}" y="${Y(n) + NH / 2 + 4}" text-anchor="middle">${esc(n)}</text></g>`;
+  });
+  $('graph').innerHTML = out + '</svg>';
+}
+
+function renderListing(s) {
+  const P = state.parsed;
+  const nOps = P.blocks.reduce((a, b) => a + b.ops.length, 0);
+  $('nlabel').textContent = `${P.blocks.length} 個 block · ${nOps} 條運算`;
+  const BADGE = r => r.kind === 'cross' ? `重用 ${esc(r.from)}` : r.kind === 'reuse' ? '重用' : '錯';
+  const done = new Set(s.processed), path = new Set(s.path);
+  $('listing').innerHTML = P.blocks.map(b => {
+    const n = b.name;
+    const role = !b.reach ? '不可達' : b.root ? (b.ebbSize > 1 ? 'EBB 入口' : 'trivial EBB') : `${b.ebb} 的 EBB`;
+    const info = `${b.preds.length} 個前驅 · ${role}`;
+    const hcls = 'bh' + (s.block === n ? ' cur' : path.has(n) ? ' path' : '') + (b.reach ? '' : ' unreach');
+    const rows = b.ops.map((op, i) => {
+      const id = `${n}.${i}`, r = s.rw[id];
+      let st;
+      if (s.block === n) st = s.opIdx === null ? 'done' : i < s.opIdx ? 'done' : i === s.opIdx ? 'cur' : 'todo';
+      else st = done.has(n) ? 'done' : 'todo';
+      const body = r
+        ? `<span class="orig gone">${esc(op.text)}</span><span class="arrow">→</span><span class="new${r.kind === 'bad' ? ' bad' : ''}">${esc(r.text)}</span>`
+        : `<span class="orig">${esc(op.text)}</span>`;
+      const badge = r ? `<span class="badge ${r.kind === 'cross' ? 'hit' : r.kind === 'bad' ? 'miss' : 'reuse'}">${BADGE(r)}</span>` : '';
+      return `<div class="op ${st}"><span class="num">${i + 1}</span><span>${body}</span><span>${badge}</span></div>`;
+    });
+    const br = `<div class="op br${done.has(n) && s.block !== n ? ' done' : s.block === n ? '' : ' todo'}"><span class="num"></span><span>→ ${b.succs.length ? esc(b.succs.join(', ')) : 'exit'}</span><span></span></div>`;
+    return `<div class="${hcls}"><span class="bn">${esc(n)}</span><span class="bi">${info}</span></div>` + rows.join('') + br;
+  }).join('');
+}
+
+function renderPseudo(s) {
+  document.querySelectorAll('#pseudo .pl').forEach(el => el.classList.toggle('on', s.lines.includes(el.dataset.l)));
+  document.querySelectorAll('#pseudo .proc').forEach(el => el.classList.toggle('active', s.proc === null || el.dataset.p === s.proc));
+  $('phase').textContent = s.proc === 'svn' ? `SVN(${s.block}, …)` : s.proc === 'drv' ? 'worklist 迴圈' : '';
+}
+
+function renderVars(s) {
+  const ch = new Set(s.chV);
+  const set = a => a.length ? `{${a.join(', ')}}` : '{ }';
+  const v = (key, name, val) => `<span class="var${ch.has(key) ? ' chg' : ''}"><span class="k">${name}</span><span class="v">${val ?? '–'}</span></span>`;
+  $('vars').innerHTML = v('worklist', 'WorkList', set(s.worklist)) + v('block', 'Block', s.block) + v('s', 's', s.s) + v('np', '|preds(s)|', s.np)
+    + v('path', '這串表', [...s.path].reverse().concat('Empty').join(' → ')) + v('processed', '處理過', set(s.processed)) + v('nextVN', '下一個值編號', `#${s.nextVN}`);
+}
+
+function renderTables(s) {
+  const chN = new Set(s.chN), chK = new Set(s.chK);
+  const onPath = new Set(s.path);
+  const vnOf = nm => { for (const t of s.chain) { const e = t.names.find(r => r.nm === nm); if (e) return e.vn; } return undefined; };
+  $('tstat').textContent = `${s.chain.length - 1} 張 + Empty`;
+  $('tables').innerHTML = s.chain.map((t, i) => {
+    const title = t.owner === 'Empty' ? 'Empty' : `${esc(t.owner)} 的表`;
+    const sub = i === 0 && t.owner !== 'Empty' ? 't，最內層' : t.owner === 'Empty' ? '最外層，永遠空的' : '外層';
+    if (!t.names.length && !t.keys.length) return `<div class="scope${i === 0 && t.owner !== 'Empty' ? ' top' : ''}"><h3><span>${title}</span><span class="sub">${sub}</span></h3><span class="empty">（空的）</span></div>`;
+    const nameRows = t.names.map(r => {
+      let tg = '';
+      if (r.writer !== t.owner) tg = onPath.has(r.writer) ? `<span class="tag wr">${esc(r.writer)} 寫入</span>` : `<span class="tag leak">${esc(r.writer)} 寫入，${esc(r.writer)} 已不在路徑上</span>`;
+      return `<tr class="${chN.has(`${t.owner}:${r.nm}`) ? 'chg' : ''}"><td>${esc(r.nm)}${r.lit ? ' <span class="c">（常數）</span>' : ''}</td><td class="vn">#${r.vn}</td><td>${tg}</td></tr>`;
+    }).join('');
+    const keyRows = t.keys.map(r => {
+      const stale = vnOf(r.name) !== r.vn;
+      return `<tr class="${chK.has(`${t.owner}:${r.ks}`) ? 'chg' : ''}"><td>${esc(r.ks)}</td><td class="vn">#${r.vn}</td><td><span class="${stale ? 'stale' : ''}">${esc(r.name)}</span>${stale ? '<span class="tag leak">已失效</span>' : ''}</td></tr>`;
+    }).join('');
+    return `<div class="scope${i === 0 ? ' top' : ''}"><h3><span>${title}</span><span class="sub">${sub}</span></h3>`
+      + (nameRows ? `<table class="tb"><thead><tr><th>名字</th><th>值編號</th><th></th></tr></thead><tbody>${nameRows}</tbody></table>` : '')
+      + (keyRows ? `<table class="tb"><thead><tr><th>key</th><th>值編號</th><th>名字</th></tr></thead><tbody>${keyRows}</tbody></table>` : '')
+      + '</div>';
+  }).join('');
+}
+
+function renderAll() {
+  const bad = state.parsed.errors.length > 0;
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && $('src').value === PRESETS[i].src));
+  $('errs').innerHTML = state.parsed.errors.map(e => `<span>${esc(e)}</span>`).join('');
+  $('phint').textContent = $('src').value === PRESETS[state.pi].src ? PRESETS[state.pi].hint : '';
+  const s = bad ? INIT : cur();
+  if (bad) { $('graph').innerHTML = ''; $('listing').innerHTML = ''; $('nlabel').textContent = ''; }
+  else { renderGraph(s); renderListing(s); }
+  renderPseudo(s);
+  renderVars(s);
+  renderTables(s);
+  const say = $('say');
+  if (bad) say.textContent = '程式碼有錯，修好之後再開始。';
+  else if (state.k === 0) say.textContent = '只有一張空的 Empty。按「下一步」開始跑 worklist 迴圈。';
+  else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '') + (s.note ? `<span class="note">${s.note}</span>` : '');
+}
+
+$('src').addEventListener('input', () => { rebuild(); renderAll(); });
+
+renderPresets();
+renderPseudoShell();
+$('src').value = PRESETS[0].src;
+rebuild();
+renderAll();
+</script>
+</body>
+</html>
