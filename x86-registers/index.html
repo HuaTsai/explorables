@@ -262,20 +262,20 @@ function aliasesOf(r) {
 }
 
 const NOTES = {
-  rax: ['乘除法的隱含運算元：<code>mul</code>/<code>div</code> 用 <code>rdx:rax</code> 當 128 位元的被乘數或被除數。', 'Linux syscall 編號放這裡，回來後也從這裡拿回傳值。', 'SysV 呼叫可變參數函式(如 <code>printf</code>)時，<code>al</code> 要先填入用了幾個 xmm 暫存器。'],
+  rax: ['乘除法的隱含運算元：<code>mul</code>/<code>div</code> 用 <code>rdx:rax</code> 當 128 位元的被乘數或被除數。', 'Linux syscall 編號放這裡，回來後也從這裡拿回傳值。', 'SysV 呼叫可變參數函式（如 <code>printf</code>）時，<code>al</code> 要先填入用了幾個 xmm 暫存器。'],
   rbx: ['最早的「base」暫存器，現在沒有特殊硬體用途。', '兩套 ABI 都列為 callee-saved，所以常被編譯器拿來放要跨越 <code>call</code> 的值。'],
   rcx: ['<code>shl</code>/<code>shr</code> 的可變位移量只能放 <code>cl</code>。', '<code>rep movsb</code> 這類字串指令用 <code>rcx</code> 當計數。', '<code>syscall</code> 指令會覆寫它（存返回位址），所以 SysV 把它排在第 4 個參數，避開 syscall 的前三個參數。'],
-  rdx: ['乘除法的高 64 位元；<code>cqo</code> 把 <code>rax</code> 的符號擴充進來。', '<code>in</code>/<code>out</code> 的 I/O port 編號。', 'SysV 回傳 128 位元值(如 <code>__int128</code>)時當第 2 個回傳暫存器。'],
+  rdx: ['乘除法的高 64 位元；<code>cqo</code> 把 <code>rax</code> 的符號擴充進來。', '<code>in</code>/<code>out</code> 的 I/O port 編號。', 'SysV 回傳 128 位元值（如 <code>__int128</code>）時當第 2 個回傳暫存器。'],
   rsi: ['Source Index：字串指令 <code>movs</code>/<code>lods</code> 的來源指標。', 'SysV 當第 2 個參數，Win64 卻是 callee-saved，兩套 ABI 的角色完全相反。'],
   rdi: ['Destination Index：字串指令 <code>movs</code>/<code>stos</code> 的目的指標。', 'SysV 的第 1 個參數，Win64 的 callee-saved。'],
-  rbp: ['傳統上是 frame pointer，指向目前 stack frame 的底。', '開 <code>-fomit-frame-pointer</code>(<code>-O1</code> 以上預設)後就是一個普通的 callee-saved 暫存器。'],
+  rbp: ['傳統上是 frame pointer，指向目前 stack frame 的底。', '開 <code>-fomit-frame-pointer</code>（<code>-O1</code> 以上預設）後就是一個普通的 callee-saved 暫存器。'],
   rsp: ['<code>push</code>/<code>pop</code>/<code>call</code>/<code>ret</code> 都會隱含修改它。', 'SysV 要求執行 <code>call</code> 的瞬間 <code>rsp</code> 必須是 16 的倍數，所以常看到看似多餘的 <code>push rax</code> 或 <code>sub rsp, 8</code>。', '定址時不能當 index 暫存器，只能當 base。'],
   r8: ['x86-64 新增，用到需要 REX prefix，指令多 1 byte。'],
   r9: ['x86-64 新增，用到需要 REX prefix，指令多 1 byte。'],
   r10: ['SysV 下是 caller-saved，但不傳參數；編譯器用來放 static chain(巢狀函式)。', 'Linux syscall 的第 4 個參數用 <code>r10</code> 而不是 <code>rcx</code>，因為 <code>rcx</code> 會被 <code>syscall</code> 指令覆寫。'],
   r11: ['<code>syscall</code> 指令會把 <code>rflags</code> 存進來，所以兩套 ABI 都當它是 caller-saved。', 'PLT 跳板也會用它當暫時暫存器。'],
   r12: ['定址時當 base 需要額外的 SIB byte(和 <code>rsp</code> 編碼衝突)。'],
-  r13: ['定址時沒有位移量也要補一個 0 位移(和 <code>rbp</code> 編碼衝突)。'],
+  r13: ['定址時沒有位移量也要補一個 0 位移（和 <code>rbp</code> 編碼衝突）。'],
   r14: ['x86-64 新增，callee-saved。'],
   r15: ['x86-64 新增，callee-saved;PIC 程式碼在 32-bit 時代用 <code>ebx</code> 放 GOT,64-bit 改用 <code>rip</code> 相對定址後不再需要。'],
 };
@@ -381,7 +381,7 @@ function renderDetail() {
       <p class="empty">下一條要執行的指令位址。不能直接 <code>mov</code> 它，只能靠 <code>jmp</code>、<code>call</code>、<code>ret</code>、分支間接改變。</p></div>
     <div><h3>備註</h3><ul class="notes">
       <li>x86-64 新增 <code>rip</code> 相對定址：<code>mov rax, [rip + foo]</code>，讓位置無關程式碼（PIC）不需要 GOT 暫存器。你在 <code>-O2</code> 的組語裡看到的 <code>lea rdi, [rip + .L.str]</code> 就是這個。</li>
-      <li><code>call</code> 把下一條指令的位址(也就是當時的 <code>rip</code>)push 到 stack,<code>ret</code> 再 pop 回來。</li>
+      <li><code>call</code> 把下一條指令的位址（也就是當時的 <code>rip</code>）push 到 stack，<code>ret</code> 再 pop 回來。</li>
       <li>ABI 不給它角色，因為沒有人能直接指定它。</li></ul></div>`;
   } else if (r === 'rflags') {
     html = `<div><h3>rflags<small>狀態與控制旗標</small></h3>

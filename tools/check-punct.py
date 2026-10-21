@@ -7,7 +7,7 @@ Usage:
 
 What counts as prose: text nodes, the content / aria-label / alt / title /
 placeholder attributes, and string literals inside <script>. Code is left alone:
-<code>, <pre>, <style>, and anything that is not directly touching a Chinese
+<pre>, <style>, the inside of <code>, and anything that is not directly touching a Chinese
 character (so "x, y", "1.1.1.1", ".L2", "{key: row}", "rbx(callee-saved)" and
 dig-style ";;" lines stay as they are).
 
@@ -27,7 +27,8 @@ CJK = '一-鿿㐀-䶿　-〿＀-￯'
 A = f'[{CJK}]'
 TRANS = {',': '，', ':': '：', ';': '；', '?': '？', '!': '！'}
 
-SKIP = re.compile(r'<code\b[^>]*>[\s\S]*?</code>|<pre\b[^>]*>[\s\S]*?</pre>|<style\b[^>]*>[\s\S]*?</style>', re.I)
+SKIP = re.compile(r'<pre\b[^>]*>[\s\S]*?</pre>|<style\b[^>]*>[\s\S]*?</style>', re.I)
+CODE = re.compile(r'<code\b[^>]*>[\s\S]*?</code>', re.I)
 TAG = re.compile(r'<[^>]+>')
 ATTR = re.compile(r'\b(content|aria-label|alt|title|placeholder)="([^"]*)"')
 SCRIPT = re.compile(r'(<script\b[^>]*>)([\s\S]*?)(</script>)', re.I)
@@ -57,11 +58,23 @@ def fix_text(t):
     return t
 
 
+def with_code_hidden(chunk, fn):
+    # Inline <code>…</code> is replaced by an opaque placeholder while fn runs, so a
+    # pair of parentheses that wraps a code span, like 物件(<code>xmm</code> spill),
+    # is still seen as one pair touching Chinese. The code itself is never touched.
+    codes = []
+    def stash(m):
+        codes.append(m.group(0))
+        return f'\x01{len(codes) - 1}\x02'
+    fixed = fn(CODE.sub(stash, chunk))
+    return re.sub(r'\x01(\d+)\x02', lambda m: codes[int(m.group(1))], fixed)
+
+
 def fix_prose(html):
     out, pos = [], 0
     for m in SKIP.finditer(html):
-        out.append(fix_markup(html[pos:m.start()])); out.append(m.group(0)); pos = m.end()
-    out.append(fix_markup(html[pos:]))
+        out.append(with_code_hidden(html[pos:m.start()], fix_markup)); out.append(m.group(0)); pos = m.end()
+    out.append(with_code_hidden(html[pos:], fix_markup))
     return ''.join(out)
 
 
@@ -77,12 +90,8 @@ def fix_markup(chunk):
 
 def fix_script(js):
     # Inside scripts, only the parts of string literals that touch Chinese are
-    # prose. Skip embedded <code>…</code> markup the same way as in HTML.
-    out, pos = [], 0
-    for m in re.finditer(r'<code\b[^>]*>[\s\S]*?</code>', js):
-        out.append(fix_text(js[pos:m.start()])); out.append(m.group(0)); pos = m.end()
-    out.append(fix_text(js[pos:]))
-    return ''.join(out)
+    # prose. Embedded <code>…</code> markup is hidden the same way as in HTML.
+    return with_code_hidden(js, fix_text)
 
 
 def fix_html(html):
