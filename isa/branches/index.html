@@ -6,99 +6,24 @@
 <title>條件分支：flags 與比較跳轉合一</title>
 <meta name="description" content="同一個 if (a < b) 在 x86-64、AArch64、RISC-V 上逐條執行，看 x86 和 ARM 怎麼把比較結果塞進 flags 再由跳轉指令讀出來，RISC-V 為什麼一條指令就做完。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has the C source, the a/b inputs and the global
    controls on top, then three lanes (one per ISA): listing, flags panel, one sentence. */
-:root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* 這一步寫入 / 條件成立 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* 這一步讀取 / 條件不成立 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;         /* 目前這一條 */
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-h3 { font-size: 1rem; line-height: 1.3; margin: 0; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-i.hit, i.miss { font-style: normal; font-weight: 700; }
-i.hit { color: var(--hit); }
-i.miss { color: var(--miss); }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-input[type="text"] { font: inherit; font-family: var(--font-mono); font-size: 0.88rem; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0.25rem 0.5rem; width: 9rem; }
-
-/* tables */
-.table-wrap { overflow-x: auto; }
-table.cmp { border-collapse: collapse; font-size: 0.9rem; min-width: 38rem; width: 100%; }
-.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
-.cmp td.name { font-weight: 700; white-space: nowrap; }
-.cmp td code { white-space: nowrap; }
+table.cmp { min-width: 38rem; }
 .cmp td .why { color: var(--muted); font-size: 0.8rem; display: block; }
-
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.presets button { font-size: 0.88rem; }
 .presets .sp { flex: 1 1 1rem; }
 .inputs { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; align-items: center; font-size: 0.9rem; }
 .inputs label { display: inline-flex; align-items: center; gap: 0.35rem; }
-
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.75; background: var(--bg); border-radius: 4px; overflow-x: auto; white-space: pre; }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+.inputs input[type="text"] { font-size: 0.88rem; background: var(--surface); padding: 0.25rem 0.5rem; width: 9rem; }
+.bench .code { background: var(--bg); border: 0; font-size: 0.82rem; line-height: 1.75; }
 .interp { margin-top: 0.6rem; font-size: 0.85rem; font-family: var(--font-mono); line-height: 1.6; }
 .interp .use { font-weight: 600; color: var(--hit); }
 .interp .dim { color: var(--muted); }
 
-/* lanes */
-.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
-.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
-.lane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
-.lane-name { font-weight: 700; font-size: 0.95rem; }
-.lane-sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
+/* 三個 lane 裡的東西：狀態標籤、組語列表、flags 面板、每個 lane 自己的一句話 */
+.panel-head .sub { margin-left: 0.4rem; }
 .tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; white-space: nowrap; }
 .tag.hit { background: var(--hit); color: var(--surface); }
 .tag.miss { background: var(--miss); color: var(--surface); }
@@ -127,16 +52,11 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; min-width: 38rem; widt
 .verdict .yes { color: var(--hit); font-weight: 600; }
 .verdict .no { color: var(--miss); font-weight: 600; }
 .noflags { color: var(--muted); font-size: 0.85rem; }
-.say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 5.2em; }
+.panel .say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 5.2em; }
 
-/* static three-column code comparison */
-.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 980px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+/* 說明裡的三欄程式碼比較 */
 .col .panel-title { margin-bottom: 0.3rem; }
-.col .code { font-size: 0.8rem; }
-.col .code .c { color: var(--muted); }
 .col .code .hl { background: var(--mark); border-radius: 2px; }
-.col p { font-size: 0.88rem; color: var(--muted); margin-top: 0.4rem; }
 </style>
 </head>
 <body>
@@ -149,14 +69,14 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; min-width: 38rem; widt
 
   <section class="prose">
     <h2>兩種模型</h2>
-    <p><strong>x86-64 和 AArch64：比較寫 flags，跳轉讀 flags。</strong><code>cmp a, b</code> 做一次減法 a − b，結果本身丟掉，只把結果的四個性質寫進 flags 暫存器（x86 叫 RFLAGS，ARM 叫 NZCV）：</p>
+    <p><strong>x86-64 和 AArch64：比較寫 flags，跳轉讀 flags。</strong><code>cmp a, b</code> 做一次減法 a − b，結果本身丟掉，只把結果的四個性質寫進 <span class="term" data-def="又叫狀態暫存器。不出現在運算元裡的隱藏暫存器，每個 bit 記錄上一次算術結果的一個性質；x86 叫 RFLAGS，ARM 叫 NZCV。">flags 暫存器</span>（x86 叫 RFLAGS，ARM 叫 NZCV）：</p>
     <ul>
       <li><strong>ZF / Z</strong>（zero）：結果是不是零。a == b 就看它。</li>
       <li><strong>SF / N</strong>（sign / negative）：結果的最高 bit，也就是把結果當有號數時是不是負的。</li>
-      <li><strong>OF / V</strong>（overflow）：把兩邊當有號數時，減法有沒有溢位。例如 −2<sup>63</sup> − 1 會溢位成正數。</li>
+      <li><strong>OF / V</strong>（overflow）：把兩邊當有號數時，減法有沒有<span class="term" data-def="運算的正確結果超出暫存器能表示的範圍，存進去的值因此錯了：有號數看 OF，無號數看 CF。">溢位</span>。例如 −2<sup>63</sup> − 1 會溢位成正數。</li>
       <li><strong>CF / C</strong>（carry）：把兩邊當無號數時有沒有借位。<strong>這一個 x86 和 ARM 定義相反</strong>：x86 的 CF=1 表示有借位（a &lt; b 無號），ARM 的 C=1 表示<em>沒有</em>借位（a ≥ b 無號）。</li>
     </ul>
-    <p>接著跳轉指令挑它需要的 flag 來看。有號的「小於」不能只看 SF，因為溢位會把符號翻掉，正確公式是 <strong>SF ≠ OF</strong>（ARM：N ≠ V）。無號的「小於」只看借位：x86 <strong>CF = 1</strong>，ARM <strong>C = 0</strong>。相等看 <strong>ZF = 1</strong>。</p>
+    <p>接著跳轉指令挑它需要的 flag 來看。有號的「小於」不能只看 SF，因為溢位會把符號翻掉，正確公式是 <strong>SF ≠ OF</strong>（ARM：N ≠ V）。無號的「小於」只看借位：x86 <strong>CF = 1</strong>，ARM <strong>C = 0</strong>。相等看 <strong>ZF = 1</strong>。<span class="sn">x86 的 <code>jl</code> / <code>jge</code> 和 <code>jnge</code> / <code>jnl</code> 是同一條指令的別名，ARM 的 <code>b.lo</code> 和 <code>b.cc</code>、<code>b.hs</code> 和 <code>b.cs</code> 也是。編譯器通常把 <code>if (cond) 做事</code> 翻成「條件<em>不</em>成立就跳過」，所以下面會看到 <code>jge</code> 而不是 <code>jl</code>。</span></p>
     <p><strong>RISC-V：比較和跳轉是同一條。</strong><code>blt a0, a1, L</code> 讀兩個暫存器、做有號比較、成立就跳。沒有 flags 暫存器，沒有「上一條指令留下的狀態」這回事。無號版本是 <code>bltu</code>，相等是 <code>beq</code>。代價是一條分支指令要塞兩個 5 bit 的暫存器欄位，位移只剩 12 bits（±4 KB）；x86 和 ARM 的條件跳轉不帶暫存器，位移可以更遠。</p>
   </section>
 
@@ -173,7 +93,6 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; min-width: 38rem; widt
       </tbody>
     </table>
   </div>
-  <p class="foot">x86 的 <code>jl</code> / <code>jge</code> 和 <code>jnge</code> / <code>jnl</code> 是同一條指令的別名，ARM 的 <code>b.lo</code> 和 <code>b.cc</code>、<code>b.hs</code> 和 <code>b.cs</code> 也是。編譯器通常把 <code>if (cond) 做事</code> 翻成「條件<em>不</em>成立就跳過」，所以下面會看到 <code>jge</code> 而不是 <code>jl</code>。</p>
 
   <section class="bench" aria-label="逐步執行">
     <div class="row presets" id="presets"><span class="lbl">案例</span><span class="sp"></span>
@@ -192,25 +111,26 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; min-width: 38rem; widt
       </div>
       <div>
         <p class="panel-title">執行</p>
-        <div class="controls">
-          <button id="btn-reset" type="button">重來</button>
-          <button id="btn-prev" type="button">上一步</button>
-          <button id="btn-next" type="button" class="primary">下一步</button>
-          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-          <span class="count" id="count"></span>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
         </div>
         <p class="hint">每一步三邊各執行一條指令。flags 面板裡 <i class="hit">綠色</i> 是這一步寫入的 flag，<i class="miss">紫色</i> 是這一步讀取的 flag。a、b 可以輸入十進位（含負數）或 0x 開頭的十六進位，超過 64 位元會繞回。</p>
       </div>
     </div>
 
-    <div class="row lanes" id="lanes"></div>
+    <div class="row work" id="lanes"></div>
   </section>
 
   <section class="prose">
     <h2>沒有 flags 的代價與好處</h2>
-    <p>flags 最有用的地方不是分支，是<strong>多字長算術</strong>。兩個 128 位元數相加，低 64 位元相加產生的進位要加到高 64 位元。x86 和 ARM 的加法指令順手把進位寫進 CF / C，下一條 <code>adc</code>（add with carry）直接讀。RISC-V 沒有地方放進位，要自己算：低位相加之後，如果結果比其中一個加數還小，就是繞回了，也就是有進位。<code>sltu</code> 做這個比較，多出兩條指令。</p>
+    <p>flags 最有用的地方不是分支，是<strong><span class="term" data-def="multi-precision arithmetic。運算的數比暫存器寬，要拆成幾個 64 位元的字分段算，段和段之間靠進位銜接。">多字長算術</span></strong>。兩個 128 位元數相加，低 64 位元相加產生的進位要加到高 64 位元。x86 和 ARM 的加法指令順手把進位寫進 CF / C，下一條 <code>adc</code>（add with carry）直接讀。RISC-V 沒有地方放進位，要自己算：低位相加之後，如果結果比其中一個加數還小，就是繞回了，也就是有進位。<code>sltu</code> 做這個比較，多出兩條指令。</p>
   </section>
-  <div class="cols">
+  <div class="cols3">
     <div class="col">
       <p class="panel-title">x86-64</p>
 <pre class="code">mov rax, rdi
@@ -238,7 +158,7 @@ ret</pre>
     </div>
   </div>
   <section class="prose">
-    <p>反過來看，flags 是一個<strong>所有算術指令都在寫的共用暫存器</strong>。亂序執行的核心要把它當成一個真正的暫存器來改名（rename），不然每條 <code>add</code> 都要等前一條 <code>add</code> 寫完 flags。更麻煩的是 x86 有些指令只改部分 flags（<code>inc</code> 不碰 CF），讀 flags 的指令就得把兩個來源合併，早年的 Pentium 4 為此付出過停頓。RISC-V 選擇不要這個暫存器，多字長算術多付兩條指令，換取每條指令的依賴關係都明明白白寫在暫存器編號裡。</p>
+    <p>反過來看，flags 是一個<strong>所有算術指令都在寫的共用暫存器</strong>。亂序執行的核心要把它當成一個真正的暫存器來<span class="term" data-def="register renaming。核心把每次寫入的目的暫存器換成一個新的實體暫存器，讓只是重用同一個名字的指令不必互相等待。">改名</span>，不然每條 <code>add</code> 都要等前一條 <code>add</code> 寫完 flags。更麻煩的是 x86 有些指令只改部分 flags（<code>inc</code> 不碰 CF），讀 flags 的指令就得把兩個來源合併，早年的 Pentium 4 為此付出過停頓。RISC-V 選擇不要這個暫存器，多字長算術多付兩條指令，換取每條指令的依賴關係都明明白白寫在暫存器編號裡。</p>
   </section>
 
   <section class="prose">
@@ -397,18 +317,22 @@ function readInputs() {
   state.bad = a === null || b === null;
   state.ua = a ?? 0n; state.ub = b ?? 0n;
 }
+const total = () => Math.max(...lanes.map(l => l.trace.length));
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
 function rebuild() {
   const c = CASES[state.ci];
   lanes = ['x86', 'arm', 'rv'].map(id => buildLane(id, c, state.ua, state.ub));
+  state.k = 0;
+  stepper.setTotal(state.bad ? 0 : total());
+  stepper.set(0);
 }
-const total = () => Math.max(...lanes.map(l => l.trace.length));
 
 function renderPresets() {
   const p = $('presets');
   CASES.forEach((c, i) => {
     const b = document.createElement('button');
     b.type = 'button'; b.textContent = c.title;
-    b.addEventListener('click', () => { state.ci = i; state.k = 0; rebuild(); renderAll(); });
+    b.addEventListener('click', () => { state.ci = i; rebuild(); });
     p.insertBefore(b, p.querySelector('.sp'));
   });
 }
@@ -419,9 +343,9 @@ function renderLaneShell() {
   lanes.forEach(l => {
     const m = LANE_META[l.id];
     const el = document.createElement('div');
-    el.className = 'lane'; el.id = 'lane-' + l.id;
+    el.className = 'panel'; el.id = 'lane-' + l.id;
     el.innerHTML = `
-      <div class="lane-head"><span class="lane-name">${m.name}<span class="lane-sub">${m.sub}</span></span><span class="tag idle" data-r="tag"></span></div>
+      <div class="panel-head"><span>${m.name}<span class="sub">${m.sub}</span></span><span class="tag idle" data-r="tag"></span></div>
       <div class="listing" data-r="listing"></div>
       <div class="flagbox"><p class="panel-title">flags</p><div class="flags" data-r="flags"></div><div class="verdict" data-r="verdict"></div></div>
       <p class="say" data-r="say" aria-live="polite"></p>`;
@@ -485,30 +409,15 @@ function renderAll() {
   $('hint').textContent = c.hint;
   $('interp').innerHTML = state.bad ? '<span class="dim">輸入不是合法數字。</span>' : fmtInterp(state.ua, 'a', c.signed) + '<br>' + fmtInterp(state.ub, 'b', c.signed);
   document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.ci));
-  const T = total();
-  $('step-range').max = T; $('step-range').value = state.k;
-  $('count').textContent = `第 ${state.k} / ${T} 步`;
-  $('btn-prev').disabled = state.k === 0;
-  $('btn-next').disabled = state.k >= T || state.bad;
   renderLaneShell();
   lanes.forEach(renderLane);
 }
 
-$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
-$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
-$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
-$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
-['in-a', 'in-b'].forEach(id => $(id).addEventListener('input', () => { readInputs(); state.k = 0; rebuild(); renderAll(); }));
-document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
-  if (e.key === 'ArrowRight') $('btn-next').click();
-  if (e.key === 'ArrowLeft') $('btn-prev').click();
-});
+['in-a', 'in-b'].forEach(id => $(id).addEventListener('input', () => { readInputs(); rebuild(); }));
 
 renderPresets();
 readInputs();
 rebuild();
-renderAll();
 </script>
 </body>
 </html>

@@ -6,91 +6,21 @@
 <title>micro-op：複雜指令進了核心變成什麼</title>
 <meta name="description" content="同一段 C 在 x86-64、AArch64、RISC-V 上的指令，逐條餵進前端，看每條被拆成幾個 micro-op。可切換 Skylake、Zen 4、Apple M1、Neoverse V2 的模型。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has the C source and global controls on top,
    then three lanes (one per ISA) each with a CPU-model switch, the listing, the µop queue
    that fills as instructions are decoded, and one sentence per step. */
-:root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* 讀取 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* 寫入 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;         /* 目前這一條 / 跳轉 */
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-
-/* tables */
-.table-wrap { overflow-x: auto; }
-table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; min-width: 40rem; width: 100%; }
-.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+table.cmp { min-width: 40rem; }
 .cmp th small { display: block; font-weight: 400; }
-.cmp td.name { font-weight: 700; white-space: nowrap; }
-.cmp td.num { font-family: var(--font-mono); font-size: 0.85rem; white-space: nowrap; }
+.bench .code { background: var(--bg); border: 0; font-size: 0.82rem; line-height: 1.75; }
 
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.presets button { font-size: 0.88rem; }
-
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.75; background: var(--bg); border-radius: 4px; overflow-x: auto; white-space: pre; }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
-
-/* lanes */
-.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
-.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
-.lane-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.4rem 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
-.lane-name { font-weight: 700; font-size: 0.95rem; }
+/* 三個 lane 裡的東西：CPU 模型切換、組語列表、µop 佇列、每個 lane 自己的一句話 */
+.panel-head { flex-wrap: wrap; gap: 0.4rem 0.5rem; }
 .cpus { display: flex; gap: 0.3rem; flex-wrap: wrap; }
 .cpus button { font-size: 0.75rem; padding: 0.1rem 0.5rem; }
-.cpus .one { font-size: 0.75rem; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0.1rem 0.5rem; }
+.cpus .one { font-size: 0.75rem; font-weight: 400; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0.1rem 0.5rem; }
 
 .listing { padding: 0.5rem 0.75rem; display: flex; flex-direction: column; gap: 0.2rem; background: var(--bg); overflow-x: auto; }
 .ins { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.2rem 0.5rem; border-radius: 4px; border: 1px solid transparent; }
@@ -112,7 +42,7 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 .uop.mop { border-color: var(--ink); border-style: dashed; }
 .uop.new { outline: 2px solid var(--ink); outline-offset: 1px; }
 .queue .empty { color: var(--muted); font-size: 0.85rem; }
-.say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 6.4em; }
+.panel .say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 6.4em; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; align-items: center; font-size: 0.8rem; color: var(--muted); }
 .legend .uop { font-size: 0.65rem; }
@@ -128,9 +58,9 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 
   <section class="prose">
     <h2>指令是契約，µop 是實作</h2>
-    <p>x86 的 <code>inc qword ptr [rdi + rsi*8]</code> 一條指令要讀記憶體、加一、再寫回去。核心裡沒有一個單元能一口氣做完這三件事，所以前端的解碼器把它拆成幾個簡單操作：讀取、ALU、寫入。這些簡單操作就是 <strong>micro-op</strong>（µop），長得很像 RISC 指令。後端的排程器、執行單元、重排序緩衝只認得 µop，不知道原本的指令長什麼樣。</p>
-    <p>AArch64 和 RISC-V 的指令本來就接近 µop，但也不是一對一。AArch64 的 <code>stp x30, x19, [sp, #-16]!</code> 存兩個暫存器還順便更新 sp，在 Apple M1 上拆成 3 個 µop。反過來，x86 和 ARM 的核心都會把「比較 + 條件跳轉」兩條指令<strong>合併</strong>成一個 µop（macro-fusion）。拆和合在三邊都會發生。</p>
-    <p>重點是：µop 數是<strong>微架構</strong>的屬性，不是 ISA 的屬性。同一條 x86 指令在 Intel Skylake 和 AMD Zen 4 上拆法不同，同一條 AArch64 指令在 Apple M1 和 ARM Neoverse V2 上也不同。所以下面每條帶子都標明 CPU 模型，可以切換。數字來自 <code>llvm-mca</code>（LLVM 23）的排程模型，它是 LLVM 為了做指令排程而維護的近似，不是晶片廠的官方數據；RISC-V 用 SiFive P550 的模型，因為它是 llvm-mca 裡少數有亂序核心模型的 RISC-V 核心。</p>
+    <p>x86 的 <code>inc qword ptr [rdi + rsi*8]</code> 一條指令要讀記憶體、加一、再寫回去。核心裡沒有一個單元能一口氣做完這三件事，所以前端的解碼器把它拆成幾個簡單操作：讀取、ALU、寫入。這些簡單操作就是 <strong>micro-op</strong>（µop），長得很像 RISC 指令。後端的排程器、執行單元、<span class="term" data-def="reorder buffer，ROB。亂序核心裡記錄每個 µop 原本順序的佇列，µop 可以亂序執行，但照這裡的順序退休，讓結果看起來和循序執行一樣。">重排序緩衝</span>只認得 µop，不知道原本的指令長什麼樣。</p>
+    <p>AArch64 和 RISC-V 的指令本來就接近 µop，但也不是一對一。AArch64 的 <code>stp x30, x19, [sp, #-16]!</code> 存兩個暫存器還順便更新 sp，在 Apple M1 上拆成 3 個 µop。反過來，x86 和 ARM 的核心都會把「比較 + 條件跳轉」兩條指令<strong>合併</strong>成一個 µop（<span class="term" data-def="前端把相鄰的兩條指令（典型是比較加條件跳轉）合成一個 µop 一起送進後端，省掉一個 µop 的排程和退休成本。">macro-fusion</span>）。拆和合在三邊都會發生。</p>
+    <p>重點是：µop 數是<strong><span class="term" data-def="microarchitecture。某一顆核心實作 ISA 的方式：管線幾級、解碼器幾寬、怎麼拆 µop、有幾個執行單元。同一個 ISA 可以有很多種微架構。">微架構</span></strong>的屬性，不是 ISA 的屬性。同一條 x86 指令在 Intel Skylake 和 AMD Zen 4 上拆法不同，同一條 AArch64 指令在 Apple M1 和 ARM Neoverse V2 上也不同。所以下面每條帶子都標明 CPU 模型，可以切換。數字來自 <code>llvm-mca</code>（LLVM 23）的排程模型，它是 LLVM 為了做指令排程而維護的近似，不是晶片廠的官方數據；RISC-V 用 SiFive P550 的模型，因為它是 llvm-mca 裡少數有亂序核心模型的 RISC-V 核心。</p>
   </section>
 
   <section class="bench" aria-label="逐步解碼">
@@ -144,12 +74,13 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
       </div>
       <div>
         <p class="panel-title">前端</p>
-        <div class="controls">
-          <button id="btn-reset" type="button">重來</button>
-          <button id="btn-prev" type="button">上一步</button>
-          <button id="btn-next" type="button" class="primary">下一步</button>
-          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-          <span class="count" id="count"></span>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
         </div>
         <p class="hint">每一步，三個前端各解碼一條指令，把它展開的 µop 推進右下方的佇列。指令數少的 ISA 先解完就停下來等。</p>
         <div class="legend" style="margin-top:0.6rem">
@@ -159,12 +90,12 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
       </div>
     </div>
 
-    <div class="row lanes" id="lanes"></div>
+    <div class="row work" id="lanes"></div>
   </section>
 
   <section class="prose">
     <h2>三個案例跑完的結果</h2>
-    <p>格式：指令數 → µop 數。同一欄從上往下比是 ISA 的差異，同一列左右比是微架構的差異。</p>
+    <p>格式：指令數 → µop 數。同一欄從上往下比是 ISA 的差異，同一列左右比是微架構的差異。<span class="sn">Zen 4 那欄全部等於指令數，因為 AMD 的計數單位是 macro-op，一個 macro-op 可以包含讀取、運算、寫入，到了執行階段才分給不同單元。Intel 的 Skylake 模型數的是拆開後的 µop。兩家的數字不能直接相減。</span></p>
   </section>
   <div class="table-wrap">
     <table class="cmp" id="result">
@@ -172,11 +103,10 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
       <tbody></tbody>
     </table>
   </div>
-  <p class="foot">Zen 4 那欄全部等於指令數，因為 AMD 的計數單位是 macro-op，一個 macro-op 可以包含讀取、運算、寫入，到了執行階段才分給不同單元。Intel 的 Skylake 模型數的是拆開後的 µop。兩家的數字不能直接相減。</p>
 
   <section class="prose">
     <h2>結語</h2>
-    <p>ISA 是契約，µop 是實作，CISC 的複雜度被前端吸收掉了：x86 一條讀改寫指令進了核心，後端看到的和 RISC-V 的四條指令幾乎一樣，所以「x86 跑得慢」這個直覺不成立，執行階段大家做的事差不多。但吸收不是免費的，x86 的解碼器要處理變長指令、前綴、ModRM，面積和功耗明顯大於 ARM 的解碼器，Intel 和 AMD 的回答是 µop cache，解過一次的 µop 存起來，迴圈裡的指令不再經過解碼器。RISC 也會拆、也會合：AArch64 帶 pre-index 的 stp 拆成 3 個，Apple M1 把帶縮放的定址拆成 2 個，cmp 加分支在 x86 和 ARM 上都會合併成 1 個。「指令數等於 µop 數」在三邊都不成立。</p>
+    <p>ISA 是契約，µop 是實作，CISC 的複雜度被前端吸收掉了：x86 一條讀改寫指令進了核心，後端看到的和 RISC-V 的四條指令幾乎一樣，所以「x86 跑得慢」這個直覺不成立，執行階段大家做的事差不多。但吸收不是免費的，x86 的解碼器要處理變長指令、前綴、ModRM，面積和功耗明顯大於 ARM 的解碼器，Intel 和 AMD 的回答是 <span class="term" data-def="存放已解碼 µop 的小快取。命中時前端直接從這裡取 µop，不再經過解碼器，迴圈裡的程式碼大多走這條路。">µop cache</span>，解過一次的 µop 存起來，迴圈裡的指令不再經過解碼器。RISC 也會拆、也會合：AArch64 帶 pre-index 的 stp 拆成 3 個，Apple M1 把帶縮放的定址拆成 2 個，cmp 加分支在 x86 和 ARM 上都會合併成 1 個。「指令數等於 µop 數」在三邊都不成立。</p>
     <p>這一篇是系列的最後一頁，前面幾篇在這裡匯合：解碼器為什麼難，回頭看<a href="../encoding/">指令編碼</a>；會被拆開的讀改寫和帶縮放的 load 來自<a href="../addressing/">定址模式</a>；會被合併的 cmp 加跳轉來自<a href="../branches/">條件分支</a>。想往下看 µop 進了後端之後的事，llvm-mca 的 timeline view 和 uops.info 的實測表是兩個好起點。</p>
     <p>這裡的數字來自 llvm-mca 的排程模型，不是晶片廠公布的拆法，有幾個地方要打折：</p>
     <ul>
@@ -326,7 +256,7 @@ function renderPresets() {
   PRESETS.forEach((c, i) => {
     const b = document.createElement('button');
     b.type = 'button'; b.textContent = c.title;
-    b.addEventListener('click', () => { state.pi = i; state.k = 0; renderAll(); });
+    b.addEventListener('click', () => { state.pi = i; rebuild(); });
     p.appendChild(b);
   });
 }
@@ -336,12 +266,12 @@ function renderLaneShell() {
   host.innerHTML = '';
   LANES.forEach(l => {
     const el = document.createElement('div');
-    el.className = 'lane'; el.id = 'lane-' + l.id;
+    el.className = 'panel'; el.id = 'lane-' + l.id;
     const cpuBtns = l.cpus.length > 1
       ? l.cpus.map(([k, name]) => `<button type="button" data-cpu="${k}" class="${state.cpu[l.id] === k ? 'chosen' : ''}">${name}</button>`).join('')
       : `<span class="one">${l.cpus[0][1]}</span>`;
     el.innerHTML = `
-      <div class="lane-head"><span class="lane-name">${l.name}</span><span class="cpus">${cpuBtns}</span></div>
+      <div class="panel-head"><span>${l.name}</span><span class="cpus">${cpuBtns}</span></div>
       <div class="listing" data-r="listing"></div>
       <div class="qbox"><div class="qhead"><p class="panel-title">µop 佇列</p><span class="stat" data-r="stat"></span></div><div class="queue" data-r="queue"></div></div>
       <p class="say" data-r="say" aria-live="polite"></p>`;
@@ -388,11 +318,6 @@ function renderAll() {
   $('csrc').textContent = c.c;
   $('hint').textContent = c.hint;
   document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi));
-  const T = total();
-  $('step-range').max = T; $('step-range').value = state.k;
-  $('count').textContent = `第 ${state.k} / ${T} 步`;
-  $('btn-prev').disabled = state.k === 0;
-  $('btn-next').disabled = state.k >= T;
   renderLaneShell();
   LANES.forEach(renderLane);
 }
@@ -405,18 +330,16 @@ function renderResult() {
   ).join('');
 }
 
-$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
-$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
-$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
-$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
-document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
-  if (e.key === 'ArrowRight') $('btn-next').click();
-  if (e.key === 'ArrowLeft') $('btn-prev').click();
-});
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
+
+function rebuild() {
+  state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
+}
 
 renderPresets();
-renderAll();
+rebuild();
 renderResult();
 </script>
 </body>

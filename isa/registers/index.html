@@ -6,66 +6,17 @@
 <title>暫存器：16、31、32 個</title>
 <meta name="description" content="一個函式有 N 個變數要跨越一次函式呼叫存活。看 x86-64、AArch64、RISC-V 各自能把幾個留在暫存器裡，什麼時候開始擠到堆疊上。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has the C source and preset buttons on top,
    then three lanes (one per ISA): register-file grid, stack strip, real assembly, one sentence. */
-:root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* callee-saved：跨 call 會保留 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* caller-saved：跨 call 不保證 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;         /* 溢出到堆疊 */
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-i.hit, i.miss { font-style: normal; font-weight: 700; }
-i.hit { color: var(--hit); }
-i.miss { color: var(--miss); }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-
-/* tables */
-.table-wrap { overflow-x: auto; }
-table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; min-width: 34rem; width: 100%; }
-.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
-.cmp td.name { font-weight: 700; white-space: nowrap; }
-.cmp td.num { font-family: var(--font-mono); font-size: 0.85rem; white-space: nowrap; }
+table.cmp { min-width: 34rem; }
 .cmp td.num b { color: var(--miss); }
+.presets button { font-family: var(--font-mono); }
+.bench .code { background: var(--bg); border: 0; font-size: 0.82rem; line-height: 1.75; }
 
-/* register-file grids in the intro */
+/* 說明裡的三個暫存器檔 */
 .files { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
 @media (max-width: 980px) { .files { grid-template-columns: minmax(0, 1fr); } }
 .file { min-width: 0; }
@@ -90,31 +41,13 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 .legend i.lr { border: 2px solid var(--hit); }
 .legend i.spill { background: var(--mark); }
 
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.presets button { font-size: 0.88rem; font-family: var(--font-mono); }
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.75; background: var(--bg); border-radius: 4px; overflow-x: auto; white-space: pre; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
-
-/* lanes */
-.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
-.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
-.lane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
-.lane-name { font-weight: 700; font-size: 0.95rem; }
-.lane-sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
+/* 三個 lane 裡的東西：溢出標籤、暫存器檔、堆疊格、組語、每個 lane 自己的一句話 */
+.panel-head .sub { margin-left: 0.4rem; }
 .tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; white-space: nowrap; }
 .tag.hit { background: var(--hit); color: var(--surface); }
 .tag.miss { background: var(--miss); color: var(--surface); }
-.lane .block { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--line); }
-.lane .regs { grid-template-columns: repeat(8, 1fr); }
+.panel .block { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--line); }
+.panel .regs { grid-template-columns: repeat(8, 1fr); }
 .stack { display: flex; flex-wrap: wrap; gap: 0.2rem; align-items: flex-end; min-height: 2.2rem; }
 .slot { font-family: var(--font-mono); font-size: 0.68rem; line-height: 1.2; padding: 0.2rem 0.3rem; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); white-space: nowrap; }
 .slot.save { background: var(--hit-soft); }
@@ -134,7 +67,7 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 .asm-fold { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.3rem 0.75rem; font-size: 0.78rem; color: var(--muted); }
 .asm-fold label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
 .asm-fold input { accent-color: var(--hit); }
-.say { padding: 0.6rem 0.75rem; font-size: 0.9rem; min-height: 5.2em; }
+.panel .say { padding: 0.6rem 0.75rem; font-size: 0.9rem; min-height: 5.2em; }
 .key { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; font-size: 0.75rem; color: var(--muted); padding: 0.3rem 0.75rem 0.5rem; }
 .key i { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 2px; vertical-align: -0.1em; margin-right: 0.25rem; }
 .key i.save { background: var(--hit-soft); }
@@ -151,7 +84,7 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 
   <section class="prose">
     <h2>三個暫存器檔長什麼樣</h2>
-    <p>每個 ISA 的通用暫存器都不是「隨便用」：硬體把少數幾個綁定特殊用途，ABI（呼叫慣例）再把剩下的分成兩類。<strong>caller-saved</strong>（呼叫者負責保存）的暫存器，被呼叫的函式可以隨意覆寫，所以呼叫者要是有值想留住，得自己先存起來；<strong>callee-saved</strong>（被呼叫者負責保存）的暫存器，被呼叫的函式若要用，得先存到堆疊、用完還原。這個分類是軟體約定，硬體不知道，但它決定了跨越一次 <code>call</code> 時有幾個暫存器「免費」可用。</p>
+    <p>每個 ISA 的通用暫存器都不是「隨便用」：硬體把少數幾個綁定特殊用途，ABI（呼叫慣例）再把剩下的分成兩類。<strong><span class="term" data-def="呼叫者負責保存。被呼叫的函式可以隨意覆寫這些暫存器，呼叫者若有值要活過這次呼叫，得自己先存起來。">caller-saved</span></strong>（呼叫者負責保存）的暫存器，被呼叫的函式可以隨意覆寫，所以呼叫者要是有值想留住，得自己先存起來；<strong><span class="term" data-def="被呼叫者負責保存。函式若要用這些暫存器，進入時得先把舊值存到堆疊、返回前還原，所以呼叫者可以放心把值留在裡面跨過 call。">callee-saved</span></strong>（被呼叫者負責保存）的暫存器，被呼叫的函式若要用，得先存到堆疊、用完還原。這個分類是軟體約定，硬體不知道，但它決定了跨越一次 <code>call</code> 時有幾個暫存器「免費」可用。</p>
   </section>
 
   <div class="files" id="files"></div>
@@ -176,7 +109,7 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 
   <section class="prose">
     <h2>讓 N 個值跨越一次 call</h2>
-    <p>下面的函式從陣列讀 N 個值，呼叫一個外部函式 <code>g</code>，再用 <code>g</code> 的回傳值把 N 個值各加一次後相乘。乘法要等 <code>g</code> 回來才能算，所以 N 個值都得活過這次呼叫。活過呼叫只有兩條路：放在 callee-saved 暫存器裡（要先把舊值 push 到堆疊），或者直接溢出（spill）到堆疊。按 N 看 clang 23 在 <code>-O2</code> 下怎麼選。</p>
+    <p>下面的函式從陣列讀 N 個值，呼叫一個外部函式 <code>g</code>，再用 <code>g</code> 的回傳值把 N 個值各加一次後相乘。乘法要等 <code>g</code> 回來才能算，所以 N 個值都得活過這次呼叫。活過呼叫只有兩條路：放在 callee-saved 暫存器裡（要先把舊值 push 到堆疊），或者直接<span class="term" data-def="spill。暫存器不夠用時，編譯器把一個值暫時存到堆疊上，要用時再讀回來；每次溢出至少多一次 store 和一次 load。">溢出</span>到堆疊。按 N 看 clang 23 在 <code>-O2</code> 下怎麼選。</p>
   </section>
 
   <section class="bench" aria-label="跨 call 存活的值">
@@ -193,12 +126,12 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
       </div>
     </div>
 
-    <div class="row lanes" id="lanes"></div>
+    <div class="row work" id="lanes"></div>
   </section>
 
   <section class="prose">
     <h2>六個 N 跑完的結果</h2>
-    <p>格式：溢出到堆疊的值 / 指令總數 / 這個函式自己在堆疊上佔的 bytes。溢出數大於 0 的地方標紅。</p>
+    <p>格式：溢出到堆疊的值 / 指令總數 / 這個函式自己在堆疊上佔的 bytes。溢出數大於 0 的地方標紅。<span class="sn">AArch64 和 RISC-V 的堆疊 bytes 包含回傳位址（x30 / ra）那一格；x86 的回傳位址由 <code>call</code> 指令自己推進堆疊，不算在函式的 frame 裡。AArch64 的 frame 以 16 bytes 對齊，x86-64 在 call 之前也要 16 bytes 對齊，所以 N=4 時多了一個 <code>push rax</code> 當填充。</span></p>
   </section>
   <div class="table-wrap">
     <table class="cmp" id="result">
@@ -206,7 +139,6 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
       <tbody></tbody>
     </table>
   </div>
-  <p class="foot">AArch64 和 RISC-V 的堆疊 bytes 包含回傳位址（x30 / ra）那一格；x86 的回傳位址由 <code>call</code> 指令自己推進堆疊，不算在函式的 frame 裡。AArch64 的 frame 以 16 bytes 對齊，x86-64 在 call 之前也要 16 bytes 對齊，所以 N=4 時多了一個 <code>push rax</code> 當填充。</p>
 
   <section class="prose">
     <h2>結語</h2>
@@ -380,8 +312,8 @@ function renderLane(lane) {
   });
   const hidden = lines.length - shown.length;
   return `
-    <div class="lane" id="lane-${lane.id}">
-      <div class="lane-head"><span class="lane-name">${lane.name}<span class="lane-sub">${lane.sub}</span></span><span class="tag ${spillCls}">${spillTxt}</span></div>
+    <div class="panel" id="lane-${lane.id}">
+      <div class="panel-head"><span>${lane.name}<span class="sub">${lane.sub}</span></span><span class="tag ${spillCls}">${spillTxt}</span></div>
       <div class="block">${regGrid(lane, d.saved)}</div>
       <div class="block">
         <p class="panel-title">這個函式在堆疊上放了什麼（${d.frame} bytes）</p>

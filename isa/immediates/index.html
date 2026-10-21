@@ -6,76 +6,17 @@
 <title>立即值：一個常數要花幾條指令</title>
 <meta name="description" content="輸入一個 64 位元常數，看 x86-64、AArch64、RISC-V 各要用幾條指令、幾個 byte 才能把它放進暫存器，以及每條指令的立即值欄位塞了什麼。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has presets + a free input on top, the value split into
    16-bit chunks, then three lanes (one per ISA) each listing the instruction sequence with bytes,
    bit fields and one sentence per instruction. */
-:root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* 一條做完 / 和 clang 一致 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* 要拆好幾條 / 模擬 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-
-/* tables */
-.table-wrap { overflow-x: auto; }
-table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; min-width: 34rem; width: 100%; }
-.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
-.cmp td.name { font-weight: 700; white-space: nowrap; }
-.cmp td.num { font-family: var(--font-mono); font-size: 0.85rem; white-space: nowrap; }
-
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
+table.cmp { min-width: 34rem; }
 .presets button { font-size: 0.85rem; font-family: var(--font-mono); }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
 
-.inrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .inrow { grid-template-columns: minmax(0, 1fr); } }
 .inbox { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-.inbox input[type="text"] { font: inherit; font-family: var(--font-mono); font-size: 0.95rem; padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--ink); flex: 1 1 14rem; min-width: 0; }
+.inbox input[type="text"] { font-size: 0.95rem; padding: 0.35rem 0.6rem; flex: 1 1 14rem; min-width: 0; }
 .inbox input.bad { border-color: var(--miss); }
 .parsed { font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; word-break: break-all; }
 .chunks { display: flex; gap: 0.35rem; flex-wrap: wrap; }
@@ -86,13 +27,8 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 .chunk.z .h { color: var(--muted); font-weight: 400; }
 .chunk.o .h { color: var(--hit); }
 
-/* lanes */
-.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
-.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
-.lane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
-.lane-name { font-weight: 700; font-size: 0.95rem; }
-.lane-sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
+/* 三個 lane 裡的東西：比對標籤、每條指令的 bytes 和欄位、lane 底部的小結 */
+.panel-head .sub { margin-left: 0.4rem; }
 .tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; white-space: nowrap; }
 .tag.hit { background: var(--hit); color: var(--surface); }
 .tag.miss { background: var(--miss); color: var(--surface); }
@@ -108,13 +44,10 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 .field .k { font-size: 0.6rem; font-weight: 700; color: var(--muted); white-space: nowrap; letter-spacing: 0.02em; }
 .field .v { font-family: var(--font-mono); font-size: 0.74rem; white-space: nowrap; }
 .field .n { font-size: 0.64rem; color: var(--muted); white-space: nowrap; }
-.ins .say { font-size: 0.85rem; color: var(--ink); }
-.lane-foot { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.85rem; color: var(--muted); display: flex; flex-direction: column; gap: 0.4rem; }
+.ins .say { font-size: 0.85rem; min-height: 0; color: var(--ink); }
+.lane-foot { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.85rem; color: var(--muted); display: flex; flex-direction: column; gap: 0.4rem; margin-top: auto; }
 .lane-foot .alt { font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink); }
 .lane-foot .sum { font-weight: 700; color: var(--ink); }
-i.hit, i.miss { font-style: normal; font-weight: 700; }
-i.hit { color: var(--hit); }
-i.miss { color: var(--miss); }
 </style>
 </head>
 <body>
@@ -127,13 +60,13 @@ i.miss { color: var(--miss); }
 
   <section class="prose">
     <h2>立即值欄位永遠比指令短</h2>
-    <p>指令裡直接寫死的常數叫<strong>立即值</strong>（immediate）。它和 opcode、暫存器編號擠在同一條指令裡，所以能放的位元數一定小於指令長度。三個 ISA 給的空間差很多：</p>
+    <p>指令裡直接寫死的常數叫<strong><span class="term" data-def="immediate。直接編在指令位元裡的常數運算元，不用從暫存器或記憶體讀；欄位有幾個 bit 就只能放多大的數。">立即值</span></strong>。它和 opcode、暫存器編號擠在同一條指令裡，所以能放的位元數一定小於指令長度。三個 ISA 給的空間差很多：</p>
     <ul>
-      <li><strong>x86-64</strong>：大多數指令帶 8 或 32 位元立即值，32 位元的會符號擴展到 64 位元。另外有一條專用的 <code>mov r64, imm64</code>，10 bytes，直接塞完整 8 bytes。變長編碼的好處在這裡最明顯：常數再大也是一條。</li>
+      <li><strong>x86-64</strong>：大多數指令帶 8 或 32 位元立即值，32 位元的會<span class="term" data-def="sign extension。把較窄的有號數放進較寬的暫存器時，用它的最高 bit 填滿高位，負數仍是負數；所以 32 位元立即值能表示 ±2³¹ 的範圍，但不能表示 0x80000000 這種高位是 0 的大正數。">符號擴展</span>到 64 位元。另外有一條專用的 <code>mov r64, imm64</code>，10 bytes，直接塞完整 8 bytes。變長編碼的好處在這裡最明顯：常數再大也是一條。</li>
       <li><strong>AArch64</strong>：算術指令只有 12 bits（可選擇左移 12）。搬常數靠 <code>movz</code>、<code>movn</code>、<code>movk</code> 三條：每條帶 16 bits，可放在四個 16 bit 位置之一，最多四條拼出 64 位元。邏輯指令另有一套「位元遮罩」立即值，用 13 bits 描述「重複的連續 1」樣式，像 <code>0x00ff00ff00ff00ff</code> 這種一條就能做。</li>
-      <li><strong>RISC-V</strong>：<code>addi</code> 帶 12 bits 有號立即值，<code>lui</code> 給高 20 bits，兩條湊 32 位元。再大的沒有專用指令，只能 <code>lui</code>、<code>addi</code>、<code>slli</code>、<code>addi</code> 一路接力，最長 8 條；或者放進常數池，用一次記憶體讀取換回來。</li>
+      <li><strong>RISC-V</strong>：<code>addi</code> 帶 12 bits 有號立即值，<code>lui</code> 給高 20 bits，兩條湊 32 位元。再大的沒有專用指令，只能 <code>lui</code>、<code>addi</code>、<code>slli</code>、<code>addi</code> 一路接力，最長 8 條；或者放進<span class="term" data-def="literal pool。編譯器放在程式碼附近的一小塊資料區，存放塞不進指令的常數，用一條相對 PC 的 load 讀回來。">常數池</span>，用一次記憶體讀取換回來。</li>
     </ul>
-    <p>下面的 12 個 preset 是 clang 23 以 <code>-O2</code> 編 <code>long f(void) { return C; }</code> 的實際輸出，頁面載入時會把模擬結果和 clang 的 bytes 逐一比對，右上角標籤會告訴你是否一致。自訂的值是依照 LLVM 的物化演算法在瀏覽器裡模擬，可能和 clang 差一條。</p>
+    <p>下面的 12 個 preset 是 clang 23 以 <code>-O2</code> 編 <code>long f(void) { return C; }</code> 的實際輸出，頁面載入時會把模擬結果和 clang 的 bytes 逐一比對，右上角標籤會告訴你是否一致。自訂的值是依照 LLVM 的<span class="term" data-def="materialization。把一個常數「做」進暫存器裡：挑一串指令，執行完後暫存器的值等於那個常數。">物化</span>演算法在瀏覽器裡模擬，可能和 clang 差一條。</p>
   </section>
 
   <div class="table-wrap">
@@ -150,7 +83,7 @@ i.miss { color: var(--miss); }
   <section class="bench" aria-label="輸入常數">
     <div class="row presets" id="presets"><span class="lbl">preset</span></div>
 
-    <div class="row inrow">
+    <div class="row top">
       <div>
         <p class="panel-title">自訂常數（十進位或 0x 十六進位，可負）</p>
         <div class="inbox"><input id="val" type="text" spellcheck="false" autocomplete="off" aria-label="常數"></div>
@@ -164,7 +97,7 @@ i.miss { color: var(--miss); }
       </div>
     </div>
 
-    <div class="row lanes" id="lanes"></div>
+    <div class="row work" id="lanes"></div>
   </section>
 
   <section class="prose">
@@ -591,7 +524,7 @@ function renderLanes(v, isPreset) {
   for (const l of laneSpec(v, isPreset)) {
     const bytes = l.insns.reduce((s, i) => s + i.bytes.length, 0);
     const el = document.createElement('div');
-    el.className = 'lane';
+    el.className = 'panel';
     const tag = l.match === null ? `<span class="tag idle">模擬</span>` : l.match ? `<span class="tag hit">和 clang 一致</span>` : `<span class="tag miss">和 clang 不同</span>`;
     const insHtml = l.insns.map(i => `
       <div class="ins">
@@ -604,7 +537,7 @@ function renderLanes(v, isPreset) {
     if (l.extra.pool) foot.push(`超過兩條，clang 預設改從常數池載入：<span class="alt">${l.extra.pool}</span>（2 條 + 1 次記憶體讀取）`);
     if (l.extra.note) foot.push(l.extra.note);
     el.innerHTML = `
-      <div class="lane-head"><span class="lane-name">${l.name}<span class="lane-sub">${l.sub}</span></span>${tag}</div>
+      <div class="panel-head"><span>${l.name}<span class="sub">${l.sub}</span></span>${tag}</div>
       <div class="lane-body">${insHtml}</div>
       <div class="lane-foot">${foot.map(f => `<span>${f}</span>`).join('')}</div>`;
     host.appendChild(el);

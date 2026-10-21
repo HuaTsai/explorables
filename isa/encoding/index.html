@@ -6,95 +6,21 @@
 <title>指令編碼：定長與變長</title>
 <meta name="description" content="同一段 C 在 x86-64、AArch64、RISC-V 上編成的機器碼，一個 byte 一個 byte 餵給解碼器，看哪一個 ISA 什麼時候才知道「這條指令有多長」。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has the C source and global controls on top,
    then three lanes (one per ISA) each with its listing + byte cells, the bit-field strip of
    the current instruction, and one sentence. */
-:root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* 長度已知 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* 長度未知 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;         /* 目前這一條 */
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-i.hit, i.miss { font-style: normal; font-weight: 700; }
-i.hit { color: var(--hit); }
-i.miss { color: var(--miss); }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-
-/* tables */
-.table-wrap { overflow-x: auto; }
-table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; min-width: 34rem; width: 100%; }
-.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
-.cmp td.name { font-weight: 700; white-space: nowrap; }
-.cmp td.num { font-family: var(--font-mono); font-size: 0.85rem; white-space: nowrap; }
+table.cmp { min-width: 34rem; }
 .cmp tr.total td { font-weight: 700; border-bottom: none; }
-
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.presets button { font-size: 0.88rem; }
 .presets .sp { flex: 1 1 1rem; }
 .toggle { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.88rem; cursor: pointer; }
 .toggle input { accent-color: var(--hit); }
+.bench .code { background: var(--bg); border: 0; font-size: 0.82rem; line-height: 1.75; }
 
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.75; background: var(--bg); border-radius: 4px; overflow-x: auto; white-space: pre; }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
-
-/* lanes */
-.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
-.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
-.lane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
-.lane-name { font-weight: 700; font-size: 0.95rem; }
-.lane-sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
+/* 三個 lane 裡的東西：狀態標籤、指令和 byte 格、目前這條的欄位、每個 lane 自己的一句話 */
+.panel-head .sub { margin-left: 0.4rem; }
 .tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; white-space: nowrap; }
 .tag.hit { background: var(--hit); color: var(--surface); }
 .tag.miss { background: var(--miss); color: var(--surface); }
@@ -125,11 +51,8 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 .field.ext { background: var(--hit-soft); }
 .field.pend { background: var(--miss-soft); }
 .fields .empty { align-self: center; }
-.say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 5.2em; }
-.say .mono { font-size: 0.85em; }
-
-/* takeaway list */
-.three li strong { font-weight: 700; }
+.panel .say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 5.2em; }
+.panel .say .mono { font-size: 0.85em; }
 </style>
 </head>
 <body>
@@ -144,9 +67,9 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
     <h2>解碼器先要知道這條有多長</h2>
     <p>CPU 執行指令前要先找到它的邊界：這條從哪個 byte 開始、到哪個 byte 結束，下一條才知道從哪裡接。對三個 ISA 來說，這件事的難度完全不同：</p>
     <ul>
-      <li><strong>x86-64</strong>：一條指令 1 到 15 bytes。要讀 prefix、opcode，有時還要讀 ModRM 和 SIB，才知道後面還有沒有位移和立即值。長度是一邊讀一邊發現的。</li>
+      <li><strong>x86-64</strong>：一條指令 1 到 15 bytes。要讀 <span class="term" data-def="opcode 前面可選的 byte，修改指令的意思：REX 前綴把運算擴成 64 位元或讓暫存器編號多一個 bit，其他前綴改運算元大小、segment 或加鎖。">prefix</span>、opcode，有時還要讀 <span class="term" data-def="x86 緊接在 opcode 後面的一個 byte，分成 mod、reg、rm 三個欄位，說明運算元是暫存器還是記憶體、後面要不要再跟 SIB 和位移。">ModRM</span> 和 <span class="term" data-def="scale-index-base。x86 在 ModRM 之後可選的一個 byte，把位址寫成 base + index × scale 時用它指定三個部分。">SIB</span>，才知道後面還有沒有位移和立即值。長度是一邊讀一邊發現的。</li>
       <li><strong>AArch64</strong>（64 位元 ARM）：每條固定 4 bytes。不用讀內容就知道邊界，一次抓 32 bytes 就是 8 條指令，可以同時解碼。</li>
-      <li><strong>RISC-V</strong>（RV64GC）：基本指令 4 bytes，加上 C 擴充後常用指令可以壓成 2 bytes。看第一個 byte 的最低 2 bits 就知道是哪一種。</li>
+      <li><strong>RISC-V</strong>（RV64GC）：基本指令 4 bytes，加上 <span class="term" data-def="RISC-V 的壓縮指令擴充（RVC）。把最常用的指令另外給一套 16 位元編碼，和 32 位元編碼混放；RV64GC 的 C 就是它。">C 擴充</span>後常用指令可以壓成 2 bytes。看第一個 byte 的最低 2 bits 就知道是哪一種。</li>
     </ul>
     <p>下面四個案例都是一兩行 C，用 clang 23 以 <code>-O2</code> 編成三種目標的機器碼，byte 是 <code>llvm-objdump</code> 印出來的，不是手寫的。x86 以 Intel 語法顯示（目的在左）。三條帶子各有自己的節拍：x86 一步讀 1 byte，AArch64 一步讀 4 bytes，RISC-V 先偷看 2 bits 再讀整條。步數本身就是故事的一部分。</p>
   </section>
@@ -164,23 +87,24 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
       </div>
       <div>
         <p class="panel-title">解碼器</p>
-        <div class="controls">
-          <button id="btn-reset" type="button">重來</button>
-          <button id="btn-prev" type="button">上一步</button>
-          <button id="btn-next" type="button" class="primary">下一步</button>
-          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-          <span class="count" id="count"></span>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
         </div>
         <p class="hint">每一步，三個解碼器各自往前走一格。某個 ISA 先解完就停下來等。右上角的標籤是那個解碼器「現在知不知道這條指令有多長」。</p>
       </div>
     </div>
 
-    <div class="row lanes" id="lanes"></div>
+    <div class="row work" id="lanes"></div>
   </section>
 
   <section class="prose">
     <h2>四個案例跑完的結果</h2>
-    <p>同樣的 C，三邊編出來的 byte 數和指令數。x86 和 AArch64 固定不變，RISC-V 這欄跟著上面的 C 擴充開關走。</p>
+    <p>同樣的 C，三邊編出來的 byte 數和指令數，格式是 bytes / 指令數。x86 和 AArch64 固定不變，RISC-V 這欄跟著上面的 C 擴充開關走。<span class="sn">這四個函式太小，數字只能看趨勢；真實程式的 code density 統計大約是 x86-64 和 RV64GC 相近，AArch64 大 10% 到 20%，而 RV64G（關掉 C）會再大 25% 到 30%。</span></p>
   </section>
   <div class="table-wrap">
     <table class="cmp" id="result">
@@ -188,7 +112,6 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
       <tbody></tbody>
     </table>
   </div>
-  <p class="foot">格式：bytes / 指令數。這四個函式太小，數字只能看趨勢；真實程式的 code density 統計大約是 x86-64 和 RV64GC 相近，AArch64 大 10% 到 20%，而 RV64G（關掉 C）會再大 25% 到 30%。</p>
 
   <section class="prose">
     <h2>結語</h2>
@@ -470,13 +393,20 @@ function buildLanes() {
   ];
 }
 const total = () => Math.max(...lanes.map(l => l.steps.length));
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
+function rebuild() {
+  buildLanes();
+  state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
+}
 
 function renderPresets() {
   const p = $('presets');
   CASES.forEach((c, i) => {
     const b = document.createElement('button');
     b.type = 'button'; b.textContent = c.title;
-    b.addEventListener('click', () => { state.ci = i; state.k = 0; buildLanes(); renderAll(); });
+    b.addEventListener('click', () => { state.ci = i; rebuild(); });
     p.insertBefore(b, p.querySelector('.sp'));
   });
 }
@@ -486,9 +416,9 @@ function renderLaneShell() {
   host.innerHTML = '';
   lanes.forEach(l => {
     const el = document.createElement('div');
-    el.className = 'lane'; el.id = 'lane-' + l.id;
+    el.className = 'panel'; el.id = 'lane-' + l.id;
     el.innerHTML = `
-      <div class="lane-head"><span class="lane-name">${l.name}<span class="lane-sub">${l.sub}</span></span><span class="tag idle" data-r="tag"></span></div>
+      <div class="panel-head"><span>${l.name}<span class="sub">${l.sub}</span></span><span class="tag idle" data-r="tag"></span></div>
       <div class="listing" data-r="listing"></div>
       <div class="fieldbox"><p class="panel-title">目前這條的欄位</p><div class="fields" data-r="fields"></div></div>
       <p class="say" data-r="say" aria-live="polite"></p>`;
@@ -554,11 +484,6 @@ function renderAll() {
   $('csrc').textContent = c.c;
   $('hint').textContent = c.hint;
   document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.ci));
-  const T = total();
-  $('step-range').max = T; $('step-range').value = state.k;
-  $('count').textContent = `第 ${state.k} / ${T} 步`;
-  $('btn-prev').disabled = state.k === 0;
-  $('btn-next').disabled = state.k >= T;
   renderLaneShell();
   lanes.forEach(renderLane);
   renderResult();
@@ -580,20 +505,10 @@ function renderResult() {
   ).join('') + `<tr class="total"><td class="name">合計</td><td class="num">${sum.x[0]} / ${sum.x[1]}</td><td class="num">${sum.a[0]} / ${sum.a[1]}</td><td class="num">${sum.r[0]} / ${sum.r[1]}</td></tr>`;
 }
 
-$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
-$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
-$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
-$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
-$('rvc').addEventListener('change', e => { state.rvc = e.target.checked; state.k = Math.min(state.k, 0); buildLanes(); renderAll(); });
-document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
-  if (e.key === 'ArrowRight') $('btn-next').click();
-  if (e.key === 'ArrowLeft') $('btn-prev').click();
-});
+$('rvc').addEventListener('change', e => { state.rvc = e.target.checked; rebuild(); });
 
 renderPresets();
-buildLanes();
-renderAll();
+rebuild();
 </script>
 </body>
 </html>

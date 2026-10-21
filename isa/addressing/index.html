@@ -6,94 +6,20 @@
 <title>定址模式：一條指令能算多複雜的位址</title>
 <meta name="description" content="同一個 C 的記憶體存取，x86-64、AArch64、RISC-V 各用幾條指令算出位址。逐步看位址算式被每條指令折疊掉哪一部分。">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
 <style>
 /* Layout: one reading column; the workbench has the C source and global controls on top,
    then three lanes (one per ISA): the address formula being folded, the asm listing, one sentence. */
-:root {
-  --bg: #eef1f0;
-  --surface: #f9fbfa;
-  --ink: #17211f;
-  --muted: #5b6b67;
-  --line: #cdd6d3;
-  --hit: #0a6f6a;          /* 位址算完了 */
-  --hit-soft: #d5ebe8;
-  --miss: #9b2f6b;         /* 還在算 */
-  --miss-soft: #f3dbe8;
-  --mark: #fdf0b8;         /* 目前這一條 */
-  --font-body: "Noto Sans TC", "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Noto Sans Mono CJK TC", ui-monospace, Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --surface: #161e1c; --ink: #dfe7e4; --muted: #93a39f; --line: #2b3835;
-    --hit: #56c9c0; --hit-soft: #123532; --miss: #ea86b8; --miss-soft: #3a1a2b;
-    --mark: #3d3610; color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.7; }
-.page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: flex; flex-direction: column; gap: 2.5rem; }
-
-h1 { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; margin: 0; text-wrap: balance; }
-h1 .mono { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; line-height: 1.3; margin: 0; text-wrap: balance; }
-p { margin: 0; }
-.lead { color: var(--muted); margin-top: 0.75rem; }
-.prose { display: flex; flex-direction: column; gap: 0.75rem; }
-.prose ul, .prose ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
-code, .mono { font-family: var(--font-mono); }
-code { font-size: 0.92em; }
-i.hit, i.miss { font-style: normal; font-weight: 700; }
-i.hit { color: var(--hit); }
-i.miss { color: var(--miss); }
-.back { display: inline-block; margin-bottom: 0.75rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--ink); }
-.foot { color: var(--muted); font-size: 0.85rem; }
-
-button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.75rem; cursor: pointer; }
-button:hover:not(:disabled) { border-color: var(--ink); }
-button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-button.chosen { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-:focus-visible { outline: 2px solid var(--hit); outline-offset: 2px; }
-
-/* tables */
-.table-wrap { overflow-x: auto; }
-table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; min-width: 36rem; width: 100%; }
-.cmp th, .cmp td { padding: 0.45rem 0.9rem 0.45rem 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-.cmp th { font-size: 0.8rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
-.cmp td.name { font-weight: 700; white-space: nowrap; }
-.cmp td.num { font-family: var(--font-mono); font-size: 0.85rem; white-space: nowrap; }
-.cmp td code { white-space: nowrap; }
+table.cmp { min-width: 36rem; }
 .cmp tr.total td { font-weight: 700; border-bottom: none; }
-
-/* workbench */
-.bench { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; }
-.row { padding: 1rem 1.25rem; }
-.row + .row { border-top: 1px solid var(--line); }
-.presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; }
-.presets .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 0.25rem; }
-.presets button { font-size: 0.88rem; font-family: var(--font-mono); }
-
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem 1.5rem; align-items: start; }
-@media (max-width: 760px) { .top { grid-template-columns: minmax(0, 1fr); } }
-.panel-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; margin: 0 0 0.5rem; }
-.code { margin: 0; padding: 0.6rem 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.75; background: var(--bg); border-radius: 4px; overflow-x: auto; white-space: pre; }
-.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.controls input[type="range"] { flex: 1 1 8rem; min-width: 0; accent-color: var(--hit); }
-.count { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; text-align: right; }
-.hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.6rem; }
+.presets button { font-family: var(--font-mono); }
+.bench .code { background: var(--bg); border: 0; font-size: 0.82rem; line-height: 1.75; }
 .goal { margin-top: 0.75rem; font-family: var(--font-mono); font-size: 0.95rem; }
 .goal .lbl { font-family: var(--font-body); color: var(--muted); font-size: 0.85rem; margin-right: 0.4rem; }
 
-/* lanes */
-.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
-@media (max-width: 980px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
-.lane { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; min-width: 0; }
-.lane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--line); }
-.lane-name { font-weight: 700; font-size: 0.95rem; }
-.lane-sub { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
+/* 三個 lane 裡的東西：狀態標籤、位址算式、組語列表、每個 lane 自己的一句話 */
+.panel-head .sub { margin-left: 0.4rem; }
 .tag { font-size: 0.75rem; font-weight: 700; line-height: 1.5; padding: 0 0.5rem; border-radius: 3px; white-space: nowrap; }
 .tag.hit { background: var(--hit); color: var(--surface); }
 .tag.miss { background: var(--miss); color: var(--surface); }
@@ -112,10 +38,8 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 .ins.done { color: var(--muted); }
 .ins.skip { color: var(--muted); opacity: 0.7; }
 .ins small { color: var(--muted); font-size: 0.72rem; margin-left: 0.4rem; }
-.say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 6.4em; }
-.say code { font-size: 0.85em; }
-
-.three li strong { font-weight: 700; }
+.panel .say { padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.9rem; min-height: 6.4em; }
+.panel .say code { font-size: 0.85em; }
 </style>
 </head>
 <body>
@@ -128,7 +52,7 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
 
   <section class="prose">
     <h2>load 指令能接受的位址寫法</h2>
-    <p>所謂<strong>定址模式</strong>（addressing mode），就是 load/store 指令的位址欄位允許寫成什麼樣子。允許的形式越多，常見的位址算術就越能在一條指令裡做完；形式越少，就要靠前面的算術指令先把位址算進暫存器。下表是三個 ISA 的清單，<code>base</code>、<code>index</code> 都是暫存器，<code>disp</code>、<code>imm</code> 是寫死在指令裡的常數。</p>
+    <p>所謂<strong><span class="term" data-def="addressing mode。load/store 指令的位址欄位允許寫成什麼樣子，例如只能「暫存器加常數」，或是可以「暫存器加暫存器乘倍數加常數」。">定址模式</span></strong>，就是 load/store 指令的位址欄位允許寫成什麼樣子。允許的形式越多，常見的位址算術就越能在一條指令裡做完；形式越少，就要靠前面的算術指令先把位址算進暫存器。下表是三個 ISA 的清單，<code>base</code>、<code>index</code> 都是暫存器，<code>disp</code>、<code>imm</code> 是寫死在指令裡的<span class="term" data-def="immediate 或 displacement。直接編在指令位元裡的常數，位元數有限，所以太大的常數放不進去。">常數</span>。</p>
   </section>
   <div class="table-wrap">
     <table class="cmp">
@@ -156,23 +80,24 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
       </div>
       <div>
         <p class="panel-title">逐步執行</p>
-        <div class="controls">
-          <button id="btn-reset" type="button">重來</button>
-          <button id="btn-prev" type="button">上一步</button>
-          <button id="btn-next" type="button" class="primary">下一步</button>
-          <input id="step-range" type="range" min="0" max="0" value="0" aria-label="步驟">
-          <span class="count" id="count"></span>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
         </div>
         <p class="hint">每一步，三邊各執行一條指令。先把位址算完的那邊就停下來等。<code>ret</code> 不算步驟。</p>
       </div>
     </div>
 
-    <div class="row lanes" id="lanes"></div>
+    <div class="row work" id="lanes"></div>
   </section>
 
   <section class="prose">
     <h2>四個案例跑完的結果</h2>
-    <p>算出位址並載入所需的指令數，不含 <code>ret</code>。</p>
+    <p>算出位址並載入所需的指令數，不含 <code>ret</code>。<span class="sn">x86 和 AArch64 的縮放各有限制：x86 的 scale 最大 8，AArch64 的縮放只能等於存取大小。所以第三個案例的 ×16 兩邊都得先用一條算術指令處理，差距縮小。RISC-V 不管怎樣都要先算，但開了 C 擴充後這些算術指令多半是 2 bytes，bytes 總數和另外兩邊差距不大，差的是指令數。</span></p>
   </section>
   <div class="table-wrap">
     <table class="cmp" id="result">
@@ -180,20 +105,19 @@ table.cmp { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: 
       <tbody></tbody>
     </table>
   </div>
-  <p class="foot">x86 和 AArch64 的縮放各有限制：x86 的 scale 最大 8，AArch64 的縮放只能等於存取大小。所以第三個案例的 ×16 兩邊都得先用一條算術指令處理，差距縮小。RISC-V 不管怎樣都要先算，但開了 C 擴充後這些算術指令多半是 2 bytes，bytes 總數和另外兩邊差距不大，差的是指令數。</p>
 
   <section class="prose">
     <h2>結語</h2>
     <p>定址模式是把常見的位址算術塞進 load 和 store：陣列索引和結構成員最常見，所以「base + index × 大小 + 常數」這個形狀被 x86 直接內建成一條指令的位址欄位。三個 ISA 剛好是三種哲學：x86 最寬，連縮放倍數都可以和存取大小無關；AArch64 給縮放和位移，但縮放綁死在存取大小；RISC-V 只留 base + 12 位元常數，其餘交給 <code>slli</code>、<code>add</code> 這類一般指令。代價差在指令數，不在 bytes：RISC-V 多出來的算術指令壓縮後常是 2 bytes，程式大小和 x86 差不多，真正的差異是同一件事要發出更多條指令，前端要更寬。這也是 RISC-V 後來加 Zba 擴充把縮放加法補回來的原因。</p>
     <p>位址算式裡的常數部分能放多大，和<a href="../immediates/">立即值</a>那一篇是同一個問題：12 bits 的位移放不下就得先湊常數。x86 那個很寬的位址欄位在編碼上要付 ModRM 和 SIB 兩個 byte，見<a href="../encoding/">指令編碼</a>；而帶縮放的 load 進了核心可能被拆成兩個 µop，見 <a href="../micro-ops/">micro-op</a>。</p>
-    <p>案例裡沒有迴圈，也假設程式不是位置無關碼，所以有幾件事看不到：</p>
+    <p>案例裡沒有迴圈，也假設程式不是<span class="term" data-def="position-independent code，PIC。不管被載入到哪個位址都能照常執行的機器碼，共享函式庫一定要是這種；位址都用相對 PC 或查表的方式取得。">位置無關碼</span>，所以有幾件事看不到：</p>
     <ul>
       <li>pre/post-index 在迴圈裡的價值。AArch64 的 <code>ldr x0, [x1], #8</code> 載入之後順便把 x1 往前推 8，迴圈裡每輪省一條 <code>add</code>；x86 和 RISC-V 都沒有這種會改 base 的 load。</li>
       <li>x86 的 <code>lea</code> 把定址模式當算術用：<code>lea rax, [rdi + rsi*8 + 16]</code> 只算位址不碰記憶體，等於一條免費的三運算元乘加。</li>
       <li>segment 暫存器。64 位元下只剩 <code>fs</code> 和 <code>gs</code> 在用，拿來放 thread-local 資料的起點。</li>
       <li>RISC-V 的 Zba 擴充：<code>sh1add</code>、<code>sh2add</code>、<code>sh3add</code> 一條做 <code>rd = rs1×2/4/8 + rs2</code>。用 <code>-march=rv64gc_zba</code> 重編第一個案例，<code>slli</code> + <code>add</code> 併成 <code>sh3add</code>，三條變兩條；但第三個案例的 ×16 不在 2、4、8 之內，還是三條。RVA22 以後的 profile 已把 Zba 列為必備。</li>
       <li>位置無關碼下的全域變數。編成共享函式庫時，<code>g</code> 可能被別的函式庫定義，三邊都要多一次間接：x86 經 <code>g@GOTPCREL</code>，AArch64 的 <code>adrp</code> 改指向 GOT，RISC-V 用 <code>auipc</code> 配 <code>%got_pcrel_hi</code> 再多一條 <code>ld</code>。</li>
-      <li>RISC-V 的 code model。本頁用預設的 medlow，<code>lui</code> 給絕對位址的高 20 位元，程式必須落在 ±2 GB 內；<code>-mcmodel=medany</code> 會改用 <code>auipc</code> 相對 PC，和 AArch64 的 <code>adrp</code> 思路一樣。</li>
+      <li>RISC-V 的 <span class="term" data-def="告訴編譯器程式碼和資料會落在位址空間的哪個範圍，決定取位址時用幾條指令、用絕對還是相對 PC 的形式。">code model</span>。本頁用預設的 medlow，<code>lui</code> 給絕對位址的高 20 位元，程式必須落在 ±2 GB 內；<code>-mcmodel=medany</code> 會改用 <code>auipc</code> 相對 PC，和 AArch64 的 <code>adrp</code> 思路一樣。</li>
     </ul>
   </section>
 </main>
@@ -283,7 +207,7 @@ function renderPresets() {
   CASES.forEach((c, i) => {
     const b = document.createElement('button');
     b.type = 'button'; b.textContent = c.title;
-    b.addEventListener('click', () => { state.ci = i; state.k = 0; renderAll(); });
+    b.addEventListener('click', () => { state.ci = i; rebuild(); });
     p.appendChild(b);
   });
 }
@@ -293,9 +217,9 @@ function renderLaneShell() {
   host.innerHTML = '';
   LANES.forEach(l => {
     const el = document.createElement('div');
-    el.className = 'lane'; el.id = 'lane-' + l.id;
+    el.className = 'panel'; el.id = 'lane-' + l.id;
     el.innerHTML = `
-      <div class="lane-head"><span class="lane-name">${l.name}<span class="lane-sub">${l.sub}</span></span><span class="tag idle" data-r="tag"></span></div>
+      <div class="panel-head"><span>${l.name}<span class="sub">${l.sub}</span></span><span class="tag idle" data-r="tag"></span></div>
       <div class="formula"><p class="panel-title">位址算式</p><div class="expr" data-r="expr"></div><p class="regs" data-r="regs"></p></div>
       <div class="listing" data-r="listing"></div>
       <p class="say" data-r="say" aria-live="polite"></p>`;
@@ -338,11 +262,6 @@ function renderAll() {
   $('goal').textContent = c.goal;
   $('hint').textContent = c.hint;
   document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.ci));
-  const T = total();
-  $('step-range').max = T; $('step-range').value = state.k;
-  $('count').textContent = `第 ${state.k} / ${T} 步`;
-  $('btn-prev').disabled = state.k === 0;
-  $('btn-next').disabled = state.k >= T;
   renderLaneShell();
   LANES.forEach(renderLane);
 }
@@ -356,18 +275,16 @@ function renderResult() {
   }).join('') + `<tr class="total"><td class="name">合計</td><td></td><td class="num">${sum.x86}</td><td class="num">${sum.arm}</td><td class="num">${sum.rv}</td></tr>`;
 }
 
-$('btn-next').addEventListener('click', () => { if (state.k < total()) { state.k++; renderAll(); } });
-$('btn-prev').addEventListener('click', () => { if (state.k > 0) { state.k--; renderAll(); } });
-$('btn-reset').addEventListener('click', () => { state.k = 0; renderAll(); });
-$('step-range').addEventListener('input', e => { state.k = +e.target.value; renderAll(); });
-document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
-  if (e.key === 'ArrowRight') $('btn-next').click();
-  if (e.key === 'ArrowLeft') $('btn-prev').click();
-});
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
+
+function rebuild() {
+  state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
+}
 
 renderPresets();
-renderAll();
+rebuild();
 renderResult();
 </script>
 </body>
