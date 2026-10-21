@@ -92,16 +92,6 @@ i.r, i.l { font-style: normal; font-weight: 600; }
     <h2>問題是什麼</h2>
     <p>稀疏卷積把每個 <span class="term" data-def="有值的體素。稀疏卷積只存這些格子的 feature，其餘空格既不存也不算。">active voxel</span> 的座標 <code>(b, z, y, x)</code> 壓成一個整數 <code>key</code>，存在 <code>keys[N]</code> 裡。<b>第 <i class="l">i</i> 個 key 就是 feature table 的第 <i class="l">i</i> 個 row</b>。建 <span class="term" data-def="稀疏卷積的查表：對每個 voxel 和每個 kernel 位置，記下對應的鄰居在 feature table 的第幾 row，卷積就照這張表搬 feature 來乘。">rulebook</span> 時，對每個 voxel 的每個鄰居座標算出 key，問：「這個鄰居是 active 的嗎？是的話它在第幾 row？」</p>
     <p>單筆查詢就是 Python 的 <code>table.get(q, -1)</code>。但一次要查幾百萬筆，而且在 GPU 上，所以要寫成不帶 Python 迴圈的 tensor 運算：每一行 code 對<b>整個</b> <code>queries</code> tensor 做一次，中間值都跟 <code>queries</code> 同形狀。這裡 <code>queries</code> 故意用二維 <code>[Q, K]</code>，對應「Q 個 voxel 各有 K 個鄰居」，看形狀怎麼一路保留到回傳值。</p>
-    <p>整段實作只有九行，下面的 workbench 會一行一行跑：</p>
-<pre class="code">def find_rows(keys, queries):
-    if keys.numel() == 0:
-        return torch.full_like(queries, -1)
-    order = torch.argsort(keys).to(torch.int32)
-    sorted_keys = keys[order]
-    pos = torch.searchsorted(sorted_keys, queries)
-    pos = torch.clamp(pos, max=keys.shape[0] - 1)
-    hit = sorted_keys[pos] == queries
-    return torch.where(hit, order[pos], -1)</pre>
   </section>
 
   <section class="bench" aria-label="逐步執行">
