@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>交付表現怎麼量：DORA 和 Little's law</title>
+<meta name="description" content="DORA 的五個交付指標各量什麼、怎麼演變，以及 Little's law 為什麼說在製品越多交付越慢。逐日模擬一個團隊的看板，對照 WIP 上限和部署頻率怎麼改變 lead time、失敗率和恢復時間。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+.ctrl-rows { display: flex; flex-direction: column; gap: 0.5rem; }
+.work.flow-work { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+
+/* 看板 */
+.board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.4rem; }
+.lane { border: 1px solid var(--line); border-radius: 4px; background: var(--bg); min-height: 11rem; display: flex; flex-direction: column; }
+.lane h3 { font-size: 0.75rem; color: var(--muted); padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; }
+.lane .cards { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.35rem; }
+.card { position: relative; font-family: var(--font-mono); font-size: 0.72rem; border: 1px solid var(--ink); border-radius: 3px; background: var(--surface); padding: 0.1rem 0.35rem; overflow: hidden; }
+.card .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--hit-soft); z-index: 0; }
+.card span { position: relative; z-index: 1; display: flex; justify-content: space-between; gap: 0.3rem; }
+.card small { color: var(--muted); }
+.card.new { border-color: var(--hit); box-shadow: inset 0 0 0 1px var(--hit); }
+.card.bad { border-color: var(--miss); background: var(--miss-soft); }
+.card.live { border-color: var(--line); color: var(--muted); }
+.card.live.new { color: var(--ink); border-color: var(--hit); }
+@media (max-width: 560px) { .board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* 部署紀錄 */
+.deploys { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.6rem; font-family: var(--font-mono); font-size: 0.7rem; }
+.dep { border: 1px solid var(--hit); color: var(--hit); border-radius: 3px; padding: 0 0.3rem; }
+.dep.fail { border-color: var(--miss); color: var(--miss); }
+.dep.hot { border-style: dashed; }
+.deploys .lbl { color: var(--muted); font-family: var(--font-body); margin-right: 0.2rem; }
+
+/* 指標：和說明裡的規則同一份 */
+.pseudo .ans { display: block; white-space: normal; font-family: var(--font-body); font-size: 0.85rem; font-weight: 400; line-height: 1.6; color: var(--ink); padding: 0.1rem 0.3rem 0.45rem 1.6rem; }
+.pseudo .ans.none { color: var(--muted); }
+.pseudo .ans.bad { color: var(--miss); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 工程組織怎麼運作</a>
+    <h1>交付表現怎麼量：DORA 和 Little's law</h1>
+    <p class="lead">主管想知道團隊交付得好不好，最容易拿到的數字（程式碼行數、關掉幾張票、story point）往往量錯了東西。這一頁看 DORA 研究了十年的五個交付指標各量什麼，以及 Little's law 為什麼說在製品越多交付越慢；再逐日模擬一個團隊的看板，看 WIP 上限和部署頻率怎麼一起改變這些數字。</p>
+  </header>
+
+  <section class="prose">
+    <h2>DORA 量的是什麼</h2>
+    <p><span class="term" data-def="DevOps Research and Assessment。從 2014 年起每年調查軟體團隊的交付表現，後來併入 Google Cloud。">DORA</span> 從 2014 年開始每年發表調查報告。Nicole Forsgren、Jez Humble 和 Gene Kim 在 2018 年把前四年的研究整理成 Accelerate 一書，第 2 章〈Measuring Performance〉提出的論點是：程式碼行數、velocity 這類傳統指標獎勵的是錯的行為，量交付表現只要看少數幾個結果指標就夠了。</p>
+    <p>指標本身也一直在改。DORA 自己整理的沿革是這樣的：2014 年第一次研究測了四個變數，2015 年定型成四個指標，兩個量速度（deployment frequency、lead time），兩個量穩定（MTTR、change fail rate）。2023 年 MTTR 改成 <span class="term" data-def="一次部署失敗、需要立刻處理之後，花多久恢復。2023 年取代 MTTR，只算部署造成的失敗。">failed deployment recovery time</span>，只算部署造成的失敗。2024 年加上第五個指標 <span class="term" data-def="計畫外、因為正式環境出事而被迫做的部署，占全部部署的比例。用來近似修 bug 的計畫外重工。">deployment rework rate</span>，並且把恢復時間從穩定性那組移到 throughput 那組。現在的分組是 throughput（lead time、部署頻率、恢復時間）和 instability（失敗率、重工率）。</p>
+    <p>這組研究最常被引用的發現是 2015 年那一份：速度和穩定不是互相取捨。表現最好的團隊兩邊都好，部署更頻繁，失敗也更少、恢復更快。這是調查研究得出的相關性，DORA 的報告用統計模型論證因果方向，但本質上還是自評問卷，不是對照實驗。</p>
+  </section>
+
+  <section class="prose">
+    <h2>Little's law：WIP 越多，等越久</h2>
+    <p>John Little 在 1961 年證明了排隊論裡的一個式子：<code>L = λW</code>。系統裡平均的項目數 L，等於平均到達率 λ 乘上每個項目平均停留的時間 W。條件只有系統要穩定，長期來看進來的速度等於出去的速度。換成軟體團隊的說法是：</p>
+    <p style="text-align:center"><code>平均 WIP = throughput × 平均 lead time</code></p>
+    <p>這個式子的威力在於它幾乎不需要假設。團隊的 throughput 受人力限制，短期內很難提高；在 throughput 不變的情況下，同時開工的東西（<span class="term" data-def="work in progress，在製品。已經開工、還沒上線的項目數。">WIP</span>）越多，每一件從開工到上線的時間就越長。這也是看板方法限制 WIP 的理由：不是讓人做得更快，而是不讓每件事都卡在半路。</p>
+    <p>部署的批次大小是同一件事的另一面。一週部署一次，就代表一個變更做完之後平均要等半週才上線；一次上線的變更越多，出事時越難找出是哪一個造成的，恢復也越慢。把五個指標和 Little's law 寫在一起：</p>
+    <pre class="code">量測交付表現（DORA；Little's law）
+1  Change lead time：從開始做到上線花多久
+2  Deployment frequency：多久部署一次
+3  Failed deployment recovery time：部署出事後多久恢復
+4  Change fail rate：多少比例的部署需要立刻介入（rollback、hotfix）
+5  Deployment rework rate：多少比例的部署是出事逼出來的計畫外部署
+6  Little's law：平均 WIP = throughput × 平均 lead time</pre>
+    <p>下面的 workbench 逐日模擬一個團隊：十個工作項目，每天兩個單位的產能，其中兩個項目藏著 bug，上線才會發現。選 WIP 的規則和部署頻率，一天一天往下走，每一行底下是到目前為止量到的數字。</p>
+  </section>
+
+  <section class="bench" aria-label="看板模擬">
+    <div class="row ctrl-rows">
+      <div class="presets" id="wip-row"><span class="lbl">WIP</span></div>
+      <div class="presets" id="dep-row"><span class="lbl">部署</span></div>
+    </div>
+    <div class="row">
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
+      </div>
+    </div>
+
+    <div class="row work flow-work">
+      <div class="panel">
+        <div class="panel-head">看板<span class="sub" id="day"></span></div>
+        <div class="panel-body">
+          <div class="board" id="board"></div>
+          <div class="deploys" id="deploys"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">指標<span class="sub">到目前為止</span></div>
+        <pre class="pseudo" id="rules"></pre>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>四種組合跑完的結果</h2>
+    <p>同樣十個項目、同樣的產能、同樣兩個 bug，四種組合跑到全部上線：</p>
+    <div class="table-wrap">
+      <table class="cmp" id="summary">
+        <thead><tr><th>組合</th><th>天數</th><th>平均 lead time</th><th>部署次數</th><th>失敗率</th><th>重工率</th><th>恢復時間</th><th>平均 WIP</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p>最大的差距在 lead time：WIP 上限 2 加每天部署，平均不到 3 天；不設上限加每週部署，平均將近 12 天。總產能完全一樣，差別只在同時開工幾件、做完之後等多久。WIP 不設限的時候，每天都有新的項目開工，產能被攤到所有項目上，每一件都做得很慢，最後幾乎同時完成。</p>
+    <p>失敗率在這個小模擬裡沒有一致的方向。全部只有兩個 bug，失敗率主要取決於它們剛好落在哪一批，例如 WIP 上限 2 加每 5 天部署是 40%，反而最高。一致的是恢復時間：一次部署的變更越少，找出元凶越快。這裡的恢復時間是模型假設，每次對半縮小嫌疑範圍要花 2 小時，所以一次部署 7 個變更要 7 小時，一次只有 1 個變更只要 1 小時。DORA 說的「速度和穩定一起變好」是大量團隊的統計結果，這個玩具模型能示範的只有其中的機制：小批次讓失敗變小、變好找。</p>
+    <p>表格最後一欄可以驗算 Little's law：把每天在系統裡的項目數平均起來，剛好等於 throughput 乘上平均 lead time。整段模擬從空的開始、也在空的時候結束，所以這個等式是精確成立的，不是近似。</p>
+  </section>
+
+  <section class="prose">
+    <h2>指標怎麼被用壞</h2>
+    <p>DORA 的指南直接列了幾種常見的誤用。把指標設成目標，團隊就會去操弄它：把一個變更拆成十次部署，部署頻率就漂亮了。只看一個指標，就看不到指標之間的拉扯：只追部署頻率，失敗率可能跟著上升。拿不同的團隊互相比較也會誤導，因為這些指標是設計來在同一個應用或服務上看「隨時間改善了多少」，不是拿來排名的。把指標綁在個別團隊身上，還容易變成互相指責。</p>
+    <p>這些誤用的共同點就是 Goodhart's law：一個量測一旦變成目標，就不再是好的量測。2021 年 Forsgren 等人提出的 <span class="term" data-def="Satisfaction and well-being、Performance、Activity、Communication and collaboration、Efficiency and flow。主張開發者生產力要從多個面向一起看。">SPACE</span> 框架從另一個方向回應這個問題：生產力至少有五個面向，只看活動量（commit 數、PR 數）一定會量偏，至少要同時看三個面向。</p>
+    <p>實務上，這些數字來自既有工具的紀錄：lead time 和部署頻率來自版本控制和 CI/CD 系統，失敗率、恢復時間和重工率來自 incident 管理工具和部署紀錄。市面上有不少把這些資料串成儀表板的產品，但 DORA 建議先從團隊內的對話和它的 Quick Check 問卷開始，不要一開始就花力氣整合資料。我的推論是：儀表板最容易被誤用的地方，是把團隊層級的指標拆到個人頭上。這幾個指標從定義上就是量「系統」的，拆到個人身上就失去了意義。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>DORA 的指標量的是交付系統，不是個人：從開始做到上線要多久、多久部署一次、多常出事、出事後多快恢復、有多少部署是被事故逼出來的。Little's law 說明了為什麼限制 WIP、縮小批次能縮短 lead time，而且不需要任何人做得更快。速度和穩定可以一起變好，因為讓速度變快的那些做法（小批次、頻繁部署），本身就讓失敗變小、變好找。</p>
+    <p>這些指標裡的恢復時間和失敗率，和後面 <a href="../incident/">incident 與 postmortem</a> 那一頁直接相關：出事之後怎麼處理、怎麼檢討，決定了下一次會不會再發生。</p>
+    <p>模擬省略了很多東西：工作會一直進來，不是一開始就有十件；項目的大小事先不知道；同時處理太多事情還會有切換成本，現實中 WIP 不設限的代價比這裡更大。bug 也不一定在部署當下就被發現。</p>
+  </section>
+
+  <p class="foot">來源：Nicole Forsgren、Jez Humble、Gene Kim，Accelerate（2018），Ch. 2 Measuring Performance；DORA，〈DORA's software delivery metrics: the four keys〉、〈A history of DORA's software delivery metrics〉；John D. C. Little，〈A Proof for the Queuing Formula: L = λW〉，Operations Research 9(3)，1961；Nicole Forsgren 等，〈The SPACE of Developer Productivity〉，ACM Queue 19(1)，2021。</p>
+</main>
+
+<script>
+// ---- 模擬：10 個項目，每天 2 單位產能平均分給開發中的項目；#4、#8 有 bug，上線才發現 ----
+const SIZES = [2, 3, 2, 4, 3, 2, 3, 2, 3, 2];
+const BUGS = new Set([4, 8]);
+const CAP = 2;
+const WIPS = { inf: { name: '不設上限（每天開工 2 件）', v: Infinity }, two: { name: '上限 2', v: 2 } };
+const DEPS = { week: { name: '每 5 天部署一次', v: 5 }, day: { name: '每天部署', v: 1 } };
+
+function simulate(wip, every) {
+  const items = SIZES.map((s, i) => ({ id: i + 1, size: s, left: s, bug: BUGS.has(i + 1), start: null, done: null, live: null, fixed: false, hold: false }));
+  const deploys = [];
+  const days = [{ day: 0, ev: [], items: items.map(x => ({ ...x })), deploys: [] }];
+  let hotfix = null; // 被 rollback 的批次，隔天以計畫外部署重新上線
+  for (let day = 1; day <= 40; day++) {
+    const ev = [];
+    const inDev = () => items.filter(x => x.start !== null && x.done === null);
+    // 1. 開工
+    const backlog = items.filter(x => x.start === null);
+    const n = wip === Infinity ? Math.min(2, backlog.length) : Math.max(0, Math.min(wip - inDev().length, backlog.length));
+    backlog.slice(0, n).forEach(x => { x.start = day; ev.push({ t: 'start', id: x.id }); });
+    // 2. 做工
+    const dev = inDev();
+    dev.forEach(x => x.left -= CAP / dev.length);
+    dev.filter(x => x.left <= 1e-9).forEach(x => { x.left = 0; x.done = day; ev.push({ t: 'done', id: x.id }); });
+    // 3. 部署：先上昨天 rollback 的 hotfix，再看今天是不是部署日
+    if (hotfix) {
+      hotfix.forEach(x => { x.live = day; x.hold = false; });
+      deploys.push({ day, ids: hotfix.map(x => x.id), ok: true, unplanned: true });
+      ev.push({ t: 'hotfix', ids: hotfix.map(x => x.id) });
+      hotfix = null;
+    }
+    const ready = items.filter(x => x.done !== null && x.live === null && !x.hold);
+    if (day % every === 0 && ready.length) {
+      const bad = ready.filter(x => x.bug && !x.fixed);
+      if (bad.length) {
+        const steps = Math.ceil(Math.log2(ready.length));
+        const hours = 1 + 2 * steps;
+        deploys.push({ day, ids: ready.map(x => x.id), ok: false, unplanned: false, hours, steps, culprit: bad.map(x => x.id) });
+        bad.forEach(x => x.fixed = true);
+        ready.forEach(x => x.hold = true);
+        hotfix = ready;
+        ev.push({ t: 'fail', ids: ready.map(x => x.id), hours, steps, culprit: bad.map(x => x.id) });
+      } else {
+        ready.forEach(x => x.live = day);
+        deploys.push({ day, ids: ready.map(x => x.id), ok: true, unplanned: false });
+        ev.push({ t: 'deploy', ids: ready.map(x => x.id) });
+      }
+    }
+    days.push({ day, ev, items: items.map(x => ({ ...x })), deploys: deploys.slice() });
+    if (items.every(x => x.live !== null)) break;
+  }
+  return days;
+}
+
+// ---- 到第 k 天為止的指標 ----
+// lead time 以天計，開工當天和上線當天都算（live - start + 1）；
+// 某天的 WIP 是那一天任何時候在系統裡的項目數，這樣整段模擬上 L = λW 精確成立。
+function metrics(days, k) {
+  const d = days[k], its = d.items, deps = d.deploys;
+  const live = its.filter(x => x.live !== null);
+  const lt = live.map(x => x.live - x.start + 1);
+  const avgLT = lt.length ? lt.reduce((a, b) => a + b, 0) / lt.length : null;
+  const fails = deps.filter(x => !x.ok), unpl = deps.filter(x => x.unplanned);
+  const wipNow = its.filter(x => x.start !== null && x.start <= d.day && (x.live === null || x.live >= d.day)).length;
+  let wipSum = 0;
+  for (let j = 1; j <= k; j++) wipSum += days[k].items.filter(x => x.start !== null && x.start <= j && (x.live === null || x.live >= j)).length;
+  return { day: d.day, live, avgLT, deps, fails, unpl, wipNow, wipAvg: k ? wipSum / k : 0, done: live.length };
+}
+
+const $ = id => document.getElementById(id);
+const state = { wip: 'inf', dep: 'week', k: 0, days: [] };
+const f1 = x => x.toFixed(1);
+const pct = (a, b) => b ? Math.round(100 * a / b) + '%' : '—';
+const ids = a => a.map(i => '#' + i).join('、');
+
+function boardHtml(days, k) {
+  const d = days[k], its = d.items, ev = d.ev;
+  const touched = new Set(ev.flatMap(e => e.ids || [e.id]));
+  const card = (x, cls = '', extra = '') => {
+    const pctDone = x.start !== null && x.done === null ? Math.round(100 * (x.size - x.left) / x.size) : 0;
+    return `<div class="card ${cls}${touched.has(x.id) ? ' new' : ''}">${pctDone ? `<div class="fill" style="width:${pctDone}%"></div>` : ''}<span>#${x.id}<small>${extra}</small></span></div>`;
+  };
+  const lanes = [
+    ['待辦', its.filter(x => x.start === null).map(x => card(x, '', `${x.size} 單位`))],
+    ['開發中', its.filter(x => x.start !== null && x.done === null).map(x => card(x, '', `${f1(x.size - x.left)}/${x.size}`))],
+    ['待部署', its.filter(x => x.done !== null && x.live === null).map(x => card(x, x.hold ? 'bad' : '', x.hold ? 'rollback' : `等 ${d.day - x.done} 天`))],
+    ['已上線', its.filter(x => x.live !== null).map(x => card(x, 'live', `${x.live - x.start + 1} 天`))],
+  ];
+  return lanes.map(([name, cards]) => `<div class="lane"><h3>${name}<span>${cards.length}</span></h3><div class="cards">${cards.join('')}</div></div>`).join('');
+}
+
+function rulesHtml(m, ev) {
+  const on = new Set();
+  ev.forEach(e => {
+    if (e.t === 'deploy') { on.add(1); on.add(2); }
+    if (e.t === 'fail') { on.add(2); on.add(3); on.add(4); }
+    if (e.t === 'hotfix') { on.add(1); on.add(5); }
+    if (e.t === 'start' || e.t === 'done') on.add(6);
+  });
+  const ans = (t, cls) => `<span class="ans ${cls || ''}">${t}</span>`;
+  const a1 = m.done ? ans(`已上線 ${m.done} 項，平均 ${f1(m.avgLT)} 天。`) : ans('還沒有東西上線。', 'none');
+  const a2 = m.deps.length ? ans(`${m.day} 天內部署 ${m.deps.length} 次。`) : ans('還沒部署過。', 'none');
+  const a3 = m.fails.length ? ans(m.fails.map(f => `第 ${f.day} 天那次有 ${f.ids.length} 個變更，對半找 ${f.steps} 次才找到 ${ids(f.culprit)}，花了 ${f.hours} 小時`).join('；') + '。', 'bad') : ans('還沒有部署失敗。', 'none');
+  const a4 = m.deps.length ? ans(`${m.fails.length} / ${m.deps.length} = ${pct(m.fails.length, m.deps.length)}。`, m.fails.length ? 'bad' : '') : ans('—', 'none');
+  const a5 = m.deps.length ? ans(`${m.unpl.length} / ${m.deps.length} = ${pct(m.unpl.length, m.deps.length)}。`, m.unpl.length ? 'bad' : '') : ans('—', 'none');
+  const allLive = m.done === SIZES.length;
+  const a6 = allLive
+    ? ans(`全部上線。平均 WIP ${m.wipAvg.toFixed(2)} = throughput ${(SIZES.length / m.day).toFixed(3)} 件/天 × 平均 lead time ${f1(m.avgLT)} 天。`)
+    : ans(`今天的 WIP 是 ${m.wipNow} 件，到目前平均 ${m.wipAvg.toFixed(2)} 件。`);
+  const L = [
+    ['量測交付表現（DORA；Little\'s law）', null, true],
+    ['1  Change lead time：從開始做到上線花多久', a1],
+    ['2  Deployment frequency：多久部署一次', a2],
+    ['3  Failed deployment recovery time：部署出事後多久恢復', a3],
+    ['4  Change fail rate：多少比例的部署需要立刻介入（rollback、hotfix）', a4],
+    ['5  Deployment rework rate：多少比例的部署是出事逼出來的計畫外部署', a5],
+    ['6  Little\'s law：平均 WIP = throughput × 平均 lead time', a6],
+  ];
+  return L.map(([t, a, head], i) => `<span class="pl${head ? ' head' : ''}${on.has(i) ? ' on' : ''}">${t}</span>${a || ''}`).join('');
+}
+
+function sayHtml(days, k) {
+  const d = days[k];
+  if (k === 0) return `第 0 天，十個項目都在待辦。WIP 規則：${WIPS[state.wip].name}；部署：${DEPS[state.dep].name}。`;
+  const parts = [];
+  const g = t => d.ev.filter(e => e.t === t);
+  if (g('start').length) parts.push(`開工 ${ids(g('start').map(e => e.id))}。`);
+  const dev = d.items.filter(x => x.start !== null && x.done === null && x.start <= d.day).length + g('done').length;
+  if (dev) parts.push(`今天 2 單位的產能分給 ${dev} 個開發中的項目，每個分到 ${f1(CAP / dev)}。`);
+  if (g('done').length) parts.push(`${ids(g('done').map(e => e.id))} 做完，進入待部署。`);
+  g('deploy').forEach(e => parts.push(`部署 ${ids(e.ids)}，成功上線。`));
+  g('hotfix').forEach(e => parts.push(`計畫外部署：把昨天 rollback 的 ${ids(e.ids)} 修好重新上線。`));
+  let warn = '';
+  g('fail').forEach(e => { warn = `部署 ${ids(e.ids)} 失敗，整批 rollback。${e.ids.length} 個變更裡對半找了 ${e.steps} 次，花 ${e.hours} 小時才確定是 ${ids(e.culprit)}。修好後明天重新部署。`; });
+  if (!parts.length && !warn) parts.push('今天沒有新的事件，做完的項目繼續等部署日。');
+  return parts.join('') + (warn ? `<span class="warn">${warn}</span>` : '');
+}
+
+function render() {
+  const days = state.days, k = state.k;
+  document.querySelectorAll('#wip-row button').forEach(b => b.classList.toggle('chosen', b.dataset.k === state.wip));
+  document.querySelectorAll('#dep-row button').forEach(b => b.classList.toggle('chosen', b.dataset.k === state.dep));
+  $('day').textContent = `第 ${days[k].day} 天結束時`;
+  $('board').innerHTML = boardHtml(days, k);
+  const deps = days[k].deploys;
+  $('deploys').innerHTML = `<span class="lbl">部署紀錄</span>` + (deps.length ? deps.map(x => `<span class="dep${x.ok ? '' : ' fail'}${x.unplanned ? ' hot' : ''}" title="${x.ok ? (x.unplanned ? '計畫外部署' : '成功') : '失敗'}">D${x.day}${x.ok ? '' : '✗'}</span>`).join('') : '<span class="lbl">還沒有</span>');
+  $('rules').innerHTML = rulesHtml(metrics(days, k), days[k].ev);
+  $('say').innerHTML = sayHtml(days, k);
+}
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; render(); } });
+function load() {
+  state.days = simulate(WIPS[state.wip].v, DEPS[state.dep].v);
+  stepper.setTotal(state.days.length - 1);
+  stepper.set(0);
+}
+function buttons(row, map, key) {
+  Object.entries(map).forEach(([k, o]) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.k = k; b.textContent = o.name;
+    b.addEventListener('click', () => { state[key] = k; load(); });
+    $(row).appendChild(b);
+  });
+}
+buttons('wip-row', WIPS, 'wip');
+buttons('dep-row', DEPS, 'dep');
+
+// 四種組合的結果表
+$('summary').querySelector('tbody').innerHTML = [['inf', 'week'], ['inf', 'day'], ['two', 'week'], ['two', 'day']].map(([w, d]) => {
+  const days = simulate(WIPS[w].v, DEPS[d].v), m = metrics(days, days.length - 1);
+  const hrs = m.fails.map(f => f.hours + ' 小時').join('、') || '—';
+  return `<tr><td class="name">${WIPS[w].name}，${DEPS[d].name}</td><td class="num">${m.day}</td><td class="num">${f1(m.avgLT)} 天</td><td class="num">${m.deps.length}</td><td class="num">${pct(m.fails.length, m.deps.length)}</td><td class="num">${pct(m.unpl.length, m.deps.length)}</td><td class="num">${hrs}</td><td class="num">${m.wipAvg.toFixed(2)}</td></tr>`;
+}).join('');
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>績效評核與 calibration</title>
+<meta name="description" content="考績的評等有一半以上反映的是評分的人，而不是被評的人。看 calibration 怎麼把寬鬆和嚴格的主管拉到同一把尺上，強制分配又怎麼把誤差搬到強的團隊身上；晉升為什麼要另外看證據。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+.work.perf-work { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); }
+.pseudo .pl.skip { color: var(--miss); text-decoration: line-through; }
+.reveal { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--muted); cursor: pointer; }
+
+/* 評等表 */
+table.rate { border-collapse: collapse; width: 100%; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.rate th, .rate td { padding: 0.25rem 0.4rem; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.rate th { font-size: 0.72rem; color: var(--muted); font-weight: 700; }
+.rate td.n { font-family: var(--font-mono); text-align: center; }
+.rate td.n b { font-weight: 600; }
+.rate tr.mgr td { background: var(--bg); font-size: 0.75rem; color: var(--muted); font-weight: 700; }
+.rate td.up b { color: var(--hit); }
+.rate td.down b { color: var(--miss); }
+.rate td.off { background: var(--miss-soft); }
+.rate td.chg { background: var(--mark); }
+.rate .note { color: var(--muted); font-size: 0.75rem; white-space: normal; }
+.rate td.true { color: var(--muted); }
+.stat { display: flex; flex-wrap: wrap; gap: 0.3rem 1.2rem; font-size: 0.82rem; color: var(--muted); padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); }
+.stat b { color: var(--ink); font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 工程組織怎麼運作</a>
+    <h1>績效評核與 calibration</h1>
+    <p class="lead">考績決定調薪、獎金和晉升，但一個評等裡有多少反映的是被評的人，有多少是評分的主管？這一頁看研究怎麼回答這個問題，再用十二個工程師、三個寬嚴不同的主管，逐步對照三種做法：有 calibration、沒有 calibration、強制分配。</p>
+  </header>
+
+  <section class="prose">
+    <h2>評等裡有一半以上是評分的人</h2>
+    <p>Scullen、Mount 和 Goff 在 2000 年分析了兩大批主管的多方評等資料（各約兩千多人，由上司、同儕、下屬和自己評分）。研究把評等的變異拆開：來自評分者個人偏好的部分，在兩批資料裡分別占 62% 和 53%；真正來自被評者表現的部分只占 21% 和 25%。換句話說，同一個人換一個主管評，分數可能差很多，而且差的主要是主管的尺，不是這個人的表現。</p>
+    <p>評分者的偏好有幾種常見的樣子。有的主管整體偏寬，有的整體偏嚴，這是最容易看出來、也最容易修正的。比較難發現的是 <span class="term" data-def="近因偏誤。評分時過度依賴最近發生的事，忽略評核期間較早的表現。">recency bias</span>：一年的考績，被最後一個月的表現左右。另外還有對跟自己相似的人比較寬、對不常互動的人印象模糊等等。</p>
+    <p>考績和上一頁的 OKR 是兩套分開的機制。OKR 評的是團隊這一季的目標達成多少，而且刻意不進考績；考績評的是一個人在這段期間，相對於職級期待的表現。晉升又是第三件事：照 <a href="../ladder/">職級階梯</a>那一頁的 Dropbox 原則，晉升要看的是在下一級持續交出成果的證據，不是這一期考績高不高。</p>
+  </section>
+
+  <section class="prose">
+    <h2>Calibration 和晉升</h2>
+    <p><span class="term" data-def="校準。主管們先各自給初評，再一起對照彼此的評等和證據，讓不同團隊用同一把尺。">Calibration</span> 是針對評分者偏好的修正。Laszlo Bock 在 Work Rules! 裡描述 Google 的做法：主管先給初評，再由一群帶類似團隊的主管一起檢視所有人的初評，最後才定案。每個主管都要向其他主管解釋自己的判斷，這個過程降低了灌水的壓力，也讓結果反映一套共同的期待。<span class="sn">Work Rules! 的內容我是從讀者摘錄核對的，沒有讀到原書。</span></p>
+    <p>晉升通常走另一條線，需要一份 <span class="term" data-def="晉升資料。整理一個人在下一級的範圍內做了什麼、影響多大、有哪些證據，交給晉升委員會或 calibration 審查。">promotion packet</span>。Larson 建議想升 staff 的人很早就開始寫：做過的 staff 等級專案和影響、對組織的高槓桿改善、可量化的成果、帶過的人、看不見的 glue work、哪些團隊和主管願意替你背書，以及自己的弱點和改善計畫。寫完先拿到 1:1 跟主管對：還缺什麼、該強調什麼。把整個週期寫成規則：</p>
+    <pre class="code">一次績效週期（Bock；Larson；Dropbox）
+1  收集證據：自評、同事回饋、整段期間的成果，不只最近一個月
+2  主管初評：依職級期待給等第，寫下理由
+3  Calibration：同職級的主管坐在一起，對照彼此的評等和證據
+4  調整偏寬或偏嚴的評等；證據不足的退回補件
+5  晉升另外看：在下一級持續交出成果的證據（promotion packet）
+6  結果回饋給本人：等第、理由、下一步</pre>
+    <p>下面的 workbench 有三個主管，各帶四個同一職級的工程師。甲主管偏寬，乙主管大致準確，丙主管偏嚴；另外有兩個人受到 recency bias 影響。等第是 1 到 5（3 是達到期待）。打勾「顯示真實影響」可以看到模型裡每個人實際的表現，現實中沒有人看得到這一欄。</p>
+  </section>
+
+  <section class="bench" aria-label="績效週期">
+    <div class="row presets" id="presets"><span class="lbl">做法</span></div>
+    <div class="row">
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
+      </div>
+    </div>
+    <div class="row work perf-work">
+      <div class="panel">
+        <div class="panel-head">流程</div>
+        <pre class="pseudo" id="pseudo"></pre>
+      </div>
+      <div class="panel">
+        <div class="panel-head">評等<label class="reveal"><input type="checkbox" id="reveal">顯示真實影響</label></div>
+        <div class="panel-body table-wrap"><table class="rate" id="rate"></table></div>
+        <div class="stat" id="stat"></div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>強制分配把誤差搬到別處</h2>
+    <p>強制分配（stack ranking）要求每個團隊的評等符合固定的比例，例如四個人裡一定有一個人拿最高、一個人拿最低。它想解決的問題和 calibration 一樣，就是主管普遍灌水，但做法是直接規定分布。在 workbench 裡選「強制分配」跑到最後，平均誤差和沒有 calibration 時一樣，只是受害的人換了：乙主管的團隊四個人都很強，還是得有一個人拿 2；丙主管的團隊不管整體如何，也一定有人拿到團隊裡的最高分。四個人的團隊太小，真實表現不會剛好符合任何固定的比例。</p>
+    <p>Microsoft 在 2013 年 11 月由人資主管 Lisa Brummel 發出內部備忘錄，宣布廢除 stack ranking：不再有評等，也不再用鐘形曲線分配獎酬，改由主管在預算內彈性分配，理由是要鼓勵團隊合作。當時的報導普遍認為，這套制度讓同事之間互相競爭、不願意合作。</p>
+    <p>Calibration 本身也有失敗的方式。主管在會議裡替自己的人爭取，口才好、資歷深的主管容易贏，這等於把評分者偏好從評等搬進了會議室。這是我的推論，但它解釋了為什麼 Larson 的 promotion packet 那麼強調背書：你不在那個房間裡，房間裡替你說話的是你的主管，而主管手上能拿出來的，只有你事先留下的證據。所以對 IC 來說，最實際的做法是整段期間都記下自己的成果和影響，不要等考績前一週才回想。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>研究顯示，一個評等裡反映評分者偏好的部分，比反映被評者表現的部分還多。Calibration 讓主管們用同一把尺，修正偏寬、偏嚴和只看最近一個月的評等；強制分配只是把誤差從灌水的團隊搬到強的團隊身上。晉升要另外看，看的是在下一級持續交出成果的證據，這些證據最好由本人在整段期間持續留下來。</p>
+    <p>考績看的是人，<a href="../incident/">下一頁</a>的 incident 和 postmortem 刻意反過來：出事時不追究個人，只問系統哪裡讓人犯了錯。</p>
+    <p>模型假設 calibration 拿到的證據完整，所以能把每個人修正到真實表現；現實中證據常常不完整，calibration 只能修正一部分。模型裡的真實影響是一個數字，現實中的表現是多個面向，不同主管對「影響」的定義本身就可能不同。</p>
+  </section>
+
+  <p class="foot">來源：Steven E. Scullen、Michael K. Mount、Maynard Goff，〈Understanding the Latent Structure of Job Performance Ratings〉，Journal of Applied Psychology 85，2000；Laszlo Bock，Work Rules!（2015）；Will Larson，Staff Engineer，〈Promo packets〉；Dropbox Engineering Career Framework v2.9.1，Promotion Principles；Microsoft 2013 年 11 月廢除 stack ranking 的內部備忘錄（媒體報導）。</p>
+</main>
+
+<script>
+const LINES = [
+  { t: '一次績效週期（Bock；Larson；Dropbox）', head: true },
+  { t: '1  收集證據：自評、同事回饋、整段期間的成果，不只最近一個月' },
+  { t: '2  主管初評：依職級期待給等第，寫下理由' },
+  { t: '3  Calibration：同職級的主管坐在一起，對照彼此的評等和證據' },
+  { t: '4  調整偏寬或偏嚴的評等；證據不足的退回補件' },
+  { t: '5  晉升另外看：在下一級持續交出成果的證據（promotion packet）' },
+  { t: '6  結果回饋給本人：等第、理由、下一步' },
+];
+
+// 三個主管各帶四個人。true 是模型裡的真實影響（1–5），rec 是 recency bias 造成的印象偏差。
+const MGRS = { a: { name: '甲主管', bias: 0.8, desc: '偏寬' }, b: { name: '乙主管', bias: 0, desc: '大致準確' }, c: { name: '丙主管', bias: -0.8, desc: '偏嚴' } };
+const ENG = [
+  { id: 'E1', m: 'a', true: 3.2, rec: 0 },
+  { id: 'E2', m: 'a', true: 2.6, rec: 0 },
+  { id: 'E3', m: 'a', true: 3.6, rec: 0 },
+  { id: 'E4', m: 'a', true: 2.9, rec: 0.6, recNote: '最後一個月表現亮眼' },
+  { id: 'E5', m: 'b', true: 4.3, rec: 0 },
+  { id: 'E6', m: 'b', true: 3.8, rec: 0 },
+  { id: 'E7', m: 'b', true: 4.1, rec: 0 },
+  { id: 'E8', m: 'b', true: 3.4, rec: 0 },
+  { id: 'E9', m: 'c', true: 3.8, rec: -0.6, recNote: '上半年很強，最後一個月請了長假' },
+  { id: 'E10', m: 'c', true: 3.1, rec: 0 },
+  { id: 'E11', m: 'c', true: 4.6, rec: 0 },
+  { id: 'E12', m: 'c', true: 2.4, rec: 0 },
+];
+const clamp = x => Math.max(1, Math.min(5, x));
+const perceived = e => e.true + MGRS[e.m].bias + e.rec;
+const draft = e => clamp(Math.round(perceived(e)));
+const truth = e => clamp(Math.round(e.true));
+// 強制分配：每個團隊照主管的印象排序，四個人固定給 4、3、3、2
+function forced() {
+  const out = {};
+  Object.keys(MGRS).forEach(m => {
+    ENG.filter(e => e.m === m).sort((x, y) => perceived(y) - perceived(x)).forEach((e, i) => out[e.id] = [4, 3, 3, 2][i]);
+  });
+  return out;
+}
+
+// 每個做法是一串步驟；r 是這一步之後的評等（null 表示還沒評），chg 是這一步改動的人
+function scenario(kind) {
+  const none = Object.fromEntries(ENG.map(e => [e.id, null]));
+  const dr = Object.fromEntries(ENG.map(e => [e.id, draft(e)]));
+  const steps = [
+    { line: 1, r: none, say: '三個主管各自收集證據：自評、同事回饋和這段期間的成果。這一步做得好不好，決定了後面每一步有沒有東西可以對照。' },
+    { line: 2, r: dr, chg: ENG.map(e => e.id), say: '主管各自初評。甲主管的四個人拿到 3 到 4，丙主管的人大多是 2；E4 因為最後一個月很亮眼被高估，E9 因為最後一個月請長假被低估。每個主管看自己的團隊，都覺得評得很合理。' },
+  ];
+  if (kind === 'cal') {
+    const fin = Object.fromEntries(ENG.map(e => [e.id, truth(e)]));
+    steps.push({ line: 3, r: dr, flag: true, say: '同職級的三個主管把十二個人的初評排在一起。甲主管的平均是 3.75，丙主管是 2.5，但兩個團隊交出來的成果差不多。這個差距是尺的問題，不是人的問題。' });
+    steps.push({ line: 4, r: fin, chg: ENG.filter(e => fin[e.id] !== dr[e.id]).map(e => e.id), say: '對照證據逐一調整：甲主管的 E1、E4 降到 3，丙主管的 E9 升到 4、E10 升到 3、E11 升到 5。E4 和 E9 的調整靠的是涵蓋整段期間的成果紀錄，不是印象。' });
+    steps.push({ line: 5, r: fin, promo: true, say: 'E11 連續兩期都在下一級的範圍交出成果，packet 裡有設計文件和可量化的影響，晉升通過。甲主管也提名 E4，理由是「最近表現很好，應該做得到」，但沒有持續的證據，沒有通過：Evidence, not faith。' });
+    steps.push({ line: 6, r: fin, say: '把結果、理由和下一步回饋給每個人。被調整的人要知道為什麼被調整，否則 calibration 看起來就像黑箱。' });
+  } else if (kind === 'none') {
+    steps.push({ line: 3, r: dr, skip: [3, 4], say: '沒有 calibration：每個主管的初評直接定案。', warn: '第 3、4 行沒有發生。' });
+    steps.push({ line: 5, r: dr, promo: true, nocal: true, say: '晉升提名由各主管自己決定。甲主管提名 E4（考績 4），丙主管覺得 E11 只有 4、還不夠格，沒有提名。真正該升的人沒被提，最近表現好的人被提了。' });
+    steps.push({ line: 6, r: dr, say: '結果：丙主管的團隊整體被低估，甲主管的團隊整體被高估。如果調薪預算照評等分配，錢會從丙的團隊流向甲的團隊。', warn: '平均誤差 0.5 級，E9 被低估了 2 級。' });
+  } else {
+    const fr = forced();
+    steps.push({ line: 3, r: fr, skip: [3, 4], chg: ENG.filter(e => fr[e.id] !== dr[e.id]).map(e => e.id), say: '強制分配：不開會對照證據，而是規定每個四人團隊固定是一個 4、兩個 3、一個 2，照主管自己的印象排。', warn: '第 3、4 行被固定比例取代。' });
+    steps.push({ line: 5, r: fr, promo: true, forced: true, say: '晉升名額也照比例分。乙主管的團隊四個人都強，只能提一個；丙主管團隊的 E11 拿 4，和其他團隊的第一名看起來一樣。' });
+    steps.push({ line: 6, r: fr, say: '結果：甲主管團隊被高估的 E1、E4 拉回來了，但 E2 因為排在最後被壓到 2。乙主管團隊的 E6、E7、E8 明明達到或超出期待，也各被壓低一級，只因為隊友太強。平均誤差和沒有 calibration 時一樣，只是換了一批人受害。', warn: '平均誤差 0.5 級，受害的變成強團隊裡的人。' });
+  }
+  return steps;
+}
+const KINDS = { cal: '有 calibration', none: '沒有 calibration', forced: '強制分配' };
+
+const $ = id => document.getElementById(id);
+const state = { kind: 'cal', k: 0, steps: [], reveal: false };
+
+function render() {
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', b.dataset.k === state.kind));
+  const t = state.k === 0 ? null : state.steps[state.k - 1];
+  const skipped = new Set();
+  state.steps.slice(0, state.k).forEach(s => (s.skip || []).forEach(i => skipped.add(i)));
+  $('pseudo').innerHTML = LINES.map((l, i) => {
+    let cls = 'pl' + (l.head ? ' head' : '');
+    if (skipped.has(i)) cls += ' skip';
+    if (t && t.line === i) cls += ' on';
+    return `<span class="${cls}">${l.t}</span>`;
+  }).join('');
+  // 評等表
+  const r = t ? t.r : Object.fromEntries(ENG.map(e => [e.id, null]));
+  const chg = new Set(t && t.chg || []);
+  let h = `<thead><tr><th>工程師</th>${state.reveal ? '<th>真實</th>' : ''}<th>評等</th><th>備註</th></tr></thead><tbody>`;
+  Object.entries(MGRS).forEach(([m, M]) => {
+    const team = ENG.filter(e => e.m === m);
+    const vals = team.map(e => r[e.id]).filter(v => v !== null);
+    const avg = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : '—';
+    h += `<tr class="mgr"><td colspan="${state.reveal ? 4 : 3}">${M.name}（${M.desc}）　平均 ${avg}</td></tr>`;
+    team.forEach(e => {
+      const v = r[e.id], tr = truth(e);
+      let cls = 'n';
+      if (v !== null && state.reveal && v !== tr) cls += ' off';
+      if (chg.has(e.id) && t && t.line !== 2) cls += ' chg';
+      let note = '';
+      if (e.recNote && t && t.line >= 2) note = e.recNote;
+      if (t && t.promo) {
+        if (e.id === 'E11') note = t.nocal ? '沒被提名' : t.forced ? '團隊第一，提名' : '提名，晉升通過';
+        if (e.id === 'E4') note = t.forced ? '' : t.nocal ? '被提名' : '被提名，證據不足，未通過';
+        if (t.forced && e.id === 'E5') note = '團隊第一，提名';
+      }
+      h += `<tr><td>${e.id}</td>${state.reveal ? `<td class="n true">${e.true.toFixed(1)}</td>` : ''}<td class="${cls}"><b>${v === null ? '—' : v}</b></td><td class="note">${note}</td></tr>`;
+    });
+  });
+  $('rate').innerHTML = h + '</tbody>';
+  // 統計
+  const rated = ENG.filter(e => r[e.id] !== null);
+  if (rated.length) {
+    const err = rated.reduce((a, e) => a + Math.abs(r[e.id] - truth(e)), 0) / rated.length;
+    const over = rated.filter(e => r[e.id] > truth(e)).length, under = rated.filter(e => r[e.id] < truth(e)).length;
+    $('stat').innerHTML = `<span>和真實影響的平均差距 <b>${err.toFixed(2)}</b> 級</span><span>高估 <b>${over}</b> 人</span><span>低估 <b>${under}</b> 人</span>`;
+  } else $('stat').innerHTML = '<span>還沒有評等。</span>';
+  $('say').innerHTML = !t ? `按「下一步」開始。「${KINDS[state.kind]}」一共 ${state.steps.length} 步。`
+    : t.say + (t.warn ? `<span class="warn">${t.warn}</span>` : '');
+}
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; render(); } });
+function load(kind) {
+  state.kind = kind;
+  state.steps = scenario(kind);
+  stepper.setTotal(state.steps.length);
+  stepper.set(0);
+}
+Object.entries(KINDS).forEach(([k, name]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.k = k; b.textContent = name;
+  b.addEventListener('click', () => load(k));
+  $('presets').appendChild(b);
+});
+$('reveal').addEventListener('change', e => { state.reveal = e.target.checked; render(); });
+load('cal');
+</script>
+</body>
+</html>

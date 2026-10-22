@@ -68,6 +68,12 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
 .mini-heap-cells i { display: block; flex: 1; height: 0.5rem; background: var(--line); border-radius: 1px; }
 .mini-heap-cells i.r { background: var(--right); opacity: 0.8; }
 .mini-heap-cells i.l { background: var(--left); opacity: 0.8; }
+.mini-ladder { display: flex; gap: 0.6rem; width: 100%; padding: 0.15rem 0; }
+.mini-ladder .c { flex: 1; display: flex; flex-direction: column-reverse; gap: 0.18rem; }
+.mini-ladder i { display: block; height: 0.38rem; background: var(--line); border-radius: 1px; }
+.mini-ladder i.gap { background: transparent; }
+.mini-ladder i.r { background: var(--right); opacity: 0.8; }
+.mini-ladder i.l { background: var(--left); opacity: 0.8; }
 </style>
 </head>
 <body>
@@ -222,6 +228,20 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
         <div class="text">
           <h2>Introduction to Algorithms 筆記</h2>
           <p>讀 CLRS 時，把值得動手走一遍的演算法做成互動頁。目前三篇：heap 與 heapsort、BFS/DFS 與 SCC、Kruskal 與 Prim 的最小生成樹，都照書上的虛擬碼逐步執行。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="eng-org/">
+        <div class="glyph" aria-hidden="true">
+          <div class="mini-ladder">
+            <div class="c"><i></i><i></i><i></i><i class="r"></i><i></i><i></i><i></i></div>
+            <div class="c"><i class="gap"></i><i class="gap"></i><i></i><i class="l"></i><i></i><i></i><i></i></div>
+          </div>
+        </div>
+        <div class="text">
+          <h2>工程組織怎麼運作</h2>
+          <p>從工程師的位置往上看軟體公司的工程組織：每一級負責什麼、組織怎麼分層、主管用哪些機制管理團隊。九篇：職級、組織規模、技術決策、團隊切法，以及交付指標、OKR、考績、事故這四套機制，最後是一份組織健康檢查清單。</p>
         </div>
       </a>
     </li>

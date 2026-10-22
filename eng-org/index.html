@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工程組織怎麼運作</title>
+<meta name="description" content="從 IC 的視角看一家軟體公司的工程組織：各級的職責、組織怎麼長大、主管用哪些機制管理團隊，以及哪些做法有證據支持、哪些常常失敗。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
+<style>
+/* 索引頁特有的：編號清單。 */
+.entries { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); counter-reset: n; }
+.entries li { border-bottom: 1px solid var(--line); counter-increment: n; }
+.entry { display: flex; align-items: baseline; gap: 1rem; padding: 1.1rem 0; color: inherit; text-decoration: none; }
+.entry::before { content: counter(n, decimal-leading-zero); font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); flex: 0 0 2rem; }
+.entry h2 { font-size: 1.1rem; line-height: 1.35; margin: 0; }
+a.entry:hover h2 { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.entry p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.95rem; }
+.entry .text { flex: 1 1 16rem; min-width: 0; }
+</style>
+</head>
+<body>
+<main class="page index">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1>工程組織怎麼運作</h1>
+    <p class="lead">從一般工程師的位置往上看：一家軟體公司從工程師到 CTO，每一級負責什麼、組織變大時怎麼分層、主管用哪些機制和工具管理團隊，以及哪些做法有證據支持、哪些常常失敗。以矽谷式的軟體產品公司為參考模型，每頁綜合幾本書和公開資料，可以獨立閱讀。管理領域有實證研究支持的結論不多，頁面裡會分清楚哪些話出自研究或公司公開的文件，哪些是經驗或推論。</p>
+  </header>
+
+  <ul class="entries">
+    <li>
+      <a class="entry" href="ladder/">
+        <div class="text">
+          <h2>職級階梯：從工程師到 CTO</h2>
+          <p>點一個職級，看它在組織圖上擁有和影響的範圍、原文寫的時間尺度，以及 scope、collaborative reach、impact levers 三欄的內容。用 Dropbox 公開的框架對照 IC 和管理兩條線在哪裡分岔，再看 staff 的四種 archetype 和最上面的 VP、CTO。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="org-size/">
+        <div class="text">
+          <h2>組織規模與管理層數</h2>
+          <p>拉工程師人數和兩層管理幅度，看組織樹什麼時候長出新的一層、主管占多少比例、溝通路徑從 n(n−1)/2 降到多少。用 Larson 的五條團隊大小規則檢查每一種形狀，以及 Brooks's law 為什麼說加人會更慢。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="tech-decision/">
+        <div class="text">
+          <h2>Staff 怎麼推動一個技術決策</h2>
+          <p>比較 design doc、RFC、ADR 三種文件，再逐步走一次跨團隊提案：判斷要不要寫、和主管對齊、送審、disagree and commit、寫成 ADR。另外兩個情境是根本不需要寫，以及跳過主管直接送審而卡住。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="conway/">
+        <div class="text">
+          <h2>團隊切法與 Conway's law</h2>
+          <p>把一個九元件的電商系統依技術層、依價值流或混合方式分給團隊，看跨團隊的依賴、每個功能要牽動幾個團隊、每個團隊的 cognitive load。附上 mirroring hypothesis 的實證研究和 Team Topologies 的四種團隊。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="delivery/">
+        <div class="text">
+          <h2>交付表現怎麼量：DORA 和 Little's law</h2>
+          <p>DORA 的五個交付指標各量什麼、2023 和 2024 年改了什麼，以及哪些用法會把它們用壞。逐日模擬一個團隊的看板，對照 WIP 上限和部署頻率怎麼改變 lead time、失敗率和恢復時間，並驗算 L = λW。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="planning/">
+        <div class="text">
+          <h2>一季的規劃：OKR 怎麼用、怎麼用壞</h2>
+          <p>從 Grove 的 MBO 到 Google 的 OKR：objective 和 key result 各寫什麼、committed 和 aspirational 的預期分數。逐步走過一季，對照健康的規劃、把 OKR 層層往下拆、OKR 綁考績三種結局，看高層、主管和工程師各在做什麼。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="performance/">
+        <div class="text">
+          <h2>績效評核與 calibration</h2>
+          <p>研究顯示評等裡有一半以上反映的是評分的人。十二個工程師、三個寬嚴不同的主管，逐步對照有 calibration、沒有 calibration 和強制分配，看誤差落在誰身上，以及晉升為什麼要另外看證據。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="incident/">
+        <div class="text">
+          <h2>Incident 和 postmortem</h2>
+          <p>照 Google SRE 書看事故應變的角色、什麼時候該宣告 incident、postmortem 為什麼要 blameless。同一個事故走三次：有指揮的應變、沒有人指揮的應變，以及一份追究個人的 postmortem。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="health-check/">
+        <div class="text">
+          <h2>組織健康檢查清單</h2>
+          <p>把整個系列整理成十六個面試或觀察一家公司時可以問的問題，標出健康和警訊的回答、依公司規模排除不適用的題目，並分辨「缺機制」和「用壞了」。附兩個範例公司。</p>
+        </div>
+      </a>
+    </li>
+  </ul>
+</main>
+</body>
+</html>

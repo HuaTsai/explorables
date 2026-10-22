@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>職級階梯：從工程師到 CTO</title>
+<meta name="description" content="用 Dropbox 公開的職級框架當骨架，看每往上一級，擁有的範圍、影響的人和產生影響的槓桿各換成什麼；IC 和管理兩條線在哪裡分岔，最上面的 VP 和 CTO 又是什麼。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* 選級：兩條線各一排按鈕 */
+.ladder { display: flex; flex-direction: column; gap: 0.5rem; }
+.ladder .presets button { font-family: var(--font-mono); min-width: 3.2rem; }
+.ladder .lbl { min-width: 4.5rem; }
+
+/* 面板：左欄組織圖和時間尺度，右欄四個問題和同級對照 */
+.work.ladder-work { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); }
+.stack-col { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+
+/* 組織圖 */
+.org { width: 100%; height: auto; display: block; }
+.org rect { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+.org rect.own { fill: var(--hit-soft); stroke: var(--hit); stroke-width: 1.5; }
+.org rect.reach { stroke: var(--hit); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.org text { fill: var(--muted); font-family: var(--font-body); font-size: 9px; }
+.org circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1; }
+.org .mgr { fill: var(--surface); stroke: var(--muted); stroke-width: 1; }
+.org .me { fill: var(--hit); stroke: var(--hit); }
+.key { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; font-size: 0.75rem; color: var(--muted); padding-top: 0.5rem; }
+.key i { display: inline-block; width: 0.9rem; height: 0.7rem; border-radius: 2px; vertical-align: -0.05em; margin-right: 0.3rem; }
+.key i.own { background: var(--hit-soft); border: 1.5px solid var(--hit); }
+.key i.reach { border: 1.5px dashed var(--hit); }
+.key i.me { width: 0.7rem; border-radius: 50%; background: var(--hit); }
+.key i.mgr { width: 0.6rem; height: 0.6rem; border-radius: 0; border: 1px solid var(--muted); }
+
+/* 時間尺度 */
+.hz { position: relative; height: 2.6rem; margin: 0.3rem 0.4rem 0; }
+.hz .track { position: absolute; left: 0; right: 0; top: 0.7rem; height: 0.5rem; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; }
+.hz .bar { position: absolute; top: 0.7rem; height: 0.5rem; background: var(--hit); border-radius: 3px; }
+.hz .tick { position: absolute; top: 1.45rem; font-size: 0.7rem; color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
+.hz-note { font-size: 0.82rem; color: var(--muted); }
+
+/* 四個問題：和說明裡的規則同一份，每一行底下接這一級的答案 */
+.pseudo .ans { display: block; white-space: normal; font-family: var(--font-body); font-size: 0.85rem; font-weight: 400; line-height: 1.6; color: var(--ink); padding: 0.15rem 0.3rem 0.55rem 1.6rem; }
+.pseudo .ans.none { color: var(--muted); }
+.head-line { font-size: 0.95rem; font-weight: 700; padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--line); }
+.head-line small { display: block; font-family: var(--font-mono); font-weight: 400; font-size: 0.75rem; color: var(--muted); }
+
+/* 同級對照 */
+.pair p { font-size: 0.88rem; }
+.pair p + p { margin-top: 0.5rem; }
+.pair .who { font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); }
+.pair .same { color: var(--hit); font-weight: 700; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 工程組織怎麼運作</a>
+    <h1>職級階梯：從工程師到 CTO</h1>
+    <p class="lead">一家軟體公司從新進工程師到 CTO，中間大約有十幾級。這一頁以 Dropbox 公開的職級框架為骨架，搭配 The Manager's Path 和 Staff Engineer 兩本書，看每往上一級，擁有的範圍、影響到的人、用來產生影響的槓桿各換成什麼。</p>
+  </header>
+
+  <section class="prose">
+    <h2>職級在描述什麼</h2>
+    <p>頭銜不可靠。同樣叫 senior，在不同公司可能差上兩三級。比較可靠的是公司的<span class="term" data-def="career framework 或 career ladder。公司寫下每一級被期待產生多大影響的文件，用來設定目標、評核和晉升。">職級框架</span>怎麼寫。職級框架不是升遷清單，它描述的是每一級的人被期待產生多大的影響。Dropbox 把這件事拆成三個量<span class="sn">Dropbox 的框架公開在 GitHub Pages 上，這一頁依據的是 v2.9.1。框架裡除了軟體工程師，還有 SRE、資安、ML、TPM 等職種，這一頁只看軟體工程師和工程主管兩條線。</span>：</p>
+    <ul>
+      <li><span class="term" data-def="擁有哪一層的目標（任務、專案、團隊的季度目標、跨團隊的年度目標⋯），以及要自己釐清多少模糊。">Scope</span>：擁有哪一層的目標，要自己釐清多少模糊。</li>
+      <li><span class="term" data-def="Dropbox 的定義：為了一個專案需要協作和協調的廣度。">Collaborative reach</span>：為了把事做成，要協調到多大範圍的人。</li>
+      <li><span class="term" data-def="這一級主要靠什麼產生影響：自己的手藝、帶專案、技術策略、帶人、組織設計等。">Impact levers</span>：主要靠什麼產生影響。</li>
+    </ul>
+    <p>職級往上，這三個量會一起變大。IC1 執行別人定義好的任務。IC3 擁有支撐團隊季度目標的專案，開始自己處理模糊的問題。IC5 擁有跨年度、跨團隊的目標。範圍向外擴的同時，槓桿也換了：前兩級靠自己的手藝，中段開始靠帶專案和帶新人，再往上靠技術策略。Dropbox 的詞彙表把槓桿分成兩種乘數。<span class="term" data-def="來自自己直接的技術能力的乘數，也就是 IC 的技術工作。">Technical leverage</span> 來自自己的技術能力；<span class="term" data-def="來自培養人才、建立文化、設定方向，把整個組織的水準拉高所得到的乘數。">organizational leverage</span> 來自培養人才、建立文化和設定方向。IC 線主要用前者，管理線主要用後者。</p>
+    <p><span class="term" data-def="帶一個團隊或一個專案的技術方向和執行的人。多數公司把它當成角色，不是職級。">Tech lead</span> 不在這張表上占一級。The Manager's Path 把它寫成資深工程師都可能接下的一組責任，要多學的主要是專案管理：把一個專案拆開、排出順序。而且這些事得在沒有職權的情況下推動別人去做。Dropbox 的 IC3 描述也只寫了「可能擔任團隊專案的 tech lead」。</p>
+  </section>
+
+  <section class="prose">
+    <h2>定級和晉升的規則</h2>
+    <p>把 Dropbox 的職級期待和晉升原則合起來看，判斷一個人在哪一級、該不該升，大致是下面四個問題：</p>
+    <pre class="code">定級：對一個人，依序問
+1  Scope：擁有哪一層的目標？要自己釐清多少模糊？
+2  Collaborative reach：為了做成事，要協調到哪些人？
+3  Impact levers：主要靠哪一種槓桿產生影響？
+晉升：
+4  在下一級的範圍持續交出成果，時間夠長了嗎？
+     是 → 晉升
+     只是「看起來應該做得到」 → 不晉升</pre>
+    <p>前三行是框架裡每一級固定有的三欄。第 4 行是晉升原則裡的「Evidence, not faith」：晉升是承認一個人已經在下一級持續產生影響，不是押注這個人做得到。下面的 workbench 把每一級對這四個問題的答案攤開來看。點一級，左邊會畫出這一級在組織裡擁有和影響到的範圍，以及原文寫的時間尺度。</p>
+  </section>
+
+  <section class="bench" aria-label="職級階梯">
+    <div class="row ladder">
+      <div class="presets" id="ic-row"><span class="lbl">IC 線</span></div>
+      <div class="presets" id="m-row"><span class="lbl">管理線</span></div>
+    </div>
+
+    <div class="row work ladder-work">
+      <div class="stack-col">
+        <div class="panel">
+          <div class="panel-head">在組織裡的範圍<span class="sub">兩個 group、六個團隊</span></div>
+          <div class="panel-body">
+            <svg class="org" id="org" viewBox="0 0 360 252" role="img" aria-label="組織圖：公司高層、工程部門、兩個 group、各三個團隊"></svg>
+            <div class="key"><span><i class="own"></i>擁有的目標</span><span><i class="reach"></i>影響或協調到的範圍</span><span><i class="me"></i>這個人坐在哪裡</span><span><i class="mgr"></i>主管</span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">時間尺度<span class="sub">原文寫的目標週期</span></div>
+          <div class="panel-body">
+            <div class="hz" id="hz"></div>
+            <p class="hz-note" id="hz-note"></p>
+          </div>
+        </div>
+      </div>
+      <div class="stack-col">
+        <div class="panel">
+          <div class="panel-head">四個問題<span class="sub" id="src"></span></div>
+          <div class="head-line" id="head"></div>
+          <pre class="pseudo" id="rules"></pre>
+        </div>
+        <div class="panel">
+          <div class="panel-head">另一條線的同一級</div>
+          <div class="panel-body pair" id="pair"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>兩條線在哪裡分岔</h2>
+    <p>Dropbox 的管理線從 M3 開始，沒有 M1、M2。晉升指引寫 IC 在 L3 典型待 2 到 4 年，管理者在 L3 只待 0 到 2 年，理由是轉管理的人應該已經在 IC 線走完大半個 L3。所以轉管理是橫移到同一級的另一條線，不是升官。</p>
+    <p>同一級的兩條線，範圍和時間尺度大致對得上。M3 和 IC3 都對季度目標負責，M4 和 IC4 都對半年到一年的目標負責。到了 L6 和 L7，兩條線的一句話描述一字不差。差別在槓桿：IC 線寫的是 domain expertise、technical strategy、product expertise；管理線寫的是流程和運作節奏、招募和人才的整個生命週期，以及要求底下的主管負責。兩條線只有一處不對稱：IC5 寫的是跨年度，M5 只寫六到十二個月，管理線要到 M6 才進入一到兩年的尺度。</p>
+    <p>L4 在兩條線上都是 <span class="term" data-def="預期每個人最終都會到達、而且停在這裡也完全正常的職級。沒有「不往上升就得離開」的壓力。">career level</span>：框架預期每個工程師和主管最後都會有 L4 的影響力，也明白寫了很多人會一直停在這一級。換句話說，到了 L4 還想往上，是選擇，不是義務。不這樣設計的組織會讓每個人覺得不往上爬就是落後，結果把擅長做事的人推上不適合的位置。</p>
+  </section>
+
+  <section class="prose">
+    <h2>Staff 以上不是一種工作</h2>
+    <p>到了 IC5，同一個職級底下的實際工作開始分岔。Will Larson 在 Staff Engineer 裡把它歸納成四種 <span class="term" data-def="原型。描述 staff 以上工程師常見的幾種工作型態，同一個人可能混合好幾種。">archetype</span><span class="sn">Larson 自己說這個分類重點在好用，不在完整。</span>：</p>
+    <ul>
+      <li><strong>Tech Lead</strong>：帶一個團隊的方向和執行，通常搭配一位主管，有時搭配同一個領域的兩三位。這是最常見的一種，Larson 估計組織大約每八個工程師需要一位。</li>
+      <li><strong>Architect</strong>：對一個關鍵領域的方向、品質和做法負責，要同時懂技術限制、使用者需求和組織層級的領導。通常要到相當大的公司才會出現。</li>
+      <li><strong>Solver</strong>：被組織高層派去處理被認定為關鍵的棘手問題，一路深挖到解決為止。多出現在把個人、而不是團隊當成規劃和負責單位的公司。</li>
+      <li><strong>Right Hand</strong>：延伸一位高階主管的注意力，借用主管的範圍和權限，會參加主管的 staff meeting。這是最少見的一種，組織到幾百個工程師才會出現。</li>
+    </ul>
+    <p>Dropbox 的框架直接採用了前三種，沒有收 Right Hand，並且寫明升到資深 IC 不一定要當 tech lead。這也是 staff 很難比較的原因：同樣是 IC5，一個人每天在團隊裡 review 設計，另一個人可能半年都在追一個橫跨好幾個系統的效能問題。staff 怎麼把一個技術決策推到落地，是<a href="../tech-decision/">後面一頁</a>的主題。</p>
+  </section>
+
+  <section class="prose">
+    <h2>最上面兩級：VP 和 CTO</h2>
+    <p>Dropbox 的框架停在 M7。再往上，The Manager's Path 第 8 章把 VP of Engineering 和 CTO 分開談。VP 通常是工程師管理職涯的頂端，負責推動想法的執行：把開發 roadmap 和招募計畫對齊，規劃團隊要怎麼演變。</p>
+    <p>CTO 則被明白寫成「不是工程職位」，也不是技術階梯的頂端。CTO 應該是公司在現階段需要的那種技術主管，先是主管，然後才是技術人。所以同樣叫 CTO，在十個人的新創裡可能是寫最多程式的那個人；在上千人的公司裡，可能主要在對外、對董事會談技術策略，實際帶工程組織的是 VP。</p>
+    <p>所以要看懂一家公司，第一個要問的是：工程組織的最高主管是誰？CTO 和 VP 誰向誰報告？兩家公司的職稱一樣，分工不一定一樣。</p>
+  </section>
+
+  <section class="prose">
+    <h2>晉升怎麼判</h2>
+    <p>Dropbox 的晉升原則開頭就寫「No checkbox game」：框架不是清單，勾滿行為描述不保證晉升。真正被評估的是影響，而影響是透過所有面向一起看的，不只看專案成果。框架之所以要特別澄清這一點，是因為把職級描述當成待辦清單、一條一條去「刷」，是最常見的誤用。</p>
+    <p>第二條是前面第 4 行的「Evidence, not faith」，而且要「持續一段時間」。押注式的晉升（覺得這個人應該能勝任就先升），失敗的代價是讓這個人在超出能力的位置上撐不住。所以晉升指引同時給了每一級的典型停留時間：L1 是 1.5 到 2 年，L2 是 2 到 3 年，L3 是 2 到 4 年，L4 以上至少 4 年。</p>
+    <p>晉升也有名額。Dropbox 的澄清文件舉了一個例子：假設晉升目標是 15%，每 100 個工程師的組織就有 15 個名額，各個組織平均分配。這代表晉升不只看個人表現夠不夠，還要和同一批人一起排序。這個排序的過程叫 <span class="term" data-def="校準。主管們一起比對各自團隊的評等和晉升提名，讓不同團隊的標準一致，並在名額內排出順序。">calibration</span>，在機制那一半會專門寫一頁。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>職級描述的是範圍、協調對象和槓桿，不是頭銜。每往上一級，擁有的目標高一層，時間尺度拉長一截，槓桿從自己的手藝換成帶專案、技術策略或經營組織。管理線是和 IC 平行的另一條線，從 L3 分出去，同一級的範圍大致相同。L4 是多數人會停下來的 career level，到了 L4 還要不要往上，是自己的選擇。</p>
+    <p>這個系列接下來的三頁會接著談：<a href="../org-size/">組織規模</a>怎麼決定需要幾層主管；staff 怎麼<a href="../tech-decision/">推動一個技術決策</a>；團隊的切法怎麼反過來決定系統的長相，也就是 <a href="../conway/">Conway's law</a>。</p>
+    <p>這一頁的級數和描述都來自 Dropbox 一家公司。其他公司的級數、職稱和每一級的期待都不一樣，要比較時應該對照範圍和槓桿，不要對照職稱。組織圖只畫了工程部門，產品、設計這些天天合作的跨職能夥伴沒有畫進去。框架寫的也只是期待，不代表每個人實際的狀況。</p>
+  </section>
+
+  <p class="foot">來源：Dropbox Engineering Career Framework v2.9.1（各級 Level Expectations、Promotion Principles、Promotion Guidelines、Clarifications and Myths、Archetypes Behaviors、Glossary）；Camille Fournier，The Manager's Path，Ch. 3 Tech Lead、Ch. 8 The Big Leagues；Will Larson，Staff Engineer，〈Staff archetypes〉。</p>
+</main>
+
+<script>
+// 每一級：一句話描述、三個量、典型停留年數、時間尺度、組織圖上的範圍、和上一級的差別。
+// 文字是 Dropbox 框架（L1–L7）和 The Manager's Path 第 8 章（VP、CTO）的中文摘要。
+// hz：時間尺度在軸上的區間，0 = 任務、1 = 季、2 = 半年、3 = 一年、4 = 兩年、5 = 三年以上；null 表示原文沒寫。
+// sc：own 擁有、reach 影響到的框 id，me 是這個人坐的位置（dot、mgr、dir、vp、exec）。
+const L = {
+  IC1: {
+    name: 'IC1 Software Engineer', n: 1, src: 'dropbox',
+    head: '在團隊的指引下，產出大量高品質、可以上線的程式碼。',
+    scope: '執行定義好的任務，參與解決已經有解法的問題。',
+    reach: '在自己團隊的範圍內工作，由主管或 TL 給具體指引。',
+    levers: 'Craft：主要在磨練身為工程師的手藝。',
+    years: '1.5 到 2 年',
+    hz: null, hzNote: '原文沒寫時間，只寫「定義好的任務」。',
+    sc: { own: [], reach: ['t00'], me: 'dot' },
+    say: '起點。要做什麼、怎麼做大多是別人定好的，重點是把程式寫好，學會這裡的做事方式。',
+  },
+  IC2: {
+    name: 'IC2 Software Engineer', n: 2, src: 'dropbox',
+    head: '把有韌性、可持續的軟體專案從設計一路做到實作和上線，而且產出很多。',
+    scope: '執行定義好的專案，達成團隊層級的目標。面對定義好的問題，能自己找出解法，或套用既有做法。',
+    reach: '主要在自己團隊內，主管或 TL 只給高層次的方向。',
+    levers: 'Craft（例如軟體設計）越來越純熟；可能開始帶新人、實習生。',
+    years: '2 到 3 年',
+    hz: null, hzNote: '原文沒寫時間，只寫「定義好的專案」。',
+    sc: { own: [], reach: ['t00'], me: 'dot' },
+    say: '和 IC1 比，從「任務」變成「專案」。問題仍然是別人定義好的，但解法要自己找，主管只給方向。組織圖上的範圍沒變，變的是自主程度。',
+  },
+  IC3: {
+    name: 'IC3 Software Engineer', n: 3, src: 'dropbox',
+    head: '自己找出並交付一連串里程碑，範圍是一個產品重點或一個多元件的系統。',
+    scope: '擁有並交付支撐團隊季度目標的專案。能自己為模糊、開放的問題找到對的解法。',
+    reach: '主要和自己團隊與跨職能夥伴合作，並且為了自己的專案推動跨團隊協作。',
+    levers: 'Project Leadership：定義並交付範圍清楚的里程碑，可能擔任團隊專案的 tech lead。另外還有 Product Expertise 和 Mentorship。',
+    years: '2 到 4 年',
+    hz: [0, 1], hzNote: '季度目標。',
+    sc: { own: [], reach: ['t00', 't01'], me: 'dot' },
+    say: '第一次碰到模糊、開放的問題，要自己拆成里程碑。也是第一次可能當專案的 tech lead，為了自己的專案去和別的團隊協調。',
+  },
+  IC4: {
+    name: 'IC4 Software Engineer', n: 4, src: 'dropbox',
+    head: '在一個團隊、一項產品能力或一個技術系統上，自主地持續產生業務影響。',
+    scope: '擁有並交付團隊的半年或年度目標。擅長處理需要艱難取捨的模糊問題，定義能讓整個團隊進步的技術方案或流程。',
+    reach: '是團隊裡強而有力的 leader，影響開始延伸到團隊外，會推動跨團隊或跨職能的計畫。',
+    levers: 'Technical Strategy：在中長期策略裡扮演關鍵角色。Project Leadership：自主定義並交付大型專案的技術 roadmap，常有跨團隊依賴。',
+    years: '4 年以上，career level',
+    hz: [2, 3], hzNote: '半年或年度目標。',
+    sc: { own: ['t00'], reach: ['t01', 't02'], me: 'dot' },
+    say: '擁有的東西從專案變成團隊的半年或年度目標，影響開始溢出團隊之外。這一級是 career level：預期每個人最後都會到這裡，很多人停在這裡也完全正常。',
+  },
+  IC5: {
+    name: 'IC5 Staff Software Engineer', n: 5, src: 'dropbox',
+    head: '訂定跨年度、跨團隊的技術策略，自己動手實作或透過廣泛的技術領導把它做出來。',
+    scope: '交付跨年度、跨團隊的產品或平台目標。面對需要艱難排序的開放問題，同時定義要做什麼和怎麼做。',
+    reach: '越來越能影響其他團隊的 roadmap。判斷時以整個工程組織的優先順序為準，不追求局部最佳。',
+    levers: 'Domain Expertise、Technical Strategy（定義大型專案的願景並交付）、Product Expertise、Mentorship（當其他工程師的榜樣）。',
+    years: null,
+    hz: [3, 5], hzNote: '跨年度，原文沒寫上限。',
+    sc: { own: ['t00', 't01'], reach: ['g0', 't10'], me: 'dot' },
+    say: '跨過 staff 這條線。時間尺度變成跨年度，擁有的目標橫跨多個團隊。人還坐在原本的團隊裡，範圍卻已經是好幾個團隊。',
+  },
+  IC6: {
+    name: 'IC6 Principal Software Engineer', n: 6, src: 'dropbox',
+    head: '針對一個公司層級的策略目標，或工程、產品、設計（EPD）使命的關鍵部分交出成果。',
+    scope: '擁有並交付組織或全公司的跨年度、跨團隊目標。用多年、業界領先的眼光，確保產品能撐到遠超過目前的規模。',
+    reach: '通常影響一個 group 的技術策略，常和 director 及 EPD 高層緊密合作，影響整體方向。會跨越組織邊界，主動找出最能發揮自己的地方。',
+    levers: 'Domain Expertise；Technical Strategy（把 group 裡幾個專案的技術策略對齊到 EPD 的大方向）；Product Expertise；Innovation（和跨職能夥伴一起找出技術能打開的新商機）。',
+    years: null,
+    hz: [3, 5], hzNote: '跨年度，原文沒寫上限。',
+    sc: { own: ['g0'], reach: ['eng'], me: 'dot' },
+    say: '範圍到一個 group 或全公司，固定和 director 及 EPD 高層合作。這一級的一句話描述和 M6 Engineering Director 完全相同。',
+  },
+  IC7: {
+    name: 'IC7 Senior Principal Software Engineer', n: 7, src: 'dropbox',
+    head: '針對一組公司層級的策略目標，或一個特別複雜的策略目標交出成果。',
+    scope: '擁有並交付全公司的產品或平台目標，影響跨年度、跨團隊。',
+    reach: '通常影響 EPD 和全公司的策略。',
+    levers: '和 IC6 相同的四種槓桿，但技術策略對齊的範圍是整個工程組織。',
+    years: null,
+    hz: [3, 5], hzNote: '跨年度，原文沒寫上限。',
+    sc: { own: ['eng'], reach: ['exec'], me: 'dot' },
+    say: '影響全公司的技術策略。一句話描述和 M7 Senior Engineering Director 相同，兩條線在這裡的差別只剩槓桿。',
+  },
+  M3: {
+    name: 'M3 Engineering Manager', n: 3, src: 'dropbox',
+    head: '在自己主管的支持下，帶領一個 IC 團隊交出業務和客戶影響。',
+    scope: '在主管指引下帶領團隊執行定義好的專案，支撐季度目標。',
+    reach: '主要和自己的團隊，以及產品、設計、QA 這些跨職能夥伴合作。',
+    levers: '建立有效率的流程和運作節奏，排除阻礙，要求團隊負責，同時維持健康的團隊環境。',
+    years: '0 到 2 年（IC 在 L3 是 2 到 4 年）',
+    hz: [0, 1], hzNote: '季度目標，和 IC3 相同。',
+    sc: { own: ['t00'], reach: [], me: 'mgr' },
+    say: '管理線的起點和 IC3 同一級。轉管理的人被預期已經在 IC 線走完大半個 L3，所以這是橫移，不是升官。槓桿從技術換成流程、節奏和團隊健康。',
+  },
+  M4: {
+    name: 'M4 Engineering Manager', n: 4, src: 'dropbox',
+    head: '用一套完整的管理工具，獨立帶領工程團隊交出直接的業務和客戶影響。',
+    scope: '獨立帶團隊推動支撐半年或年度目標的專案。越來越能處理超出自己團隊範圍的模糊問題。',
+    reach: '能影響多個團隊和跨職能夥伴的結果，常要處理衝突和模糊。',
+    levers: '透過影響力、策略規劃、解決問題和做決策產生影響。營造成長和支持的環境。',
+    years: '4 年以上，career level',
+    hz: [2, 3], hzNote: '半年或年度目標，和 IC4 相同。',
+    sc: { own: ['t00'], reach: ['t01', 't02'], me: 'mgr' },
+    say: '和 IC4 一樣擁有半年到一年的目標，也一樣是 career level。從「在主管指引下」變成獨立帶隊，開始要處理跨團隊的衝突。',
+  },
+  M5: {
+    name: 'M5 Senior Engineering Manager', n: 5, src: 'dropbox',
+    head: '在高度複雜的狀況下，同時交付好幾條主要工作線。',
+    scope: '引導自己領域內一個或多個團隊、多個專案或工作線的策略和執行，時間尺度六到十二個月。',
+    reach: '是相關團隊和跨職能夥伴的有力夥伴，能在沒有職權的情況下影響別人。越來越以整個組織為優化對象。',
+    levers: '管理專業，加上人脈、平行管理（sideways management）和跨職能的影響力。訂定和組織一致的策略。組建、組織並激勵團隊。',
+    years: null,
+    hz: [2, 3], hzNote: '六到十二個月。',
+    sc: { own: ['t00', 't01'], reach: ['g0'], me: 'mgr' },
+    say: '開始同時管好幾條工作線，影響要靠平行管理和跨職能的關係，不能靠職權。',
+  },
+  M6: {
+    name: 'M6 Engineering Director', n: 6, src: 'dropbox',
+    head: '針對一個公司層級的策略目標，或 EPD 使命的關鍵部分交出成果。',
+    scope: '對直接支撐公司或 EPD 層級目標的一個策略目標負完全責任，時間尺度一到兩年。',
+    reach: '透過組織、人才和流程上的洞見，提升工程部門和夥伴部門的水準。預見挑戰，影響整個工程組織的方向。',
+    levers: '要求自己和底下的主管為檢視、監督、排序和交付負責。和跨職能夥伴一起提出長期策略。負責整個組織的人才生命週期。',
+    years: null,
+    hz: [3, 4], hzNote: '一到兩年。',
+    sc: { own: ['g0'], reach: ['eng'], me: 'dir' },
+    say: '對一個公司層級的目標負完全責任。底下直接帶的是主管而不是工程師，所以主要的槓桿變成要求這些主管負責。',
+  },
+  M7: {
+    name: 'M7 Senior Engineering Director', n: 7, src: 'dropbox',
+    head: '針對一組公司層級的策略目標，或一個特別複雜的策略目標交出成果。',
+    scope: '對一組策略目標負完全責任，時間尺度兩到三年。',
+    reach: '實質改變整個工程部門的運作方式。即使組織嚴重不一致，仍能影響 EPD 整體的方向。',
+    levers: '建構並管理複雜的工程組織。和 VP、director 一起定義下屬要執行的策略目標。',
+    years: null,
+    hz: [4, 5], hzNote: '兩到三年。',
+    sc: { own: ['g0', 'g1'], reach: ['eng'], me: 'dir' },
+    say: '管一組策略目標，時間尺度兩到三年。組織意見嚴重分歧時，還是要能把方向推動下去。',
+  },
+  VP: {
+    name: 'VP of Engineering', n: null, src: 'fournier',
+    head: '通常是工程師管理職涯的頂端，負責把想法推動到執行。',
+    scope: '整個工程組織的執行。',
+    reach: '和其他部門的高階主管平起平坐。',
+    levers: '把開發 roadmap 和招募計畫對齊，規劃團隊要怎麼演變。',
+    years: null,
+    hz: null, hzNote: '書裡沒有逐級寫時間尺度。',
+    sc: { own: ['eng'], reach: ['exec'], me: 'vp' },
+    say: 'Dropbox 的框架寫到 M7 為止，再往上改用 The Manager\'s Path 的描述：VP 是管理職涯的頂端，負責執行。',
+  },
+  CTO: {
+    name: 'CTO', n: null, src: 'fournier',
+    head: '公司在現階段需要的技術策略主管：先是主管，然後才是技術人。',
+    scope: '公司層級的技術策略，內容依公司所處的階段而定。',
+    reach: '公司高層和董事會。',
+    levers: '書裡明白寫了 CTO 不是工程職位，也不是技術階梯的頂端。不想承擔管理責任，就得一起放掉管理帶來的權力。',
+    years: null,
+    hz: null, hzNote: '書裡沒有逐級寫時間尺度。',
+    sc: { own: ['exec'], reach: ['eng'], me: 'exec' },
+    say: 'CTO 不在任何一條階梯的頂端。它是公司在現階段需要的技術主管，所以每家公司的 CTO 做的事都不一樣。',
+  },
+};
+const IC = ['IC1', 'IC2', 'IC3', 'IC4', 'IC5', 'IC6', 'IC7'];
+const M = ['M3', 'M4', 'M5', 'M6', 'M7', 'VP', 'CTO'];
+
+const $ = id => document.getElementById(id);
+const state = { k: 'IC4' };
+
+// ---- 組織圖：公司高層、工程部門、兩個 group、各三個團隊（一個主管、五個工程師） ----
+function orgSvg(sc) {
+  const cls = id => sc.own.includes(id) ? ' class="own"' : sc.reach.includes(id) ? ' class="reach"' : '';
+  let s = `<rect id="exec"${cls('exec')} x="6" y="4" width="348" height="26" rx="3"/>`;
+  s += `<text x="14" y="21">公司高層（CEO 和各部門主管）</text>`;
+  s += `<circle cx="340" cy="17" r="4" class="${sc.me === 'exec' ? 'me' : ''}"/>`;
+  s += `<rect id="eng"${cls('eng')} x="6" y="38" width="348" height="210" rx="3"/>`;
+  s += `<text x="14" y="53">工程部門</text>`;
+  s += `<rect class="mgr${sc.me === 'vp' ? ' me' : ''}" x="334" y="44" width="8" height="8"/>`;
+  [0, 1].forEach(g => {
+    const gx = 14 + g * 172;
+    s += `<rect id="g${g}"${cls('g' + g)} x="${gx}" y="62" width="160" height="178" rx="3"/>`;
+    s += `<text x="${gx + 7}" y="76">group ${'AB'[g]}</text>`;
+    s += `<rect class="mgr${sc.me === 'dir' && g === 0 ? ' me' : ''}" x="${gx + 146}" y="68" width="8" height="8"/>`;
+    [0, 1, 2].forEach(t => {
+      const tx = gx + 6 + t * 51, id = `t${g}${t}`;
+      s += `<rect id="${id}"${cls(id)} x="${tx}" y="84" width="46" height="148" rx="3"/>`;
+      s += `<text x="${tx + 5}" y="97">team</text>`;
+      s += `<rect class="mgr${sc.me === 'mgr' && g === 0 && t === 0 ? ' me' : ''}" x="${tx + 19}" y="104" width="8" height="8"/>`;
+      for (let d = 0; d < 5; d++) {
+        const me = sc.me === 'dot' && g === 0 && t === 0 && d === 2;
+        s += `<circle cx="${tx + 23}" cy="${128 + d * 22}" r="5" class="${me ? 'me' : ''}"/>`;
+      }
+    });
+  });
+  return s;
+}
+
+// ---- 時間尺度軸 ----
+const TICKS = ['任務', '季', '半年', '一年', '兩年', '三年+'];
+function hzHtml(hz) {
+  const pos = i => (i / (TICKS.length - 1)) * 100;
+  let s = `<div class="track"></div>`;
+  if (hz) s += `<div class="bar" style="left:${pos(hz[0])}%;width:${Math.max(2, pos(hz[1]) - pos(hz[0]))}%"></div>`;
+  s += TICKS.map((t, i) => `<span class="tick" style="left:${pos(i)}%">${t}</span>`).join('');
+  return s;
+}
+
+// ---- 四個問題：和說明裡的規則同一份，每一行接這一級的答案 ----
+function rulesHtml(lv) {
+  const ans = (t, none) => `<span class="ans${none ? ' none' : ''}">${t}</span>`;
+  const years = lv.years ? `典型停留：${lv.years}。` : (lv.src === 'dropbox' ? '晉升指引只給到 L4，L5 以上沒寫典型停留時間。' : '書裡沒有寫。');
+  return [
+    `<span class="pl head">定級：對一個人，依序問</span>`,
+    `<span class="pl">1  Scope：擁有哪一層的目標？要自己釐清多少模糊？</span>` + ans(lv.scope),
+    `<span class="pl">2  Collaborative reach：為了做成事，要協調到哪些人？</span>` + ans(lv.reach),
+    `<span class="pl">3  Impact levers：主要靠哪一種槓桿產生影響？</span>` + ans(lv.levers),
+    `<span class="pl head">晉升：</span>`,
+    `<span class="pl">4  在下一級的範圍持續交出成果，時間夠長了嗎？</span>` + ans(years, !lv.years),
+  ].join('');
+}
+
+// ---- 同級對照 ----
+function pairHtml(k) {
+  const lv = L[k];
+  if (!lv.n) return `<p>這一級在 Dropbox 的框架之外，沒有對應的 IC 職級。The Manager's Path 特別強調 CTO 不是 IC 線的頂端。</p>`;
+  if (lv.n < 3) return `<p>管理線從 L3 開始，L1、L2 沒有對應的管理職級。</p>`;
+  const other = L[(k.startsWith('IC') ? 'M' : 'IC') + lv.n];
+  const same = other.head === lv.head;
+  let s = `<p class="who">${other.name}</p><p>${other.head}</p>`;
+  s += same ? `<p><span class="same">一句話描述完全相同。</span>兩條線在這一級的差別只剩槓桿：${other.levers}</p>`
+            : `<p>槓桿：${other.levers}</p>`;
+  if (lv.n === 5) s += `<p>時間尺度在這一級不對稱：IC5 寫跨年度，M5 只寫六到十二個月。</p>`;
+  return s;
+}
+
+function render() {
+  const lv = L[state.k];
+  document.querySelectorAll('.ladder button').forEach(b => b.classList.toggle('chosen', b.dataset.k === state.k));
+  $('org').innerHTML = orgSvg(lv.sc);
+  $('hz').innerHTML = hzHtml(lv.hz);
+  $('hz-note').textContent = lv.hzNote;
+  $('head').innerHTML = `<small>${lv.name}</small>${lv.head}`;
+  $('src').textContent = lv.src === 'dropbox' ? 'Dropbox 框架' : 'The Manager\'s Path';
+  $('rules').innerHTML = rulesHtml(lv);
+  $('pair').innerHTML = pairHtml(state.k);
+  $('say').textContent = lv.say;
+}
+
+function buttons(row, keys) {
+  keys.forEach(k => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.k = k; b.textContent = k;
+    b.addEventListener('click', () => { state.k = k; render(); });
+    row.appendChild(b);
+  });
+}
+buttons($('ic-row'), IC);
+buttons($('m-row'), M);
+render();
+</script>
+</body>
+</html>

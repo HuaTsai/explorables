@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>一季的規劃：OKR 怎麼用、怎麼用壞</title>
+<meta name="description" content="OKR 從 Intel 的 MBO 到 Google 的做法：objective 和 key result 各寫什麼、committed 和 aspirational 差在哪、為什麼不該層層往下拆、為什麼不該綁考績。逐步走過一季的規劃，看高層、主管、工程師各在做什麼。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+.work.plan-work { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr); }
+
+/* OKR 樹 */
+.okr { display: flex; flex-direction: column; gap: 0.5rem; }
+.obj { border: 1px solid var(--line); border-radius: 4px; padding: 0.45rem 0.6rem; background: var(--bg); }
+.obj.team { margin-left: 0.9rem; }
+.obj.chg { border-color: var(--hit); box-shadow: inset 0 0 0 1px var(--hit); }
+.obj .who { font-size: 0.72rem; color: var(--muted); }
+.obj .o { font-size: 0.85rem; font-weight: 700; }
+.obj ul { list-style: none; margin: 0.3rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.obj li { font-size: 0.8rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.4rem; align-items: baseline; }
+.obj li.cut { color: var(--muted); text-decoration: line-through; }
+.obj li .tags { display: flex; gap: 0.2rem; align-items: center; }
+.obj li .score { font-family: var(--font-mono); font-weight: 600; }
+.obj li .score.low { color: var(--miss); }
+.badge.out { background: var(--miss-soft); color: var(--miss); }
+.badge.res { background: var(--hit-soft); color: var(--hit); }
+.badge.mark { background: var(--mark); color: var(--ink); }
+
+/* 誰在做什麼 */
+.pseudo .pl.skip { color: var(--miss); text-decoration: line-through; }
+.roles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.roles li { font-size: 0.82rem; padding: 0.25rem 0.35rem; border-radius: 3px; }
+.roles li.act { background: var(--mark); }
+.roles .who { font-weight: 700; display: block; }
+.roles .what { color: var(--muted); }
+.roles li.act .what { color: var(--ink); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 工程組織怎麼運作</a>
+    <h1>一季的規劃：OKR 怎麼用、怎麼用壞</h1>
+    <p class="lead">多數軟體公司每季都會跑一次規劃：高層定方向，主管和團隊決定這季要做什麼、不做什麼，季末再回頭看做到了多少。這一頁看 OKR 這套最常見的做法原本是怎麼設計的，再逐步走過一季，對照三種結局：健康的一季、把 OKR 層層往下拆、把 OKR 綁進考績。</p>
+  </header>
+
+  <section class="prose">
+    <h2>從 MBO 到 OKR</h2>
+    <p>OKR 的源頭是 Andy Grove 在 Intel 推行的目標管理。Grove 在 1983 年的 High Output Management 裡說，一套目標管理制度只需要回答兩個問題：我想去哪裡？這給出 objective。我要怎麼掌握自己的進度，知道正在往那裡走？這給出 key results，也就是里程碑。Grove 強調這是讓人自己掌握進度的工具，像是把碼錶交到自己手上。John Doerr 從 Intel 把這套做法帶到 Google，之後才在矽谷普及。</p>
+    <p>Google 公開的 re:Work 指南把格式講得很具體：objective 要有野心，甚至讓人有點不舒服；選三到五個就好，每個配大約三個 key result。Key result 要可量測、能用數字評分，而且量的是結果，不是做了哪些事。季末每個 KR 以 0.0 到 1.0 評分，平均起來就是 objective 的分數，<span class="term" data-def="拉高目標的 OKR。本來就預期做不完，平均拿到 0.6 到 0.7 是理想狀態，拿到 1.0 代表目標定得太保守。">延伸目標</span>拿到 0.6 到 0.7 是理想狀態。Doerr 在 Measure What Matters 裡公開的 Google OKR playbook 把 OKR 分成兩種：<span class="term" data-def="承諾型 OKR。團隊同意一定要做到，預期分數是 1.0，沒做到要解釋是規劃還是執行出了問題。">committed</span>，預期 1.0，沒做到要解釋原因；<span class="term" data-def="野心型 OKR。往理想的方向拉，預期平均約 0.7，分數變異大。">aspirational</span>，預期平均約 0.7。<span class="sn">這兩種的預期分數出自 Google OKR playbook。re:Work 指南本身沒有用 committed 和 aspirational 這兩個詞，只寫延伸目標的理想分數是 60% 到 70%。</span></p>
+    <p>re:Work 也明白寫了兩件事：OKR 是公開的，所以每個人都看得到別人在做什麼；OKR 不等於員工考核。後面那一句，就是第三個情境的關鍵。</p>
+  </section>
+
+  <section class="prose">
+    <h2>OKR 是授權的工具，不是派工的工具</h2>
+    <p>Marty Cagan 在 2020 年的〈Team Objectives – Overview〉裡說，自己已經不再向大多數公司推薦 OKR，因為它很少真的有效。理由是：OKR 首先是一種授權（empowerment）的技術。重點是給產品團隊真正要解決的問題，再給團隊空間去解決。如果公司本來的運作方式是<span class="term" data-def="拿到一張已經決定好的功能清單和上線日期，只負責把它做出來的團隊。Cagan 用來和「拿到問題、自己找解法」的產品團隊對比。">feature team</span>加上一份寫好功能和日期的 roadmap，再把 OKR 疊上去，只是換了一種格式派工。</p>
+    <p>Cagan 點名了幾種失敗：主管為自己的部門訂一套目標，再<strong>層層往下拆</strong>給員工，結果同一個跨職能團隊裡的人各自朝不同的目標努力；在團隊目標之外，再加上個人目標；或者反過來，高層以為授權就是讓團隊自己挑目標、季末再看結果，自己完全不參與。Cagan 的建議是只保留團隊的目標，拿掉主管目標和個人目標，而高層要負責把產品策略轉成要團隊解決的問題。</p>
+    <p>把這些整理成一季的流程。第 5 行是我加的推論：re:Work 把「團隊不用盡產能就能達成」列為 sandbagging，反過來說，產能放不下的東西就要明確說不做，不然 committed 就失去意義。</p>
+    <pre class="code">一季的規劃（Grove；Google re:Work；Cagan）
+1  高層訂 3–5 個 objective：要往哪裡去，有野心、定性
+2  每個 objective 約 3 個 key result：可量測，量結果，不量工作
+3  團隊拿到要解決的問題，自己提出 KR；不把上層的 OKR 一層層拆下去
+4  標明 committed（預期 1.0）和 aspirational（預期約 0.7）
+5  對照團隊產能排序，排不進的寫明「這季不做」
+6  季中檢查、季末評分（0.0–1.0）；分數不拿來打考績</pre>
+    <p>下面的 workbench 用同一個公司目標走三個情境。中間是 OKR 樹，右邊是每一步各層在做什麼。情境是照這些資料編的示範。</p>
+  </section>
+
+  <section class="bench" aria-label="一季的規劃">
+    <div class="row presets" id="presets"><span class="lbl">情境</span></div>
+    <div class="row">
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
+      </div>
+    </div>
+    <div class="row work plan-work">
+      <div class="panel">
+        <div class="panel-head">流程</div>
+        <pre class="pseudo" id="pseudo"></pre>
+      </div>
+      <div class="panel">
+        <div class="panel-head">OKR<span class="sub" id="quarter"></span></div>
+        <div class="panel-body"><div class="okr" id="okr"></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">誰在做什麼</div>
+        <div class="panel-body"><ul class="roles" id="roles"></ul></div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>三種結局差在哪</h2>
+    <p>第一個情境裡，KR 量的是新用戶的第一週留存，團隊自己決定要改註冊流程還是改引導；季中發現有一個做法沒效果，就換方向。季末 aspirational 那個 KR 拿到 0.7，committed 那個拿到 1.0，這正是設計上預期的分數。</p>
+    <p>第二個情境是 Cagan 說的層層往下拆。公司的 objective 一樣，但 director 把它翻譯成一份專案清單，團隊的 KR 變成「上線新的引導流程」這種產出。季末全部上線，分數 1.0，留存卻沒變。分數只說明事情做完了，沒說明問題有沒有解決，而團隊從頭到尾沒有機會換方向，因為團隊拿到的不是問題，是解法。</p>
+    <p>第三個情境是 OKR 綁進考績。只要分數會影響考績，理性的團隊就會把 KR 訂在本來就做得到的地方，也就是 re:Work 警告的 sandbagging。季末每個 KR 都是 1.0，看起來表現完美，但這一季沒有人嘗試任何有風險的事。延伸目標預期拿 0.7 的設計，在綁考績的那一刻就失效了。</p>
+  </section>
+
+  <section class="prose">
+    <h2>工具和節奏</h2>
+    <p>Google 的做法是年度和季度 OKR 並行，每季開一次全公司的會分享和評分，季中和季末各檢查一次。很多公司把 OKR 寫在試算表或共用文件裡，也有專門的 OKR 軟體。Jira、Linear 這類工作追蹤工具裡的 epic 和專案，是 KR 底下「要做的事」，不是 KR 本身。re:Work 列的常見錯誤之一，就是把 OKR 當成待辦清單，這通常就是從「KR 等於一張張票」開始的。</p>
+    <p>規劃也不只有 OKR 一種做法。有的公司用年度規劃決定 headcount，再用季度 roadmap 排專案；有的用固定長度的週期加上「這個問題值得花多少時間」的上限來決定做什麼。共同點是同一組問題：誰決定要解決什麼問題？誰決定怎麼解？做不完的時候砍什麼？季末怎麼知道有沒有用？</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>OKR 原本是讓團隊自己掌握進度的工具：objective 說要去哪裡，key result 用可量測的結果說明有沒有走到。它有效的前提是團隊拿到的是問題，不是解法；committed 和 aspirational 分清楚；分數不拿來打考績。把 OKR 層層往下拆，或者綁進考績，表格看起來一樣，運作起來卻是兩回事。</p>
+    <p>分數不打考績，那考績怎麼打？<a href="../performance/">下一頁</a>講績效評核和 calibration，那是另一套獨立的機制。</p>
+    <p>情境裡只有一個 objective、兩個團隊，真實的規劃還要處理跨團隊的依賴、headcount 的分配，以及高層之間對優先順序的爭論。這一頁也沒有談 OKR 以外的規劃方式各自的取捨。</p>
+  </section>
+
+  <p class="foot">來源：Andrew S. Grove，High Output Management（1983）；Google re:Work，〈Set goals with OKRs〉；Google OKR playbook（收錄於 John Doerr，Measure What Matters，2018）；Marty Cagan，〈Team Objectives – Overview〉，SVPG，2020。</p>
+</main>
+
+<script>
+const LINES = [
+  { t: '一季的規劃（Grove；Google re:Work；Cagan）', head: true },
+  { t: '1  高層訂 3–5 個 objective：要往哪裡去，有野心、定性' },
+  { t: '2  每個 objective 約 3 個 key result：可量測，量結果，不量工作' },
+  { t: '3  團隊拿到要解決的問題，自己提出 KR；不把上層的 OKR 一層層拆下去' },
+  { t: '4  標明 committed（預期 1.0）和 aspirational（預期約 0.7）' },
+  { t: '5  對照團隊產能排序，排不進的寫明「這季不做」' },
+  { t: '6  季中檢查、季末評分（0.0–1.0）；分數不拿來打考績' },
+];
+const ROLES = [
+  ['exec', '高層', '執行長、VP'],
+  ['dir', 'Director', '帶好幾個團隊的主管'],
+  ['em', 'EM 和 PM', '團隊的主管和產品經理'],
+  ['ic', '工程師', '團隊裡的 IC'],
+];
+
+// OKR 樹的狀態用累加的變化描述。每個 kr 的欄位：t 文字；kind 是 res（結果）或 out（產出）；type 是 c（committed）或 a（aspirational）；score；cut。
+const CO = { who: '公司', o: '讓新用戶留下來' };
+const SCENARIOS = {
+  healthy: {
+    name: '健康的一季',
+    steps: [
+      { line: 1, act: ['exec'], co: { krs: [{ t: '新用戶第一週留存 40% → 48%', kind: 'res' }] },
+        roles: { exec: '從上一季的數據看到新用戶流失最嚴重，訂成這季的 objective，配一個公司層級的 KR。' },
+        say: '高層從數據看到新用戶在第一週大量流失，把「讓新用戶留下來」訂成這季的 objective。這是要解決的問題，不是要做的功能。' },
+      { line: 3, act: ['dir', 'em'], teams: [{ id: 'g', who: 'Growth 團隊', o: '新用戶第一週就體驗到核心價值', krs: [] }, { id: 'p', who: 'Platform 團隊', o: '註冊和登入不會失敗', krs: [] }],
+        roles: { dir: '把問題交給兩個團隊，說明為什麼重要、怎樣算成功，不指定解法。', em: '帶團隊讀數據、訪談流失的用戶，自己寫 objective。' },
+        say: 'Director 把問題交給兩個最相關的團隊，說明背景和成功的樣子，沒有指定要做什麼功能。兩個團隊各自寫出自己的 objective。' },
+      { line: 2, act: ['em', 'ic'], teams: [{ id: 'g', krs: [{ t: '完成引導的新用戶比例 35% → 55%', kind: 'res' }, { t: '第一週回訪 2 次以上的比例 +8 個百分點', kind: 'res' }] }, { id: 'p', krs: [{ t: '註冊流程錯誤率 3% → 1% 以下', kind: 'res' }, { t: '登入 p99 延遲 < 800ms', kind: 'res' }] }],
+        roles: { em: '和工程師一起把 objective 寫成可量測的 KR。', ic: '確認這些數字量得到，需要的埋點這季先補。' },
+        say: '團隊自己提出 KR，全部量的是結果：比例、錯誤率、延遲，沒有一個是「上線某某功能」。工程師確認每個數字量得到，缺的埋點排進這季。' },
+      { line: 4, act: ['em', 'dir'], teams: [{ id: 'g', krs: [{ type: 'a' }, { type: 'a' }] }, { id: 'p', krs: [{ type: 'c' }, { type: 'c' }] }],
+        roles: { em: '標出哪些是一定要做到的，哪些是往上拉的。', dir: '把 committed 的那幾個告訴依賴它的團隊。' },
+        say: 'Growth 的兩個 KR 是 aspirational，沒人知道哪個做法有效；Platform 的錯誤率和延遲是 committed，其他團隊會依賴它。re:Work 特別提醒：延伸目標要講清楚，免得依賴的團隊以為一定會做到。' },
+      { line: 5, act: ['em', 'ic', 'dir'], teams: [{ id: 'p', krs: [null, null, { t: '這季不做：重寫推薦系統', kind: 'out', cut: true }] }],
+        roles: { em: '估算產能，排不進的寫下來。', ic: '估每個做法要多少人週。', dir: '確認「不做」的那一項有人知道、沒人會意外。' },
+        say: 'Platform 團隊算過產能，放不下原本也想做的「重寫推薦系統」，於是明確寫成這季不做。寫下「不做」，和寫下「要做」一樣重要，committed 才有意義。' },
+      { line: 6, act: ['em', 'ic'], teams: [{ id: 'g', krs: [{ score: 0.3 }, { score: 0.4 }] }, { id: 'p', krs: [{ score: 0.6 }, { score: 0.9 }] }], mid: true,
+        roles: { em: '季中檢查：Growth 發現改引導文案沒效果。', ic: '提議改成第一天就推薦三個可追蹤的項目。' },
+        say: '季中檢查。Growth 第一個做法（改引導文案）幾乎沒有效果。因為 KR 量的是結果、不是「上線文案」，團隊可以直接換方向，改成第一天就推薦內容。' },
+      { line: 6, act: ['exec', 'em'], teams: [{ id: 'g', krs: [{ score: 0.7 }, { score: 0.6 }] }, { id: 'p', krs: [{ score: 1.0 }, { score: 1.0 }] }], co: { krs: [{ score: 0.7 }] }, end: true,
+        roles: { exec: '在全公司的季會上公開分數，討論下一季。', em: '寫下學到的事：哪個做法有效、哪個沒效。' },
+        say: '季末評分：aspirational 拿 0.6 到 0.7，committed 拿 1.0，正是設計上預期的樣子。公司留存從 40% 到 45.6%，KR 拿 0.7。分數公開，但不進考績。' },
+    ],
+  },
+  cascade: {
+    name: '層層往下拆',
+    steps: [
+      { line: 1, act: ['exec'], co: { krs: [{ t: '新用戶第一週留存 40% → 48%', kind: 'res' }] },
+        roles: { exec: '同樣的 objective 和 KR。' },
+        say: '同一個公司 objective，同一個 KR。' },
+      { line: 3, skip: true, act: ['dir'], teams: [{ id: 'g', who: 'Growth 團隊', o: '完成新引導流程', krs: [] }, { id: 'p', who: 'Platform 團隊', o: '完成註冊流程改版', krs: [] }],
+        roles: { dir: '把公司 KR 翻成一份專案清單，分給兩個團隊。', em: '收到已經決定好的專案。' },
+        say: 'Director 認為自己已經知道答案，把公司的 KR 翻譯成兩個專案分給團隊。團隊拿到的不是問題，是解法。', warn: '第 3 行沒有發生：KR 是從上面拆下來的，團隊沒有自己提。' },
+      { line: 2, act: ['em'], teams: [{ id: 'g', krs: [{ t: 'Q2 上線新引導流程', kind: 'out' }, { t: '完成 12 個引導畫面', kind: 'out' }] }, { id: 'p', krs: [{ t: '上線新版註冊頁', kind: 'out' }, { t: '完成 SSO 整合', kind: 'out' }] }],
+        roles: { em: '把專案寫成 KR 的格式。', ic: '開始拆票。' },
+        say: '團隊把專案改寫成 KR 的格式，但每一個量的都是「做完了沒」，不是「有沒有用」。re:Work 說 KR 要量結果、不量活動，這裡四個全是活動。', warn: '四個 KR 都是產出，不是結果。' },
+      { line: 4, act: ['em'], teams: [{ id: 'g', krs: [{ type: 'c' }, { type: 'c' }] }, { id: 'p', krs: [{ type: 'c' }, { type: 'c' }] }],
+        roles: { em: '全部標成 committed，因為都是已經答應的上線日期。' },
+        say: '全部是 committed，因為這些本來就是答應好的上線日期。' },
+      { line: 6, act: ['ic', 'em'], teams: [{ id: 'g', krs: [{ score: 0.5 }, { score: 0.6 }] }, { id: 'p', krs: [{ score: 0.5 }, { score: 0.5 }] }], mid: true,
+        roles: { em: '季中檢查只看進度：照計畫。', ic: '有人發現早期的數據顯示新引導沒有讓用戶多停留，但專案已經答應了。' },
+        say: '季中檢查只看進度。有工程師注意到早期數據顯示新引導沒有效果，但 KR 就是「上線新引導」，沒有理由停下來。', warn: '團隊沒辦法換方向，因為換方向就是沒做到 KR。' },
+      { line: 6, act: ['exec', 'dir'], teams: [{ id: 'g', krs: [{ score: 1.0 }, { score: 1.0 }] }, { id: 'p', krs: [{ score: 1.0 }, { score: 1.0 }] }], co: { krs: [{ score: 0.1 }] }, end: true,
+        roles: { exec: '公司 KR 只拿 0.1，不知道為什麼。', dir: '回報所有專案都準時上線。' },
+        say: '季末：團隊的 KR 全部 1.0，公司的留存只從 40% 到 40.8%，拿 0.1。所有人都完成了自己的部分，問題卻沒解決。這就是 Cagan 說的在 feature team 上疊 OKR。', warn: '團隊 1.0，公司 0.1。' },
+    ],
+  },
+  graded: {
+    name: 'OKR 綁考績',
+    steps: [
+      { line: 1, act: ['exec'], co: { krs: [{ t: '新用戶第一週留存 40% → 48%', kind: 'res' }] },
+        roles: { exec: '同樣的 objective 和 KR，並且宣布今年 OKR 分數會列入考績。' },
+        say: '同一個 objective。但這次高層宣布：OKR 分數會列入個人和團隊的考績。', warn: '第 6 行的後半被違反了：分數會拿來打考績。' },
+      { line: 3, act: ['dir', 'em'], teams: [{ id: 'g', who: 'Growth 團隊', o: '新用戶第一週就體驗到核心價值', krs: [] }, { id: 'p', who: 'Platform 團隊', o: '註冊和登入不會失敗', krs: [] }],
+        roles: { dir: '一樣把問題交給團隊。', em: '開始寫 objective，同時想著考績。' },
+        say: '前面的流程和健康的情境一樣：團隊拿到問題，自己寫 objective。' },
+      { line: 2, act: ['em', 'ic'], teams: [{ id: 'g', krs: [{ t: '完成引導的新用戶比例 35% → 37%', kind: 'res' }, { t: '第一週回訪 2 次以上的比例 +1 個百分點', kind: 'res' }] }, { id: 'p', krs: [{ t: '註冊流程錯誤率 3% → 2.5%', kind: 'res' }, { t: '登入 p99 延遲 < 1200ms（目前 1100ms）', kind: 'res' }] }],
+        roles: { em: '把目標訂在照現在的趨勢就做得到的地方。', ic: '知道這樣比較安全，沒有人反對。' },
+        say: 'KR 一樣量結果，但數字訂得很保守：照目前的趨勢不做什麼也差不多能達成。這就是 re:Work 警告的 sandbagging，在分數影響考績時是完全理性的選擇。', warn: 'Sandbagging：KR 不需要用盡產能就能達成。' },
+      { line: 4, act: ['em'], teams: [{ id: 'g', krs: [{ type: 'c' }, { type: 'c' }] }, { id: 'p', krs: [{ type: 'c' }, { type: 'c' }] }],
+        roles: { em: '沒有人想要 aspirational：預期 0.7 就等於預期考績被扣分。' },
+        say: '沒有任何 aspirational 的 KR。預期只拿 0.7 的目標，在綁考績的制度裡等於預期被扣分。' },
+      { line: 6, act: ['exec', 'em', 'ic'], teams: [{ id: 'g', krs: [{ score: 1.0 }, { score: 1.0 }] }, { id: 'p', krs: [{ score: 1.0 }, { score: 1.0 }] }], co: { krs: [{ score: 0.2 }] }, end: true,
+        roles: { exec: '每個團隊都 1.0，公司 KR 卻只有 0.2。', em: '團隊考績漂亮。', ic: '這一季沒有人試任何有風險的做法。' },
+        say: '季末每個 KR 都是 1.0，考績都很好看。公司的留存只到 41.6%，拿 0.2。沒有人做錯事，只是制度讓每個人都選了最安全的目標。', warn: '分數完美，但沒有人嘗試任何有野心的事。' },
+    ],
+  },
+};
+
+// ---- 把變化累加成每一步的完整狀態 ----
+function buildTrace(sc) {
+  const s = { co: { ...CO, krs: [] }, teams: [], mid: false, end: false };
+  const mergeKrs = (dst, src) => src.forEach((k, i) => { if (!k) return; dst[i] = { ...(dst[i] || {}), ...k }; });
+  return sc.steps.map(step => {
+    if (step.co) mergeKrs(s.co.krs, step.co.krs);
+    const chg = new Set();
+    (step.teams || []).forEach(t => {
+      let team = s.teams.find(x => x.id === t.id);
+      if (!team) { team = { id: t.id, who: t.who, o: t.o, krs: [] }; s.teams.push(team); }
+      if (t.o) team.o = t.o;
+      mergeKrs(team.krs, t.krs || []);
+      chg.add(t.id);
+    });
+    if (step.co) chg.add('co');
+    if (step.mid) s.mid = true;
+    if (step.end) { s.end = true; s.mid = false; }
+    return { line: step.line, skip: step.skip, act: step.act, roles: step.roles, say: step.say, warn: step.warn, chg, state: JSON.parse(JSON.stringify(s)) };
+  });
+}
+
+const $ = id => document.getElementById(id);
+const state = { sc: 'healthy', k: 0, trace: [] };
+
+function krHtml(k) {
+  const tags = [];
+  if (k.kind === 'out' && !k.cut) tags.push('<span class="badge out">產出</span>');
+  if (k.kind === 'res') tags.push('<span class="badge res">結果</span>');
+  if (k.type === 'c') tags.push('<span class="badge outline">committed</span>');
+  if (k.type === 'a') tags.push('<span class="badge mark">aspirational</span>');
+  if (k.score !== undefined) tags.push(`<span class="score${k.score < 0.4 ? ' low' : ''}">${k.score.toFixed(1)}</span>`);
+  return `<li class="${k.cut ? 'cut' : ''}"><span>${k.t}</span><span class="tags">${tags.join('')}</span></li>`;
+}
+function objHtml(o, team, chg) {
+  return `<div class="obj${team ? ' team' : ''}${chg ? ' chg' : ''}"><div class="who">${o.who}</div><div class="o">${o.o}</div>${o.krs.length ? `<ul>${o.krs.map(krHtml).join('')}</ul>` : ''}</div>`;
+}
+
+function render() {
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', b.dataset.sc === state.sc));
+  const t = state.k === 0 ? null : state.trace[state.k - 1];
+  $('pseudo').innerHTML = LINES.map((l, i) => {
+    let cls = 'pl' + (l.head ? ' head' : '');
+    if (t && t.line === i) cls += t.skip ? ' skip on' : ' on';
+    return `<span class="${cls}">${l.t}</span>`;
+  }).join('');
+  const s = t ? t.state : { co: { ...CO, krs: [] }, teams: [] };
+  $('quarter').textContent = !t ? '季初' : s.end ? '季末評分' : s.mid ? '季中檢查' : '規劃中';
+  $('okr').innerHTML = (t ? objHtml(s.co, false, t.chg.has('co')) : '<p class="hint" style="margin:0">還沒有任何 OKR。</p>')
+    + s.teams.map(tm => objHtml(tm, true, t && t.chg.has(tm.id))).join('');
+  $('roles').innerHTML = ROLES.map(([id, name, desc]) => {
+    const act = t && t.act.includes(id);
+    const what = t && t.roles[id] ? t.roles[id] : desc;
+    return `<li class="${act ? 'act' : ''}"><span class="who">${name}</span><span class="what">${what}</span></li>`;
+  }).join('');
+  $('say').innerHTML = !t ? `按「下一步」開始。「${SCENARIOS[state.sc].name}」一共 ${state.trace.length} 步。`
+    : t.say + (t.warn ? `<span class="warn">${t.warn}</span>` : '');
+}
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; render(); } });
+function load(id) {
+  state.sc = id;
+  state.trace = buildTrace(SCENARIOS[id]);
+  stepper.setTotal(state.trace.length);
+  stepper.set(0);
+}
+Object.entries(SCENARIOS).forEach(([id, sc]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.sc = id; b.textContent = sc.name;
+  b.addEventListener('click', () => load(id));
+  $('presets').appendChild(b);
+});
+load('healthy');
+</script>
+</body>
+</html>

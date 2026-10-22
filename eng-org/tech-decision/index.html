@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Staff 怎麼推動一個技術決策</title>
+<meta name="description" content="一個跨團隊的技術提案，從判斷要不要寫、和主管對齊、寫 design doc、送審、處理反對意見，到寫成 ADR。逐步走過一次順利落地的提案，以及一次跳過主管直接送審而卡住的提案。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+.work.rfc-work { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 0.9fr); }
+.pseudo .pl.skip { color: var(--miss); text-decoration: line-through; }
+
+/* 文件面板 */
+.doc-status { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+.doc-status .badge { font-size: 0.75rem; }
+.badge.mark { background: var(--mark); color: var(--ink); }
+.secs { list-style: none; margin: 0.6rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.82rem; }
+.secs li { display: flex; gap: 0.4rem; align-items: baseline; color: var(--muted); }
+.secs li::before { content: "○"; font-size: 0.75rem; }
+.secs li.on { color: var(--ink); }
+.secs li.on::before { content: "●"; color: var(--hit); }
+.secs li.chg { background: var(--hit-soft); border-radius: 3px; }
+.secs li small { color: var(--muted); }
+.doc-meta { margin-top: 0.6rem; font-size: 0.8rem; color: var(--muted); display: flex; flex-direction: column; gap: 0.2rem; }
+.doc-meta b { color: var(--ink); font-family: var(--font-mono); }
+
+/* 參與的人 */
+.people { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.people li { display: grid; grid-template-columns: 1.4rem minmax(0, 1fr); gap: 0.4rem; align-items: start; font-size: 0.82rem; padding: 0.2rem 0.3rem; border-radius: 3px; }
+.people li.act { background: var(--mark); }
+.people .st { font-family: var(--font-mono); font-weight: 600; text-align: center; }
+.people .st.none { color: var(--muted); }
+.people .st.yes { color: var(--hit); }
+.people .st.no { color: var(--miss); }
+.people .who { font-weight: 700; }
+.people .note { display: block; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
+.legend-st { font-size: 0.75rem; color: var(--muted); padding: 0.4rem 0.75rem 0.6rem; border-top: 1px solid var(--line); line-height: 1.7; }
+.legend-st b { font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 工程組織怎麼運作</a>
+    <h1>Staff 怎麼推動一個技術決策</h1>
+    <p class="lead">一個跨團隊的技術提案，例如把三個團隊各自維護的 job queue 收斂成一套，沒有人能單獨下令。這一頁把 Google 的 design doc、Uber 的 RFC 和 ADR 這三種實務併成一條流程，逐步走過一次順利落地的提案，再走一次跳過主管、直接送審而卡住的提案。</p>
+  </header>
+
+  <section class="prose">
+    <h2>Staff 的權力是借來的</h2>
+    <p>Staff 工程師沒有下屬，推動跨團隊的決策靠的是影響力。Larson 在〈Staying aligned with authority〉裡把話說得很直白：職稱帶來的組織權力，是更上層的權力「借」給你的，隨時可以收回。能不能繼續借到，取決於你和 <span class="term" data-def="贊助者。替你的工作背書、讓你借用其權力的人，通常是你的直屬主管。">sponsor</span>（通常是直屬主管）是否保持一致。所以 Larson 給的第一條規則是：<strong>永遠不要讓主管意外</strong>。每一次意外都要當成事故，事後檢討、避免再發生。原因是意外會打斷主管手上的事，也會讓人懷疑主管是否掌握自己的團隊。</p>
+    <p>另一份指南〈What do Staff engineers actually do?〉把 staff 的工作描述成「技術的兼職 PM」。技術不會替自己說話，需要有人替它爭取。staff 被拉進決策會議時，要記得自己代表的是整個工程部門，而不只是自己的團隊。Dropbox 的 IC5 描述也有同樣的意思：重要的決策不追求所有人都同意，而是廣泛聽取意見、讓對的人好好辯論，必要時做出不受歡迎的決定，或是 disagree and commit。</p>
+    <p>落到實務上，「影響力」大多是一份寫得好的文件，加上一個讓對的人在對的時間看到它的流程。</p>
+  </section>
+
+  <section class="prose">
+    <h2>寫下來：design doc、RFC、ADR</h2>
+    <p>三種文件常被混著叫，但用途不同：</p>
+    <div class="table-wrap">
+      <table class="cmp">
+        <thead><tr><th></th><th>Design doc（Google）</th><th>RFC（Uber）</th><th>ADR</th></tr></thead>
+        <tbody>
+          <tr><td class="name">什麼時候寫</td><td>寫程式之前，設計有模糊的地方時</td><td>任何不是極其簡單的專案，動工之前</td><td>做完一個影響架構的決定之後</td></tr>
+          <tr><td class="name">重點</td><td>取捨：為什麼選這個、不選那些</td><td>讓全公司看得到，避免重複造輪子</td><td>留下「為什麼」，給未來的人看</td></tr>
+          <tr><td class="name">長度</td><td>10–20 頁；小改動 1–3 頁</td><td>短的計畫，依領域套模板</td><td>1–2 頁</td></tr>
+          <tr><td class="name">放在哪</td><td>大多是 Google Docs</td><td>寄到依領域分的郵件群組</td><td>專案 repo 裡，例如 <code>doc/arch/adr-NNN.md</code></td></tr>
+          <tr><td class="name">誰點頭</td><td>輕量的話發給團隊收留言；正式的上 design review 會議</td><td>文件裡列出的 approver，用留言確認</td><td>相關的人同意後，狀態從 proposed 改成 accepted</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Malte Ubl 描述的 Google design doc 有五個常見段落：context 和 scope、goals 和 non-goals、實際的設計、alternatives considered、<span class="term" data-def="橫跨整個系統的考量，例如安全、隱私、可觀測性。Google 對隱私另有專門的設計文件和審查。">cross-cutting concerns</span>。Ubl 認為 alternatives considered 是最重要的一段，因為取捨要靠它才看得出來。<span class="term" data-def="明確寫出「這次不做」的事。是可能被誤以為是目標、但刻意排除的項目。">Non-goals</span> 不是「不要的東西」，而是「別人可能以為你會做、但這次刻意不做」的事。Gergely Orosz 描述 Uber 的 RFC 時提到，模板會依領域長出固定的問題：後端要回答 SLA、服務依賴、壓力測試、多資料中心和安全；行動和 web 要回答 UI、網路互動、函式庫依賴、analytics 和無障礙。這些模板就是審查者反覆問同樣問題之後沉澱下來的。</p>
+    <p>ADR 是 Michael Nygard 在 2011 年提的：每個影響架構的決定寫成一份短的紀錄，包含 title、context、decision、status、consequences，放進 repo、依序編號、永不重用。被推翻的決定不刪除，改標成 superseded 並指向新的那份，因為「當初為什麼這樣決定」本身就是有用的資訊。</p>
+  </section>
+
+  <section class="prose">
+    <h2>一條流程</h2>
+    <p>把上面幾份資料併起來，一個跨團隊的技術決策大致會走過下面八步。第 1 步取自 Ubl 的「什麼時候不要寫」；第 2 步取自 Larson；第 3 到 5 步取自 Google design doc 的生命週期和 Uber 的 approver 制度；第 6 步取自 Amazon 的 leadership principle「Have Backbone; Disagree and Commit」；第 7、8 步取自 ADR。</p>
+    <pre class="code">一個技術決策從提出到落地
+1  判斷要不要寫：解法有模糊之處嗎？有爭議嗎？需要資深的人給意見嗎？
+     解法不模糊 → 直接做，不寫文件
+2  先和主管對齊：不讓主管意外，確認這件事排得進主管的優先順序
+3  寫草稿：context 和 scope、goals 和 non-goals、設計、alternatives、cross-cutting
+4  小範圍快速迭代：先找最懂的幾個人改
+5  列出 approver 送審：輕量的發到郵件群組收留言，正式的上 design review
+6  處理反對意見：不同意就當面提出；決定之後 disagree and commit
+7  記錄決定：寫成 ADR，狀態改成 accepted，放進 repo
+8  實作中有大改就更新文件或另寫修訂；之後被推翻就把 ADR 標成 superseded</pre>
+    <p>下面的 workbench 用同一份流程走三個情境。中間的面板是文件的狀態，右邊是每個參與者目前的立場。情境的細節是我照這些資料編的示範，不是某家公司的真實案例。</p>
+  </section>
+
+  <section class="bench" aria-label="技術決策的流程">
+    <div class="row presets" id="presets"><span class="lbl">情境</span></div>
+    <div class="row">
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
+      </div>
+    </div>
+
+    <div class="row work rfc-work">
+      <div class="panel">
+        <div class="panel-head">流程</div>
+        <pre class="pseudo" id="pseudo"></pre>
+      </div>
+      <div class="panel">
+        <div class="panel-head">文件<span class="sub" id="doc-name"></span></div>
+        <div class="panel-body" id="doc"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">參與的人</div>
+        <div class="panel-body"><ul class="people" id="people"></ul></div>
+        <p class="legend-st"><b>·</b> 還沒參與　<b>?</b> 還在看　<b>+</b> 支持　<b>!</b> 有疑慮　<b>✓</b> 核准　<b>↻</b> 不同意但承諾執行</p>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>什麼時候不該寫</h2>
+    <p>文件是有成本的。Ubl 列了三種不該寫 design doc 的情況。第一種是解法不模糊：問題再複雜，只要做法沒有爭議，寫文件只是把實作手冊抄一遍。第二種是文件裡沒有取捨、也沒有替代方案，這時直接寫程式比較快。第三種是需要快速做原型的時候，原型本身就可以當設計的證據。Ubl 給的判斷方式是問五個問題：你對設計沒把握嗎？資深工程師的意見有幫助嗎？設計有模糊或爭議嗎？團隊常忘記 cross-cutting concerns 嗎？需要對舊系統有高層次的理解嗎？三個以上答「是」，就值得寫。</p>
+    <p>流程本身也會隨組織長大而失效。Google 曾經用一個集中的郵件群組收所有 design doc，公司變大後就撐不住了；Uber 的 RFC 一開始寄給所有工程師，後來改成依領域分群組，並加上搜尋和核准的工具。Orosz 也承認到了幾千個工程師的規模，這套做法會遇到新的問題，只是文中沒有細說。</p>
+  </section>
+
+  <section class="prose">
+    <h2>失敗的樣子</h2>
+    <p>第三個情境是最常見的失敗：提案在技術上沒錯，但作者跳過第 2 步，直接發到全部門的郵件群組。主管從別人的留言裡才第一次看到這份提案，被迫在不了解來龍去脈的情況下表態；而這件事本來就不在這一季的計畫裡。提案沒有 sponsor，反對意見沒有人收斂，最後擱置。照 Larson 的說法，這不是運氣不好，而是作者把借來的權力用掉了。</p>
+    <p>另外兩種失敗沒有放進 workbench，但很常見。一種是把共識當成目標：每個反對意見都要談到對方點頭，提案就永遠停在第 6 步。Dropbox 對 IC5 的期待，正是在必要時做出不受歡迎的決定，而不是一直等所有人同意。另一種是只做到第 6 步、沒有第 7 步：決定只存在會議裡和幾個人的記憶中，一兩年後換了一批人，有人不知道當初的理由就把它推翻，或者明明不再適用卻沒人敢動。這正是 Nygard 寫 ADR 時想解決的問題。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>Staff 推動技術決策靠的是借來的權力，所以順序很重要：先判斷值不值得寫，再和 sponsor 對齊，然後寫出有取捨、有替代方案的文件，找對的人審，最後把決定記錄下來。文件的品質決定提案有沒有說服力，流程決定對的人有沒有在對的時間看到它。跳過對齊的提案就算技術上是對的，也常常卡在沒有人替它背書。</p>
+    <p>這個系列的下一頁講 <a href="../conway/">Conway's law</a>：一個決策落地以後，系統的邊界會跟著團隊的邊界走，而團隊怎麼切，本身就是一個要用同樣流程推動的決策。</p>
+    <p>這裡的流程是從幾家公司的公開描述拼起來的。每家公司的版本不同：有的用 RFC 文件庫加 pull request 審核，有的有固定的 architecture review board，也有的完全靠口頭和 Slack。情境裡的人物和對話是示範，真實的提案通常會走得更久、來回更多次。</p>
+  </section>
+
+  <p class="foot">來源：Will Larson，Staff Engineer，〈Staying aligned with authority〉、〈What do Staff engineers actually do?〉；Malte Ubl，〈Design Docs at Google〉（2020）；Gergely Orosz，〈Scaling Engineering Teams via RFCs: Writing Things Down〉（2018）；Michael Nygard，〈Documenting Architecture Decisions〉（2011）；Amazon Leadership Principles，〈Have Backbone; Disagree and Commit〉；Dropbox Engineering Career Framework v2.9.1，IC5。</p>
+</main>
+
+<script>
+// 流程的八行；pseudo 面板和說明裡的靜態版本是同一份。
+const LINES = [
+  { t: '一個技術決策從提出到落地', head: true },
+  { t: '1  判斷要不要寫：解法有模糊之處嗎？有爭議嗎？需要資深的人給意見嗎？' },
+  { t: '     解法不模糊 → 直接做，不寫文件' },
+  { t: '2  先和主管對齊：不讓主管意外，確認這件事排得進主管的優先順序' },
+  { t: '3  寫草稿：context 和 scope、goals 和 non-goals、設計、alternatives、cross-cutting' },
+  { t: '4  小範圍快速迭代：先找最懂的幾個人改' },
+  { t: '5  列出 approver 送審：輕量的發到郵件群組收留言，正式的上 design review' },
+  { t: '6  處理反對意見：不同意就當面提出；決定之後 disagree and commit' },
+  { t: '7  記錄決定：寫成 ADR，狀態改成 accepted，放進 repo' },
+  { t: '8  實作中有大改就更新文件或另寫修訂；之後被推翻就把 ADR 標成 superseded' },
+];
+// 行號對照：流程第 k 步在 LINES 裡的索引
+const STEP = { 1: 1, '1x': 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 7, 7: 8, 8: 9 };
+
+const PEOPLE = [
+  ['me', '作者', 'staff 工程師，提案的人'],
+  ['mgr', '主管', '作者的直屬主管，也是 sponsor'],
+  ['a', 'Team A TL', '付款團隊，自己的 queue 有優先權功能'],
+  ['b', 'Team B TL', '通知團隊'],
+  ['c', 'Team C TL', '報表團隊'],
+  ['sre', 'SRE', '負責 on-call 和容量'],
+  ['sec', '資安', '審 cross-cutting 的安全部分'],
+];
+const SECS = [
+  ['ctx', 'Context 和 scope'],
+  ['goal', 'Goals 和 non-goals'],
+  ['des', '設計'],
+  ['alt', 'Alternatives considered'],
+  ['cc', 'Cross-cutting concerns'],
+];
+const ST = { none: ['·', 'none'], look: ['?', 'none'], yes: ['+', 'yes'], no: ['!', 'no'], ok: ['✓', 'yes'], commit: ['↻', 'yes'] };
+
+// 每個情境是一串「變化」，逐步累加成完整狀態。
+// line：這一步在流程的哪一行；skip：被跳過的行；doc：文件狀態的變化；p：人的立場和註記；act：這一步互動的人。
+const SCENARIOS = {
+  converge: {
+    name: '收斂 job queue',
+    doc: 'RFC：統一背景工作佇列',
+    steps: [
+      { line: 1, act: ['me'], p: { me: ['yes'] },
+        say: '三個團隊各自維護一套背景工作佇列，過去一年三套都出過事故。作者想把它們收斂成一套。先問第 1 行的問題：要選哪一套、怎麼搬，解法有模糊之處；每個團隊都覺得自己那套最好，會有爭議；牽涉到 on-call 和資料，需要資深的意見。三個都是，值得寫。' },
+      { line: 2, act: ['me', 'mgr'], p: { mgr: ['yes', '這一季的重點是可靠度，可以掛在那下面'] },
+        say: '動筆之前，先在 1:1 裡和主管講。主管支持，並且告訴作者這一季部門的重點是可靠度，這份提案可以掛在那個目標下面。這一步讓主管不會被意外，也讓提案一開始就有 sponsor。' },
+      { line: 3, act: ['me'], doc: { status: 'draft', secs: ['ctx', 'goal', 'des', 'alt', 'cc'], notes: { goal: 'non-goal：這次不換訊息格式', alt: '用 A 的、用 B 的、改用雲端託管' } },
+        say: '寫草稿。Non-goal 寫明這次不改訊息格式，免得審查的人以為要一起改。Alternatives 列了三個選項：直接採用 A 的、採用 B 的、改用雲端託管服務，每個都寫出為什麼不選或為什麼選。' },
+      { line: 4, act: ['me', 'c', 'sre'], p: { c: ['yes'], sre: ['no', '收斂之後誰 on-call？'] }, doc: { comments: 6 },
+        say: '先給最懂的兩個人看：C 的 TL 和 SRE。C 支持，因為 C 的 queue 最舊。SRE 提出一個草稿沒回答的問題：三套變一套以後，誰負責 on-call？' },
+      { line: 4, act: ['me', 'sre'], p: { sre: ['yes', '由平台團隊接 on-call'] }, doc: { chg: ['cc'], notes: { cc: '新增：由平台團隊接 on-call' } },
+        say: '作者在 cross-cutting concerns 補上 on-call 的歸屬：由平台團隊接手。SRE 改成支持。這種問題在小範圍迭代時解決，比在全部門的審查裡被問到好得多。' },
+      { line: 5, act: ['me', 'a', 'b', 'sre', 'sec'], doc: { status: 'review', approvers: ['a', 'b', 'sre', 'sec'], comments: 19 }, p: { a: ['look'], b: ['look'], sec: ['look'] },
+        say: '列出 approver：A、B、SRE、資安，寄到後端的郵件群組。任何工程師都可以留言，但只有 approver 的核准才算數。' },
+      { line: 5, act: ['b', 'sre', 'sec'], p: { b: ['ok'], sre: ['ok'], sec: ['ok', '要求加上靜態加密'] }, doc: { approved: ['b', 'sre', 'sec'], chg: ['cc'], notes: { cc: '新增：on-call 歸屬、靜態加密' }, comments: 27 },
+        say: 'B、SRE 核准。資安要求在 cross-cutting 加上佇列資料的靜態加密，補上之後也核准了。' },
+      { line: 6, act: ['me', 'a'], p: { a: ['no', '我們的優先權功能怎麼辦？'] }, doc: { status: 'meeting' },
+        say: 'A 不同意：付款的工作需要優先權，新的 queue 一開始不支援。留言來回幾次沒有結論，於是排進每週的 design review，當面談。' },
+      { line: 6, act: ['me', 'a', 'mgr'], p: { a: ['commit', '第二階段補上優先權'], mgr: ['yes', '拍板：照提案走'] }, doc: { approved: ['a', 'b', 'sre', 'sec'] },
+        say: '會上主管拍板：照提案走，優先權排進第二階段。A 仍然覺得應該先做優先權，但同意執行。這就是 disagree and commit：不同意要當面講清楚，決定之後就全力配合，不在背後拖。' },
+      { line: 7, act: ['me'], doc: { status: 'accepted', adr: 'ADR-014：統一背景工作佇列（accepted）' },
+        say: '把決定寫成 ADR-014 放進 repo：context 是三套佇列的事故紀錄，decision 是收斂成一套，consequences 寫明付款的優先權要等第二階段。一兩年後的人會先看這份。' },
+      { line: 8, act: ['me', 'sre'], doc: { chg: ['des'], notes: { des: '修訂：改成雙寫，逐步切換' } },
+        say: '實作到一半發現一次切換風險太大，改成先雙寫、再逐步切換。這是設計上的大改，所以在文件裡加了一份修訂並通知 approver，而不是默默改掉。' },
+    ],
+  },
+  trivial: {
+    name: '不需要寫',
+    doc: '（沒有文件）',
+    steps: [
+      { line: 1, act: ['me'], p: { me: ['yes'] },
+        say: '要把一個 JSON 函式庫從 2.3 升到 2.4，changelog 裡沒有不相容的變更。先問第 1 行：解法不模糊，沒有爭議，也不需要資深的意見。' },
+      { line: '1x', act: ['me'],
+        say: '直接開 pull request，在描述裡寫清楚為什麼升級。Ubl 說得很明白：解法不模糊時，design doc 只是把實作手冊抄一遍。流程是用來處理模糊和爭議的，不是用來證明自己有在做事。' },
+    ],
+  },
+  bypass: {
+    name: '跳過主管直接送審',
+    doc: 'RFC：統一背景工作佇列',
+    steps: [
+      { line: 1, act: ['me'], p: { me: ['yes'] },
+        say: '同一份提案，同樣的判斷：值得寫。' },
+      { line: 2, skip: true, act: ['me'],
+        say: '作者覺得技術上的理由很明顯，主管應該會支持，所以沒有先講就直接動筆。這一行被跳過了。', warn: '第 2 行被跳過：主管還不知道這件事。' },
+      { line: 3, act: ['me'], doc: { status: 'draft', secs: ['ctx', 'goal', 'des', 'alt'] },
+        say: '寫草稿。這次沒有先找人看，cross-cutting concerns 也還沒寫。' },
+      { line: 5, skip4: true, act: ['me', 'a', 'b', 'c', 'sre', 'sec'], doc: { status: 'review', approvers: ['a', 'b', 'sre', 'sec'], comments: 43 }, p: { a: ['no', '優先權怎麼辦？'], b: ['look'], c: ['yes'], sre: ['no', '誰 on-call？'], sec: ['no', '加密呢？'] },
+        say: '跳過小範圍迭代，直接寄到全後端的郵件群組。在小範圍裡本來可以先解決的問題（on-call、加密），變成幾十則公開留言。', warn: '第 4 行也被跳過：本來可以私下解決的問題全部公開出現。' },
+      { line: 5, act: ['mgr'], p: { mgr: ['no', '這一季沒有排這件事'] },
+        say: '主管從別人轉寄的討論串裡才第一次看到這份提案，只能在不了解來龍去脈的情況下表態，而且這件事不在這一季的計畫裡。這就是 Larson 說的「讓主管意外」。', warn: '主管被意外。提案失去了 sponsor。' },
+      { line: 6, act: ['a', 'b', 'mgr'], p: { b: ['no', '等主管表態再說'] }, doc: { status: 'stalled' },
+        say: 'A 和 SRE 的疑慮沒有人收斂，B 看到主管沒有表態，也選擇觀望。沒有 sponsor，就沒有人能在第 6 步拍板。提案擱置。' },
+      { line: 6, act: ['me'],
+        say: '這份提案在技術上和第一個情境一模一樣，差別只在第 2 步和第 4 步。staff 的權力是借來的；跳過 sponsor，等於把借來的權力用掉了。下一季想重提，得先回到第 2 步，而且要多花力氣修補信任。', warn: '結局：擱置。' },
+    ],
+  },
+};
+
+const STATUS = {
+  none: ['還沒有文件', 'outline'], draft: ['草稿', 'outline'], review: ['審查中', 'mark'], meeting: ['design review 會議', 'mark'],
+  accepted: ['accepted', 'hit'], stalled: ['擱置', 'miss'],
+};
+
+// 把變化累加成每一步的完整狀態
+function buildTrace(sc) {
+  const s = { status: 'none', secs: [], notes: {}, comments: 0, approvers: [], approved: [], adr: null, p: {} };
+  PEOPLE.forEach(([id]) => s.p[id] = ['none', '']);
+  const skipped = new Set();
+  return sc.steps.map(step => {
+    const d = step.doc || {};
+    if (d.status) s.status = d.status;
+    if (d.secs) s.secs = d.secs.slice();
+    if (d.notes) Object.assign(s.notes, d.notes);
+    if (d.comments) s.comments = d.comments;
+    if (d.approvers) s.approvers = d.approvers.slice();
+    if (d.approved) s.approved = d.approved.slice();
+    if (d.adr) s.adr = d.adr;
+    Object.entries(step.p || {}).forEach(([id, v]) => s.p[id] = [v[0], v[1] !== undefined ? v[1] : s.p[id][1]]);
+    if (step.skip) skipped.add(STEP[step.line]);
+    if (step.skip4) skipped.add(STEP[4]);
+    return {
+      line: step.skip ? null : STEP[step.line], skipped: new Set(skipped), act: step.act || [], chg: d.chg || [],
+      say: step.say, warn: step.warn, doc: JSON.parse(JSON.stringify({ ...s, p: undefined })), p: JSON.parse(JSON.stringify(s.p)),
+    };
+  });
+}
+
+const $ = id => document.getElementById(id);
+const state = { sc: 'converge', k: 0, trace: [] };
+
+function render() {
+  const sc = SCENARIOS[state.sc];
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', b.dataset.sc === state.sc));
+  const t = state.k === 0 ? null : state.trace[state.k - 1];
+  // 流程
+  $('pseudo').innerHTML = LINES.map((l, i) => {
+    let cls = 'pl';
+    if (l.head) cls += ' head';
+    if (t && t.skipped.has(i)) cls += ' skip';
+    if (t && t.line === i) cls += ' on';
+    return `<span class="${cls}">${l.t}</span>`;
+  }).join('');
+  // 文件
+  $('doc-name').textContent = sc.doc;
+  const d = t ? t.doc : { status: 'none', secs: [], notes: {}, comments: 0, approvers: [], approved: [], adr: null };
+  const [stName, stCls] = STATUS[d.status];
+  let h = `<div class="doc-status">狀態<span class="badge ${stCls}">${stName}</span></div>`;
+  if (state.sc !== 'trivial') {
+    h += `<ul class="secs">` + SECS.map(([id, name]) => {
+      const on = d.secs.includes(id), chg = t && t.chg.includes(id);
+      return `<li class="${on ? 'on' : ''}${chg ? ' chg' : ''}">${name}${d.notes[id] && on ? ` <small>${d.notes[id]}</small>` : ''}</li>`;
+    }).join('') + `</ul>`;
+    const nm = id => PEOPLE.find(p => p[0] === id)[1];
+    h += `<div class="doc-meta">`;
+    h += `<span>留言 <b>${d.comments}</b> 則</span>`;
+    if (d.approvers.length) h += `<span>Approver：${d.approvers.map(id => d.approved.includes(id) ? `<i class="hit">${nm(id)} ✓</i>` : nm(id)).join('、')}</span>`;
+    if (d.adr) h += `<span>ADR：<b>${d.adr}</b></span>`;
+    h += `</div>`;
+  } else {
+    h += `<p class="hint">這個情境不寫文件，直接開 pull request。</p>`;
+  }
+  $('doc').innerHTML = h;
+  // 人
+  $('people').innerHTML = PEOPLE.map(([id, name, desc]) => {
+    const [st, note] = t ? t.p[id] : ['none', ''];
+    const [sym, cls] = ST[st];
+    const act = t && t.act.includes(id);
+    return `<li class="${act ? 'act' : ''}"><span class="st ${cls}">${sym}</span><span><span class="who">${name}</span><span class="note">${note || desc}</span></span></li>`;
+  }).join('');
+  // 說明
+  $('say').innerHTML = !t ? `按「下一步」開始。「${sc.name}」一共 ${state.trace.length} 步。`
+    : t.say + (t.warn ? `<span class="warn">${t.warn}</span>` : '');
+}
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; render(); } });
+function load(id) {
+  state.sc = id;
+  state.trace = buildTrace(SCENARIOS[id]);
+  stepper.setTotal(state.trace.length);
+  stepper.set(0);
+}
+Object.entries(SCENARIOS).forEach(([id, sc]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.sc = id; b.textContent = sc.name;
+  b.addEventListener('click', () => load(id));
+  $('presets').appendChild(b);
+});
+load('converge');
+</script>
+</body>
+</html>

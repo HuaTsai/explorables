@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>組織規模與管理層數</title>
+<meta name="description" content="工程師人數從 8 人長到 1000 人，主管要多幾個、組織要多幾層？用 Larson 的團隊大小規則拉人數和管理幅度，看組織樹怎麼長出新的一層，以及溝通路徑為什麼要用團隊來切。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* 輸入：人數 slider 和兩個管理幅度 */
+.inputs { display: flex; flex-direction: column; gap: 0.6rem; }
+.inp { display: grid; grid-template-columns: 9rem minmax(0, 1fr) 3.5rem; gap: 0.75rem; align-items: center; font-size: 0.88rem; }
+.inp label { color: var(--muted); }
+.inp output { font-family: var(--font-mono); font-weight: 600; text-align: right; }
+.inp input[type="range"] { width: 100%; }
+@media (max-width: 760px) { .inp { grid-template-columns: 7rem minmax(0, 1fr) 3rem; } }
+.presets button { font-family: var(--font-mono); }
+
+/* 面板比例：左邊組織樹，右邊規則 */
+.work.size-work { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+
+/* 組織樹：每一層一列，格子最多畫 48 個，其餘寫成 +n */
+.tree { display: flex; flex-direction: column; gap: 0.55rem; }
+.layer { display: flex; flex-direction: column; gap: 0.2rem; }
+.layer .cap { font-size: 0.8rem; color: var(--muted); }
+.layer .cap b { color: var(--ink); font-family: var(--font-mono); }
+.cells { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+.cells i { display: block; width: 9px; height: 9px; border: 1px solid var(--ink); border-radius: 1px; background: var(--surface); }
+.cells i.eng { border-radius: 50%; border-color: var(--muted); }
+.cells i.bad { border-color: var(--miss); background: var(--miss-soft); }
+.cells .more { font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); margin-left: 0.2rem; }
+
+/* 規則：和說明裡的同一份，每一行底下接目前輸入的結果 */
+.pseudo .ans { display: block; white-space: normal; font-family: var(--font-body); font-size: 0.85rem; font-weight: 400; line-height: 1.6; color: var(--ink); padding: 0.1rem 0.3rem 0.5rem 1.6rem; }
+.pseudo .ans.bad { color: var(--miss); }
+.pseudo .ans.good { color: var(--hit); }
+.pseudo .ans.none { color: var(--muted); }
+
+/* 數字 */
+.nums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.4rem 1rem; font-size: 0.85rem; }
+.nums div { display: flex; justify-content: space-between; gap: 0.5rem; border-bottom: 1px dashed var(--line); padding-bottom: 0.2rem; }
+.nums span { color: var(--muted); }
+.nums b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) { .nums { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 工程組織怎麼運作</a>
+    <h1>組織規模與管理層數</h1>
+    <p class="lead">一家公司從 8 個工程師長到 1000 個，主管要多幾個、組織要多幾層？這一頁用 Will Larson 的團隊大小規則，讓你自己拉人數和管理幅度，看組織樹什麼時候長出新的一層，以及團隊這種切法到底省下了什麼。</p>
+  </header>
+
+  <section class="prose">
+    <h2>人一多，溝通先爆炸</h2>
+    <p>Fred Brooks 在 The Mythical Man-Month 第 2 章給了一個算式：n 個人如果每兩個人之間都要協調，就有 n(n−1)/2 條<span class="term" data-def="兩個人之間需要互相同步資訊的一條關係。人數是 n 時，最多有 n(n−1)/2 條。">溝通路徑</span>。5 個人是 10 條，10 個人是 45 條，50 個人是 1225 條。人數翻倍，路徑數大約變成四倍。</p>
+    <p>同一章提出了後來被叫做 <span class="term" data-def="「Adding manpower to a late software project makes it later.」對一個已經延誤的軟體專案加人，只會讓它更晚完成。">Brooks's law</span> 的那句話：對已經延誤的軟體專案加人，只會讓它更晚。原因有兩個：新人要花時間上手，而且上手期間還會占用舊人的時間；加進來的每個人都會增加溝通負擔。Brooks 自己也說這是過度簡化，但方向是對的：人數和產出不是線性關係。</p>
+    <p>組織用來對付這個問題的工具，就是把人切成團隊，再讓主管負責團隊之間的協調。團隊裡的人彼此直接溝通，跨團隊的事走主管這條線。這樣路徑數從平方級降到大約線性，代價是多了主管這一層，資訊和決策都要多轉一手。</p>
+  </section>
+
+  <section class="prose">
+    <h2>Larson 的團隊大小規則</h2>
+    <p>團隊切多大、主管帶幾個人，Will Larson 在 An Elegant Puzzle 的〈Sizing teams〉一節給了一組經驗規則。這些規則來自 Larson 在幾家高速成長的公司帶工程組織的經驗，不是研究結果，但很多工程組織用的數字都在這個範圍：</p>
+    <pre class="code">組織的大小規則（Larson，Sizing teams）
+1  一個 EM 帶 6–8 個工程師
+     少於 4 個 → 主管會變成 TLM，自己下去做設計和實作
+     多於 8、9 個 → 主管只剩當教練、替問題兜底
+2  一個主管的主管帶 4–6 個主管
+     少於 4 個 → 應該是主管自己還在學習的階段
+     太多 → 只能當解決問題的教練
+3  少於 4 人的團隊不算團隊
+4  on-call 輪值要 8 個人；不夠就和別的團隊合併輪值，但這只是過渡做法
+5  要開新團隊：先把現有團隊長到 8–10 人，再拆成兩個 4–5 人的團隊
+     不開空的團隊</pre>
+    <p>第 1 行和第 2 行決定了組織的形狀：每一層主管能帶的人有上限，人數超過上限就要多一個同層的主管，同層的主管超過上限就要多一層。第 3 行到第 5 行是在保護團隊本身：太小的團隊只是幾個個人，撐不起 on-call，也撐不住有人請假或離職。<span class="term" data-def="tech lead manager。同時當團隊主管和 tech lead，一邊帶人一邊做設計和實作的人。">TLM</span> 不一定是壞事，但它通常是團隊太小時被迫出現的狀態，不是刻意的選擇。</p>
+    <p>下面的 workbench 照這五條規則蓋一棵組織樹。先選人數，再調兩個管理幅度，每一條規則底下會顯示目前的組織有沒有違反它。</p>
+  </section>
+
+  <section class="bench" aria-label="組織規模">
+    <div class="row presets" id="presets"><span class="lbl">工程師人數</span></div>
+    <div class="row inputs">
+      <div class="inp"><label for="n">工程師人數</label><input type="range" id="n" min="4" max="1200" value="100"><output id="n-out"></output></div>
+      <div class="inp"><label for="s1">EM 帶幾個工程師</label><input type="range" id="s1" min="3" max="14" value="7"><output id="s1-out"></output></div>
+      <div class="inp"><label for="s2">主管的主管帶幾個主管</label><input type="range" id="s2" min="2" max="10" value="5"><output id="s2-out"></output></div>
+    </div>
+
+    <div class="row work size-work">
+      <div class="panel">
+        <div class="panel-head">組織樹<span class="sub">由上往下，最下面是工程師</span></div>
+        <div class="panel-body"><div class="tree" id="tree"></div></div>
+        <div class="panel-head">數字</div>
+        <div class="panel-body"><div class="nums" id="nums"></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">五條規則<span class="sub">Larson，Sizing teams</span></div>
+        <pre class="pseudo" id="rules"></pre>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>層數長得很慢，但每一層都有代價</h2>
+    <p>用預設的幅度（EM 帶 7 個、主管的主管帶 5 個）拉一遍人數，管理層數是這樣：7 人以內 1 層，8 到 35 人 2 層，36 到 175 人 3 層，176 到 875 人 4 層，再多就是 5 層。層數隨人數取對數成長，所以從 100 人長到 1000 人，人數多了十倍，層數只多一兩層。</p>
+    <p>但每一層都有代價。最遠的兩個工程師之間，資訊要先往上走到共同的主管，再往下走回來，層數多一層，這條路就多兩段。每一段都可能延遲、遺漏或變形。把幅度拉寬可以少一層，但照 Larson 的說法，一個 EM 帶超過 8、9 個人，就只能當教練和兜底，沒辦法照顧到每個人的成長。把幅度收窄，每個人都有人照顧，但會多出更多層和更多主管。沒有哪一組數字是對的，只有你選擇承擔哪一種代價。</p>
+    <p>workbench 裡「溝通路徑」那一格把兩種算法並排：全部攤平時是 n(n−1)/2；切成團隊之後，只算每個主管和直屬下屬之間的路徑。這是刻意簡化的模型，真實組織裡跨團隊的人還是會直接講話，但數量級的差距是真的。</p>
+  </section>
+
+  <section class="prose">
+    <h2>規則之間會互相打架</h2>
+    <p>第 1 條說團隊 6 到 8 人，第 4 條說 on-call 要 8 個人。把 EM 的幅度設成 6 或 7，你會看到幾乎每個團隊都撐不起自己的輪值，只能和別的團隊合併。Larson 明說合併輪值是過渡做法，所以實務上要嘛把團隊養到 8 人，要嘛接受一段時間的合併輪值。這是我從兩條規則推出來的結論，不是書上直接寫的。</p>
+    <p>第 5 條是開新團隊的順序：先長大、再拆開，不開空團隊。最常見的反例，是為了一個新方向直接開一個 2、3 人的小團隊，或者先任命主管、再慢慢招人。Larson 的建議是相反的：創新和維護都留在既有的團隊裡做，等團隊夠大再拆。理由就是第 3 條：少於 4 人的團隊撐不起 on-call，有人休假就停擺，主管也會被迫變成 TLM。</p>
+    <p>另一個常見的失敗是只看第 1 條、忽略第 2 條。團隊數一多，每個 EM 都直接向同一個 director 報告，director 底下掛了十幾個主管，結果只能救火。這時候該加的是中間那一層，不是更多 EM。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>團隊和主管這兩層結構，存在的理由是把 n(n−1)/2 的溝通量切小。管理幅度決定組織要幾層：幅度每一層都有上限，人數增加時層數會照對數成長，每多一層，資訊就多轉兩手。Larson 的數字（EM 帶 6 到 8 人、主管的主管帶 4 到 6 人、團隊不少於 4 人、on-call 要 8 人）是經驗值，用來判斷一個組織形狀是否健康，而不是一套公式。</p>
+    <p>團隊怎麼切，也會反過來決定系統的邊界，這是 <a href="../conway/">Conway's law</a> 那一頁的主題。</p>
+    <p>這個模型把每個團隊當成一模一樣的格子。真實組織裡還有 PM、設計、SRE 這些跨職能的角色，也有 TLM、平台團隊這些不規則的形狀。Brooks's law 講的是延誤中的專案加人，不是說公司不該成長；長期來看人多還是做得多，只是增加的速度比人數慢。</p>
+  </section>
+
+  <p class="foot">來源：Will Larson，An Elegant Puzzle，2.1 Sizing teams（部落格原文〈Sizing engineering teams〉，2018）；Frederick P. Brooks Jr.，The Mythical Man-Month，Ch. 2 The Mythical Man-Month。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const state = { n: 100, s1: 7, s2: 5 };
+const PRESETS = [8, 30, 100, 300, 1000];
+
+// ---- 蓋組織樹：每一層的子節點數 c，用幅度 s 分給 ceil(c/s) 個主管，盡量平均 ----
+function split(c, s) {
+  const p = Math.ceil(c / s);
+  const lo = Math.floor(c / p), hi = Math.ceil(c / p);
+  return { p, lo, hi, nHi: c - lo * p }; // nHi 個主管帶 hi 個，其餘帶 lo 個
+}
+function build(n, s1, s2) {
+  const teams = split(n, s1);           // 第 1 層：EM 帶工程師
+  const layers = [{ count: teams.p, lo: teams.lo, hi: teams.hi, nHi: teams.nHi, kids: 'eng' }];
+  let c = teams.p;
+  while (c > 1) {                        // 第 2 層以上：主管帶主管，直到剩一個
+    const sp = split(c, s2);
+    layers.push({ count: sp.p, lo: sp.lo, hi: sp.hi, nHi: sp.nHi, kids: 'mgr' });
+    c = sp.p;
+  }
+  return { teams, layers };
+}
+
+// ---- 溝通路徑：攤平是 n(n-1)/2；切成團隊後只算每個主管和直屬下屬之間的完全圖 ----
+const pairs = k => k * (k - 1) / 2;
+function structuredPaths(layers) {
+  let total = 0;
+  layers.forEach(L => {
+    const nLo = L.count - L.nHi;
+    total += L.nHi * pairs(L.hi + 1) + nLo * pairs(L.lo + 1);
+  });
+  return total;
+}
+
+const fmt = x => x.toLocaleString('en-US');
+const range = (lo, hi) => lo === hi ? `${lo}` : `${lo}–${hi}`;
+
+function cellsHtml(count, cls, cap = 48) {
+  const shown = Math.min(count, cap);
+  let s = '';
+  for (let i = 0; i < shown; i++) s += `<i class="${cls}"></i>`;
+  if (count > cap) s += `<span class="more">+${fmt(count - cap)}</span>`;
+  return `<div class="cells">${s}</div>`;
+}
+
+function treeHtml(n, org) {
+  const L = org.layers, top = L.length;
+  let s = '';
+  for (let i = top - 1; i >= 0; i--) {
+    const layer = L[i];
+    const name = i === 0 ? 'EM' : i === top - 1 && top > 1 ? '最上層主管' : `第 ${i + 1} 層主管`;
+    const what = i === 0 ? '個工程師' : '個主管';
+    const bad = i === 0 ? (layer.lo < 4 || layer.hi > 8) : (layer.lo < 4 || layer.hi > 6);
+    s += `<div class="layer"><p class="cap">${name}：<b>${fmt(layer.count)}</b> 人，各帶 ${range(layer.lo, layer.hi)} ${what}</p>${cellsHtml(layer.count, bad ? 'bad' : '')}</div>`;
+  }
+  s += `<div class="layer"><p class="cap">工程師：<b>${fmt(n)}</b> 人</p>${cellsHtml(n, 'eng', 96)}</div>`;
+  return s;
+}
+
+function rulesHtml(n, org) {
+  const ans = (t, cls) => `<span class="ans ${cls || ''}">${t}</span>`;
+  const t = org.teams, L = org.layers;
+  // 規則 1
+  let r1;
+  if (t.hi > 9) r1 = ans(`每個 EM 帶 ${range(t.lo, t.hi)} 人，超過 8、9 個：主管只能當教練和兜底。`, 'bad');
+  else if (t.hi > 8) r1 = ans(`每個 EM 帶 ${range(t.lo, t.hi)} 人，已經在上限邊緣。`, 'bad');
+  else if (t.lo < 4) r1 = ans(`有 EM 只帶 ${t.lo} 人，少於 4 個：這些主管會變成 TLM。`, 'bad');
+  else if (t.lo >= 6) r1 = ans(`${fmt(t.p)} 個團隊，每隊 ${range(t.lo, t.hi)} 人，在 6–8 的範圍內。`, 'good');
+  else r1 = ans(`${fmt(t.p)} 個團隊，每隊 ${range(t.lo, t.hi)} 人，可以運作，但低於 6–8 的建議值。`);
+  // 規則 2
+  let r2;
+  if (L.length === 1) r2 = ans('只有一個團隊，還沒有主管的主管。', 'none');
+  else {
+    const bad = L.slice(1).filter(x => x.hi > 6 || x.lo < 4);
+    const desc = L.slice(1).map((x, i) => `第 ${i + 2} 層 ${fmt(x.count)} 人，各帶 ${range(x.lo, x.hi)} 個`).join('；');
+    if (!bad.length) r2 = ans(`${desc}。都在 4–6 的範圍內。`, 'good');
+    else {
+      const tooMany = bad.some(x => x.hi > 6), tooFew = bad.some(x => x.lo < 4);
+      r2 = ans(`${desc}。` + (tooMany ? '有人帶超過 6 個主管，只能當救火的教練。' : '') + (tooFew ? '有人帶不到 4 個主管，這一層偏薄。' : ''), 'bad');
+    }
+  }
+  // 規則 3
+  const r3 = t.lo < 4 ? ans(`有團隊只有 ${t.lo} 人，不算團隊。`, 'bad') : ans(`最小的團隊有 ${t.lo} 人。`, 'good');
+  // 規則 4：團隊人數不到 8 的要合併輪值
+  const small = t.lo < 8 ? (t.hi < 8 ? t.p : t.p - t.nHi) : 0;
+  const r4 = small === 0 ? ans('每個團隊都有 8 人以上，可以各自排輪值。', 'good')
+    : ans(`${fmt(small)} 個團隊不到 8 人，撐不起自己的 on-call，要和別的團隊合併輪值。`, 'bad');
+  // 規則 5
+  const r5 = t.hi >= 8 ? ans(`最大的團隊有 ${t.hi} 人，長到 8–10 人就可以拆成兩隊。`)
+    : ans(`最大的團隊有 ${t.hi} 人，還沒到拆分的大小。`, 'none');
+  return [
+    `<span class="pl head">組織的大小規則（Larson，Sizing teams）</span>`,
+    `<span class="pl">1  一個 EM 帶 6–8 個工程師</span>` + r1,
+    `<span class="pl">2  一個主管的主管帶 4–6 個主管</span>` + r2,
+    `<span class="pl">3  少於 4 人的團隊不算團隊</span>` + r3,
+    `<span class="pl">4  on-call 輪值要 8 個人；不夠就合併輪值（過渡）</span>` + r4,
+    `<span class="pl">5  先長到 8–10 人，再拆成兩個 4–5 人的團隊</span>` + r5,
+  ].join('');
+}
+
+function render() {
+  const { n, s1, s2 } = state;
+  $('n').value = n; $('s1').value = s1; $('s2').value = s2;
+  $('n-out').textContent = n; $('s1-out').textContent = s1; $('s2-out').textContent = s2;
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', +b.dataset.n === n));
+  const org = build(n, s1, s2);
+  const mgrs = org.layers.reduce((a, L) => a + L.count, 0);
+  const flat = pairs(n), cut = structuredPaths(org.layers);
+  const depth = org.layers.length;
+  $('tree').innerHTML = treeHtml(n, org);
+  $('rules').innerHTML = rulesHtml(n, org);
+  $('nums').innerHTML = [
+    ['管理層數', depth],
+    ['主管總數', fmt(mgrs)],
+    ['主管占全部人數', (100 * mgrs / (n + mgrs)).toFixed(1) + '%'],
+    ['最遠兩人之間', depth === 1 ? '同一隊' : `經過 ${2 * depth - 1} 個主管`],
+    ['溝通路徑（攤平）', fmt(flat)],
+    ['溝通路徑（切成團隊）', fmt(cut)],
+  ].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+  const ratio = flat / Math.max(cut, 1);
+  $('say').innerHTML = `${fmt(n)} 個工程師切成 ${fmt(org.teams.p)} 個團隊，總共 ${depth} 層管理、${fmt(mgrs)} 個主管。`
+    + (n > 8 ? `全部攤平的話有 ${fmt(flat)} 條溝通路徑，切成團隊後剩 ${fmt(cut)} 條，大約是 ${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)} 分之一。` : '人數還少，攤平和切團隊的差別不大。')
+    + `<span class="note">紅色的格子是違反規則 1 或規則 2 的那一層。</span>`;
+}
+
+PRESETS.forEach(v => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.n = v; b.textContent = v;
+  b.addEventListener('click', () => { state.n = v; render(); });
+  $('presets').appendChild(b);
+});
+['n', 's1', 's2'].forEach(k => $(k).addEventListener('input', e => { state[k] = +e.target.value; render(); }));
+render();
+</script>
+</body>
+</html>

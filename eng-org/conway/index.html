@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>團隊切法與 Conway's law</title>
+<meta name="description" content="系統的結構會複製組織的溝通結構。把同一個系統依技術層、依價值流、或混合方式切給團隊，看跨團隊的依賴、每個功能要牽動幾個團隊、每個團隊的負擔怎麼跟著變。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+.work.conway-work { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
+.presets + .presets { margin-top: 0.5rem; }
+
+/* 系統圖：三條價值流 × 三層，框裡寫元件名和負責的團隊 */
+.sys { width: 100%; max-width: 28rem; height: auto; display: block; margin: 0 auto; }
+.sys .comp rect { fill: var(--bg); stroke: var(--ink); stroke-width: 1; cursor: pointer; }
+.sys .comp.feat rect { fill: var(--mark); }
+.sys .comp:hover rect, .sys .comp:focus-visible rect { stroke-width: 2; }
+.sys .comp:focus { outline: none; }
+.sys .name { fill: var(--ink); font-size: 10px; font-weight: 700; }
+.sys .team { fill: var(--muted); font-size: 9.5px; font-family: var(--font-mono); }
+.sys .col { fill: var(--muted); font-size: 10px; }
+.sys line { stroke: var(--muted); stroke-width: 1.2; }
+.sys line.cross { stroke: var(--miss); stroke-width: 2; stroke-dasharray: 5 3; }
+.sys .hull { fill: none; stroke: var(--line); stroke-width: 1; }
+.key { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; font-size: 0.75rem; color: var(--muted); padding-top: 0.5rem; }
+.key i { display: inline-block; width: 1.2rem; height: 0; vertical-align: 0.25em; margin-right: 0.3rem; border-top: 1.5px solid var(--muted); }
+.key i.cross { border-top: 2px dashed var(--miss); }
+.key i.feat { width: 0.9rem; height: 0.7rem; border: 1px solid var(--ink); background: var(--mark); vertical-align: -0.05em; }
+
+/* 規則：和說明裡的同一份，每一行底下接目前切法的結果 */
+.pseudo .ans { display: block; white-space: normal; font-family: var(--font-body); font-size: 0.85rem; font-weight: 400; line-height: 1.6; color: var(--ink); padding: 0.1rem 0.3rem 0.5rem 1.6rem; }
+.pseudo .ans.bad { color: var(--miss); }
+.pseudo .ans.good { color: var(--hit); }
+.pseudo .ans.none { color: var(--muted); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 工程組織怎麼運作</a>
+    <h1>團隊切法與 Conway's law</h1>
+    <p class="lead">組織圖和系統架構圖通常是同一張圖的兩種畫法。這一頁拿一個小型電商系統，讓你把同一組元件依技術層、依價值流或混合的方式分給團隊，看跨團隊的依賴、每個功能要牽動幾個團隊、每個團隊要扛多少東西，怎麼跟著切法改變。</p>
+  </header>
+
+  <section class="prose">
+    <h2>Conway 在 1968 年說了什麼</h2>
+    <p>Melvin Conway 在〈How Do Committees Invent?〉裡提出一個論點：任何設計系統的組織，產出的設計在結構上都會複製這個組織的溝通結構。這篇文章 1967 年先投給 Harvard Business Review，被以「沒有證明這個論點」為由退稿，隔年 4 月刊在 Datamation。後來 Fred Brooks 在 The Mythical Man-Month 裡引用它，並且稱它為 Conway's law，這個名字就這樣傳開了。</p>
+    <p>道理其實不難懂。兩個元件之間要有介面，介面要有人協商。同一個團隊裡的人天天講話，協商成本低，介面可以隨時改，久了就容易糾纏在一起。跨團隊的介面要開會、要排進彼此的優先順序，所以會被刻意定得清楚、改得很慢。<a href="../org-size/">組織規模</a>那一頁講到，團隊和主管存在的理由是切斷溝通路徑；這一頁說的是，被切斷的地方，最後會變成系統的邊界。</p>
+  </section>
+
+  <section class="prose">
+    <h2>有證據嗎</h2>
+    <p>有一些。MacCormack、Rusnak 和 Baldwin 在 2012 年發表於 Research Policy 的研究裡，把功能相同的軟體配成對：一邊是商業公司開發的，一邊是開源社群開發的。商業公司的參與者在目標、結構和行為上緊密相連，開源社群則鬆散得多。結果在每一組配對裡，開源的那一個都明顯比較模組化。用「改一個元件的設計，可能牽動多少其他元件」來量，差距最大到 8 倍。</p>
+    <p>這支持了所謂的 <span class="term" data-def="鏡像假說。產品的架構會映照開發它的組織的架構。Conway's law 在學術文獻裡的名稱之一。">mirroring hypothesis</span>，但要注意它證明的是相關性，而且樣本是開源和商業這種差距很大的組織。同一家公司裡把團隊重切一次，系統要多久才會跟著變、會變多少，這篇研究沒有回答。</p>
+  </section>
+
+  <section class="prose">
+    <h2>Team Topologies 的規則</h2>
+    <p>如果系統一定會長成組織的樣子，那就可以反過來用：先決定想要的系統邊界，再照著切團隊。ThoughtWorks 在 2014 年的 Technology Radar 把這個做法叫 <span class="term" data-def="反向 Conway 操作。刻意調整團隊和組織結構，讓想要的架構自然長出來。">inverse Conway maneuver</span>。Matthew Skelton 和 Manuel Pais 在 2019 年的 Team Topologies 把它整理成一套詞彙。</p>
+    <p>書裡的團隊只有四種。<span class="term" data-def="對準一條工作流（通常是業務領域的一段），從頭到尾負責交付。">Stream-aligned</span> 團隊對一條業務價值流從頭負責到尾，是大多數團隊應該是的樣子。<span class="term" data-def="提供讓 stream-aligned 團隊加速交付的內部產品，例如部署平台、資料平台。">Platform</span> 團隊提供內部產品，讓 stream-aligned 團隊不必自己處理底層。<span class="term" data-def="協助 stream-aligned 團隊跨過障礙、補上缺的能力，例如測試或可觀測性的專家團隊。">Enabling</span> 團隊幫其他團隊補能力。<span class="term" data-def="負責需要大量數學、計算或專業技術的元件，例如影音編碼、定價引擎。">Complicated-subsystem</span> 團隊負責需要深度專業的元件。團隊之間的互動有三種模式：限期一起探索新東西的 collaboration，一方提供、一方使用的 X-as-a-Service，以及一方協助指導另一方的 facilitating。</p>
+    <p>貫穿全書的限制是 <span class="term" data-def="認知負擔。一個團隊同時要理解和維護的東西有上限，超過就會變慢、決策變差。">cognitive load</span>：團隊能承受的複雜度有限，就像過載的 CPU 會讓電腦變慢一樣。所以團隊邊界不只要對齊業務，也要小到團隊理解得了。把這些整理成規則：</p>
+    <pre class="code">團隊切法的規則（Conway；Team Topologies）
+1  系統的結構會複製設計它的組織的溝通結構
+2  想要什麼樣的系統邊界，就先照那個樣子切團隊
+3  多數團隊應該是 stream-aligned：一個功能最好由一個團隊從頭做到尾
+4  一個團隊負責的東西不能超過它的 cognitive load
+5  團隊之間以 X-as-a-Service 為主，collaboration 只在限期探索時用</pre>
+    <p>下面的 workbench 有九個元件：三條價值流（瀏覽商品、下單結帳、會員），每條都有前端、服務和資料庫三層。選一種切法，再選一個要做的功能，看每條規則底下的結果。點元件可以把它換到別的團隊。</p>
+  </section>
+
+  <section class="bench" aria-label="團隊切法">
+    <div class="row">
+      <div class="presets" id="splits"><span class="lbl">切法</span></div>
+      <div class="presets" id="feats"><span class="lbl">要做的功能</span></div>
+    </div>
+
+    <div class="row work conway-work">
+      <div class="panel">
+        <div class="panel-head">系統和團隊<span class="sub">點元件換團隊</span></div>
+        <div class="panel-body">
+          <svg class="sys" id="sys" viewBox="0 0 360 236" role="img" aria-label="九個元件：三條價值流乘三層"></svg>
+          <div class="key"><span><i></i>同一團隊內的依賴</span><span><i class="cross"></i>跨團隊的依賴</span><span><i class="feat"></i>這個功能要改的元件</span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">五條規則<span class="sub">Conway；Team Topologies</span></div>
+        <pre class="pseudo" id="rules"></pre>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>依技術層切為什麼常常出問題</h2>
+    <p>依技術層切（前端隊、後端隊、資料庫隊）看起來很自然，因為同一隊的人技能相同、可以互相支援。但大多數功能都是縱向的：「商品頁加上評分」要動前端、服務和資料庫三層，所以每個功能都要三個團隊協調、排進三份 backlog，等最慢的那一隊做完才能上線。workbench 裡選「依技術層」，再挑任何一個縱向的功能，第 3 條規則就會變紅。</p>
+    <p>依價值流切會把這個問題翻過來：多數功能一個團隊就能做完，但「全站換新的 UI 元件庫」這種橫向的改動，就會牽動每一個團隊。Team Topologies 的解法是把這種橫向的東西抽出來，交給 platform 團隊以 X-as-a-Service 的方式提供，或是由 enabling 團隊帶著各隊升級，而不是讓它們長期 collaboration。沒有一種切法能讓所有改動都只牽動一個團隊，所以要挑的是：最常發生的那一類改動，不要跨團隊。</p>
+    <p>「一個大團隊」是另一個極端：沒有跨團隊依賴，什麼功能都不用協調，但九個元件、三個業務領域全部壓在同一群人身上。<a href="../org-size/">組織規模</a>那一頁的規則也說，超過 8、9 個人的團隊，主管就只能當教練了。這就是 cognitive load 和團隊大小一起把組織推向拆分的原因。</p>
+  </section>
+
+  <section class="prose">
+    <h2>邊界要寫下來</h2>
+    <p>團隊邊界如果只存在組織圖上，系統會慢慢長回原本的樣子。所以實務上會用工具把「誰負責哪一塊」寫成可以檢查的東西。GitHub 和 GitLab 的 <code>CODEOWNERS</code> 檔把路徑對應到團隊，改到別人的程式碼就要對方 review。Spotify 開源的 Backstage 這類服務目錄會列出每個服務的負責團隊、文件和 on-call。Jira、Linear 這類工具的看板通常也是一個團隊一塊，跨團隊的 epic 得拆成好幾張票分給不同看板。看一家公司的看板怎麼分、CODEOWNERS 怎麼寫，往往比看組織圖更能知道它的系統長什麼樣子。</p>
+    <p>反過來說，重組不是免費的。每切一次團隊，CODEOWNERS、on-call 輪值、看板和服務目錄都要跟著改，而且系統本身不會馬上跟上。這是推論，不是研究結論：重組太頻繁的組織，系統邊界會落後組織邊界好幾輪，結果哪一種切法的好處都拿不到。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>團隊之間的溝通介面，最後會變成系統的介面，所以切團隊就是在設計架構。實證研究支持這個方向：鬆散的組織做出的軟體明顯更模組化。實務上的原則是讓最常見的改動只牽動一個團隊，多數團隊對齊業務價值流，橫向的東西交給 platform 或 enabling 團隊，並且讓每個團隊負責的範圍不超過它的 cognitive load。</p>
+    <p>這是第一批四頁的最後一頁。前面幾頁講了誰在組織的哪個位置、組織怎麼長大、決策怎麼推動，以及團隊怎麼切。接下來機制那一半會談<a href="../delivery/">DORA 和 Little's law</a>、<a href="../planning/">規劃與 OKR</a>、<a href="../performance/">績效與 calibration</a>、<a href="../incident/">incident 和 postmortem</a>，這些是主管實際用來管理團隊的工具。</p>
+    <p>這裡的系統只有九個元件和四種功能，真實系統的依賴遠比這複雜，而且還有共用資料庫、共用函式庫這些不容易分給單一團隊的東西。依賴圖是靜態的，沒有呈現哪個介面改得多、哪個幾乎不動，而那才是決定邊界該畫在哪裡的關鍵。</p>
+  </section>
+
+  <p class="foot">來源：Melvin E. Conway，〈How Do Committees Invent?〉，Datamation，1968 年 4 月；Alan MacCormack、John Rusnak、Carliss Baldwin，〈Exploring the Duality between Product and Organizational Architectures〉，Research Policy 41(8)，2012；Matthew Skelton、Manuel Pais，Team Topologies（2019），Ch. 2 Conway's Law and Why It Matters、Ch. 3 Team-First Thinking、Ch. 5 The Four Fundamental Team Topologies；ThoughtWorks Technology Radar，〈Inverse Conway Maneuver〉，2014。</p>
+</main>
+
+<script>
+// 九個元件：三條價值流（欄）× 三層（列）
+const STREAMS = [['br', '瀏覽商品'], ['or', '下單結帳'], ['mb', '會員']];
+const LAYERS = [['ui', '前端'], ['svc', '服務'], ['db', '資料庫']];
+const COMPS = [];
+STREAMS.forEach(([s, sn], c) => LAYERS.forEach(([l, ln], r) => COMPS.push({ id: `${s}-${l}`, s, l, c, r, name: `${sn.slice(0, 2)}${ln}` })));
+// 依賴：每條價值流裡 前端 → 服務 → 資料庫；下單服務另外呼叫瀏覽服務（取價格）和會員服務（取地址）
+const EDGES = [];
+STREAMS.forEach(([s]) => { EDGES.push([`${s}-ui`, `${s}-svc`], [`${s}-svc`, `${s}-db`]); });
+EDGES.push(['or-svc', 'br-svc'], ['or-svc', 'mb-svc']);
+
+const FEATS = {
+  rating: { name: '商品頁加評分', comps: ['br-ui', 'br-svc', 'br-db'] },
+  install: { name: '結帳支援分期', comps: ['or-ui', 'or-svc', 'or-db'] },
+  tier: { name: '會員等級折扣', comps: ['mb-svc', 'mb-db', 'or-svc', 'or-ui'] },
+  uikit: { name: '全站換 UI 元件庫', comps: ['br-ui', 'or-ui', 'mb-ui'] },
+};
+const TEAMS = ['A', 'B', 'C', 'D'];
+const SPLITS = {
+  layer: { name: '依技術層', desc: 'A 隊做前端、B 隊做服務、C 隊管資料庫', f: c => ({ ui: 'A', svc: 'B', db: 'C' })[c.l] },
+  stream: { name: '依價值流', desc: 'A 隊負責瀏覽、B 隊負責下單、C 隊負責會員，各自從前端做到資料庫', f: c => ({ br: 'A', or: 'B', mb: 'C' })[c.s] },
+  mixed: { name: '前端統一，後端依價值流', desc: 'A 隊做全部前端，B、C、D 隊各自負責一條價值流的服務和資料庫', f: c => c.l === 'ui' ? 'A' : ({ br: 'B', or: 'C', mb: 'D' })[c.s] },
+  one: { name: '一個大團隊', desc: '所有元件都由 A 隊負責', f: () => 'A' },
+};
+
+const $ = id => document.getElementById(id);
+const state = { split: 'layer', feat: 'rating', own: {} };
+
+function applySplit(k) {
+  state.split = k;
+  COMPS.forEach(c => state.own[c.id] = SPLITS[k].f(c));
+}
+
+// ---- 系統圖 ----
+const X = c => 14 + c * 116, Y = r => 30 + r * 70, W = 100, H = 44;
+const center = id => { const c = COMPS.find(x => x.id === id); return [X(c.c) + W / 2, Y(c.r) + H / 2, c]; };
+function sysSvg() {
+  const feat = FEATS[state.feat].comps;
+  let s = STREAMS.map(([, sn], c) => `<text class="col" x="${X(c) + W / 2}" y="16" text-anchor="middle">${sn}</text>`).join('');
+  EDGES.forEach(([a, b]) => {
+    let [x1, y1, ca] = center(a), [x2, y2, cb] = center(b);
+    const cross = state.own[a] !== state.own[b];
+    if (ca.r === cb.r) { x1 += (x2 > x1 ? 1 : -1) * W / 2; x2 += (x2 > x1 ? -1 : 1) * W / 2; }
+    else { y1 += H / 2; y2 -= H / 2; }
+    s += `<line class="${cross ? 'cross' : ''}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+  });
+  COMPS.forEach(c => {
+    const on = feat.includes(c.id);
+    s += `<g class="comp${on ? ' feat' : ''}" data-id="${c.id}" tabindex="0" role="button" aria-label="${c.name}，${state.own[c.id]} 隊負責，點一下換團隊">`
+      + `<rect x="${X(c.c)}" y="${Y(c.r)}" width="${W}" height="${H}" rx="3"/>`
+      + `<text class="name" x="${X(c.c) + 8}" y="${Y(c.r) + 18}">${c.name}</text>`
+      + `<text class="team" x="${X(c.c) + 8}" y="${Y(c.r) + 34}">${state.own[c.id]} 隊</text></g>`;
+  });
+  return s;
+}
+
+// ---- 五條規則的結果 ----
+function analyze() {
+  const own = state.own;
+  const teams = TEAMS.filter(t => COMPS.some(c => own[c.id] === t));
+  const cross = EDGES.filter(([a, b]) => own[a] !== own[b]);
+  const featTeams = Object.fromEntries(Object.entries(FEATS).map(([k, f]) => [k, [...new Set(f.comps.map(id => own[id]))].sort()]));
+  const load = teams.map(t => {
+    const cs = COMPS.filter(c => own[c.id] === t);
+    return { t, n: cs.length, streams: new Set(cs.map(c => c.s)).size, layers: new Set(cs.map(c => c.l)).size };
+  });
+  // 為了功能必須一起做事的團隊對（collaboration），和只靠依賴相連的團隊對（X-as-a-Service）
+  const key = (a, b) => [a, b].sort().join('–');
+  const collab = new Set();
+  Object.values(featTeams).forEach(ts => { for (let i = 0; i < ts.length; i++) for (let j = i + 1; j < ts.length; j++) collab.add(key(ts[i], ts[j])); });
+  const service = new Set(cross.map(([a, b]) => key(own[a], own[b])).filter(p => !collab.has(p)));
+  return { teams, cross, featTeams, load, collab, service };
+}
+
+function rulesHtml(r) {
+  const ans = (t, cls) => `<span class="ans ${cls || ''}">${t}</span>`;
+  const nm = id => COMPS.find(c => c.id === id).name;
+  const f = FEATS[state.feat], ft = r.featTeams[state.feat];
+  const single = Object.values(r.featTeams).filter(ts => ts.length === 1).length;
+  const r1 = r.cross.length === 0 ? ans('沒有跨團隊的依賴：系統裡沒有任何介面需要跨團隊協商。', 'none')
+    : ans(`${r.cross.length} 條依賴跨越團隊邊界：${r.cross.map(([a, b]) => `${nm(a)} → ${nm(b)}`).join('、')}。這些就是團隊之間要協商的介面。`);
+  const r2 = ans(`${r.teams.length} 個團隊。${SPLITS[state.split] && isPreset() ? SPLITS[state.split].desc + '。' : '這是自訂的切法。'}`, 'none');
+  const r3 = ft.length === 1
+    ? ans(`「${f.name}」只要 ${ft[0]} 隊就能做完。四個功能裡有 ${single} 個只牽動一個團隊。`, 'good')
+    : ans(`「${f.name}」要 ${ft.join('、')} 共 ${ft.length} 個團隊協調。四個功能裡只有 ${single} 個能由一個團隊做完。`, 'bad');
+  const heavy = r.load.filter(x => x.streams >= 3 && x.layers >= 2);
+  const r4 = ans(r.load.map(x => `${x.t} 隊 ${x.n} 個元件、${x.streams} 個業務領域`).join('；') + '。'
+    + (heavy.length ? `${heavy.map(x => x.t).join('、')} 隊同時扛所有業務領域和好幾層，負擔最重。` : ''), heavy.length ? 'bad' : '');
+  const r5 = r.collab.size === 0 && r.service.size === 0 ? ans('只有一個團隊，沒有團隊之間的互動。', 'none')
+    : ans(`為了這四個功能必須一起做事的團隊組合：${r.collab.size ? [...r.collab].join('、') : '沒有'}。只靠服務介面相連、可以用 X-as-a-Service 的：${r.service.size ? [...r.service].join('、') : '沒有'}。`, r.collab.size > 2 ? 'bad' : '');
+  return [
+    `<span class="pl head">團隊切法的規則（Conway；Team Topologies）</span>`,
+    `<span class="pl">1  系統的結構會複製設計它的組織的溝通結構</span>` + r1,
+    `<span class="pl">2  想要什麼樣的系統邊界，就先照那個樣子切團隊</span>` + r2,
+    `<span class="pl">3  多數團隊應該是 stream-aligned：一個功能最好由一個團隊從頭做到尾</span>` + r3,
+    `<span class="pl">4  一個團隊負責的東西不能超過它的 cognitive load</span>` + r4,
+    `<span class="pl">5  團隊之間以 X-as-a-Service 為主，collaboration 只在限期探索時用</span>` + r5,
+  ].join('');
+}
+
+function isPreset() {
+  return COMPS.every(c => state.own[c.id] === SPLITS[state.split].f(c));
+}
+
+const SAY = {
+  layer: '依技術層切的時候，每條依賴都是同一條價值流裡的上下層，而上下層剛好分屬不同團隊，所以幾乎每條依賴都跨團隊。縱向的功能都要三個團隊一起做。',
+  stream: '依價值流切的時候，跨團隊的依賴只剩下單服務呼叫瀏覽和會員的那兩條。縱向的功能一個團隊做得完，但「全站換 UI 元件庫」會牽動每一個團隊。',
+  mixed: '前端統一、後端依價值流，是很常見的折衷：換 UI 元件庫只要 A 隊，但每個縱向的功能都要 A 隊再加上至少一個後端團隊，A 隊會變成所有功能的瓶頸。',
+  one: '一個大團隊沒有任何跨團隊協調，代價是九個元件、三個業務領域全部壓在同一群人身上。人數長大後，這就是第一個要拆的地方。',
+};
+
+function render() {
+  document.querySelectorAll('#splits button').forEach(b => b.classList.toggle('chosen', b.dataset.k === state.split && isPreset()));
+  document.querySelectorAll('#feats button').forEach(b => b.classList.toggle('chosen', b.dataset.k === state.feat));
+  $('sys').innerHTML = sysSvg();
+  const r = analyze();
+  $('rules').innerHTML = rulesHtml(r);
+  $('say').innerHTML = (isPreset() ? SAY[state.split] : '自訂的切法。看第 1 條的跨團隊依賴和第 3 條的功能，判斷最常見的改動是不是都留在一個團隊裡。')
+    + `<span class="note">紅色虛線是跨團隊的依賴，黃底是「${FEATS[state.feat].name}」要改的元件。</span>`;
+}
+
+function cycle(id) {
+  const i = TEAMS.indexOf(state.own[id]);
+  state.own[id] = TEAMS[(i + 1) % TEAMS.length];
+  render();
+}
+$('sys').addEventListener('click', e => { const g = e.target.closest('.comp'); if (g) cycle(g.dataset.id); });
+$('sys').addEventListener('keydown', e => { const g = e.target.closest('.comp'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); cycle(g.dataset.id); g.focus && $('sys').querySelector(`[data-id="${g.dataset.id}"]`).focus(); } });
+
+Object.entries(SPLITS).forEach(([k, sp]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.k = k; b.textContent = sp.name;
+  b.addEventListener('click', () => { applySplit(k); render(); });
+  $('splits').appendChild(b);
+});
+Object.entries(FEATS).forEach(([k, f]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.k = k; b.textContent = f.name;
+  b.addEventListener('click', () => { state.feat = k; render(); });
+  $('feats').appendChild(b);
+});
+applySplit('layer');
+render();
+</script>
+</body>
+</html>

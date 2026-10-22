@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Incident 和 postmortem</title>
+<meta name="description" content="正式環境出事的那一個小時，誰指揮、誰動手、誰對外說明？事後的 postmortem 為什麼要 blameless？依 Google SRE 書逐步走過一次有指揮的應變、一次沒人指揮的應變，以及一次追究個人的 postmortem。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+.work.inc-work { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, 0.85fr); }
+.pseudo .pl.skip { color: var(--miss); text-decoration: line-through; }
+
+/* 狀態和時間線 */
+.status { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.8rem; font-size: 0.85rem; margin-bottom: 0.5rem; }
+.status .badge { font-size: 0.75rem; }
+.status b { font-family: var(--font-mono); }
+.tl { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8rem; }
+.tl li { display: grid; grid-template-columns: 3.6rem minmax(0, 1fr); gap: 0.4rem; padding: 0.1rem 0.25rem; border-radius: 3px; }
+.tl li.new { background: var(--mark); }
+.tl li.bad span:last-child { color: var(--miss); }
+.tl time { font-family: var(--font-mono); color: var(--muted); font-size: 0.75rem; }
+.pm { margin-top: 0.6rem; border-top: 1px solid var(--line); padding-top: 0.5rem; font-size: 0.8rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.pm h3 { font-size: 0.8rem; }
+.pm ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.pm li.done { color: var(--hit); }
+.pm li.miss { color: var(--miss); }
+.pm li.gone { color: var(--muted); text-decoration: line-through; }
+
+/* 人 */
+.people { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.people li { font-size: 0.8rem; padding: 0.2rem 0.3rem; border-radius: 3px; }
+.people li.act { background: var(--mark); }
+.people .who { font-weight: 700; display: block; }
+.people .what { color: var(--muted); }
+.people li.act .what { color: var(--ink); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 工程組織怎麼運作</a>
+    <h1>Incident 和 postmortem</h1>
+    <p class="lead">正式環境出事的那一個小時，最常見的問題不是技術，而是沒有人知道誰在做什麼。這一頁照 Google SRE 書的兩章，看應變時要分哪些角色、什麼時候該宣告 incident、事後的 postmortem 為什麼不追究個人；再逐步對照三個情境：有指揮的應變、沒有人指揮的應變，以及一份追究個人的 postmortem。</p>
+  </header>
+
+  <section class="prose">
+    <h2>沒人指揮的事故長什麼樣</h2>
+    <p>Google 的 Site Reliability Engineering 第 14 章〈Managing Incidents〉從一個沒有管理的事故講起。On-call 的工程師 Mary 碰上一個從一個資料中心擴散到另一個資料中心的故障，接下來發生了三件事。第一，Mary 整個人陷進除錯，從來沒有退一步想先止血，或看看整體的狀況。第二，溝通很差，沒有人知道別人在做什麼，主管和客戶都很焦慮，能幫忙的人也沒被好好用上。第三是 <span class="term" data-def="各做各的。沒有協調就自己動手改正式環境。">freelancing</span>：另一個工程師沒有跟名義上負責的 Mary 協調，就把一個沒測過的改動推上正式環境，結果把剩下的伺服器也弄垮了。</p>
+    <p>書裡的解法是借用消防和救災的 Incident Command System，把應變的人分成幾個角色。<span class="term" data-def="事故指揮官。掌握事故的整體狀態、分派工作、排除障礙；沒有分派出去的角色都由指揮官兼。">Incident commander</span> 掌握整體狀況、分派工作、排除障礙，沒有分出去的角色都由指揮官兼。Operations 負責實際動手，而且是唯一可以改動系統的一組人。Communications 定時對團隊和利害關係人更新，並維護一份即時的 incident 文件。Planning 處理比較長期的事：開 bug、安排交班、記下系統哪些地方被臨時改過，事後要改回來。</p>
+    <p>什麼時候該宣告 incident？書裡的標準是三個條件：需要找第二個團隊來處理、使用者看得到這個故障、或者專注分析了一個小時還沒解決。重點是早點宣告，不要等問題惡化幾個小時才宣告。</p>
+  </section>
+
+  <section class="prose">
+    <h2>事後：blameless postmortem</h2>
+    <p>第 15 章〈Postmortem Culture: Learning from Failure〉列了該寫 postmortem 的情況：使用者看得到的停機或降級超過門檻、任何資料遺失、on-call 必須介入（rollback、切流量）、解決時間超過門檻，以及監控失效（通常代表事故是人工發現的）。這些門檻要在事故發生之前先訂好。</p>
+    <p>Postmortem 的內容是事故的書面紀錄：發生了什麼、影響多大、做了哪些處理、成因，以及防止再發生的行動項目。<span class="term" data-def="不追究個人的事後檢討。假設每個參與者都是出於好意，只問系統和流程哪裡讓人做出了那個選擇。">Blameless</span> 的意思是只看成因，不怪罪個人或團隊，前提是假設所有參與的人都出於好意。書裡給的理由很直接：如果會被怪罪，人就不會把問題講出來；而且人是修不好的，能修的是系統和流程，讓人下次能做出更好的選擇。John Allspaw 2012 年在 Etsy 寫的〈Blameless PostMortems and a Just Culture〉也是同樣的立場。</p>
+    <p>成因也不一定只有一個。Allspaw 在 2014 年的〈The Infinite Hows〉批評 five whys：一連串的「為什麼」很容易問到「是誰」，而且會把複雜的系統簡化成一條直線。改問「怎麼會」，問出來的是讓事故得以發生的條件。所以很多 postmortem 模板寫的是 contributing factors，而不是單一的 root cause。把兩章合起來寫成規則：</p>
+    <pre class="code">一次事故（Google SRE Ch. 14、15；Allspaw）
+1  宣告 incident：要找第二個團隊、使用者看得到、或查了一小時還沒解，就宣告
+2  指派 incident commander：負責協調和決策，不自己下去修
+3  分工：只有 operations 動系統；communications 定時對內對外更新
+4  先止血再找原因：rollback、切流量，恢復服務優先，保留證據
+5  寫 blameless postmortem：時間線、影響、成因、行動項目，不追究個人
+6  追蹤行動項目直到完成，並分享給其他團隊</pre>
+    <p>下面的 workbench 用同一個事故走三個情境：星期五下午一次設定變更讓結帳開始出錯。時間從告警響起的 T+0 開始算。情境是照書裡的案例改編的示範。</p>
+  </section>
+
+  <section class="bench" aria-label="一次事故">
+    <div class="row presets" id="presets"><span class="lbl">情境</span></div>
+    <div class="row">
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
+      </div>
+    </div>
+    <div class="row work inc-work">
+      <div class="panel">
+        <div class="panel-head">流程</div>
+        <pre class="pseudo" id="pseudo"></pre>
+      </div>
+      <div class="panel">
+        <div class="panel-head">事故<span class="sub" id="clock"></span></div>
+        <div class="panel-body" id="inc"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">誰在做什麼</div>
+        <div class="panel-body"><ul class="people" id="people"></ul></div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>三個情境差在哪</h2>
+    <p>第一個和第二個情境的技術問題完全一樣，止血的方法也一樣（rollback 那次設定變更），影響時間卻差了四倍多。差距幾乎都來自協調：沒有指揮官時，on-call 一直在找原因，沒有人提出先 rollback；另一個工程師自己推了一個 hotfix 讓狀況更糟；客服和主管不斷私訊動手的人，打斷除錯。這和書裡 Mary 的案例是同一種失敗。</p>
+    <p>第三個情境的應變做得和第一個一樣好，差在事後。Postmortem 把成因寫成「某某人的人為疏失」，行動項目是「加強教育訓練」。被點名的人之後不再主動說明自己當時看到什麼，其他人也學到了：出事時少講話比較安全。真正讓這次事故發生的條件（設定變更沒有走 canary、告警門檻太寬）沒有被找出來，兩個月後同樣的事又發生了。這正是 SRE 書說的：會被怪罪，人就不會把問題講出來。</p>
+  </section>
+
+  <section class="prose">
+    <h2>工具和平時的練習</h2>
+    <p>實務上，告警和 on-call 輪值由 paging 工具管理，例如 PagerDuty 或 Opsgenie。書裡說的 command post，現在多半是每個 incident 開一個專屬的 Slack 頻道（書裡當時用的是 IRC，看重的是可以搜尋的完整紀錄），對外則用 status page 更新。即時的 incident 文件和 postmortem 通常有固定的模板，寫完放進共用的資料庫，讓其他團隊也讀得到。</p>
+    <p>SRE 書特別強調平時的練習：讓團隊成員輪流擔任不同角色；把日常的營運變更和災難演練也當成 incident 來跑，讓流程變成習慣；每月挑一篇「postmortem of the month」分享，或是用 Wheel of Misfortune 把過去的事故重演一次，讓工程師扮演當時的角色。沒有人審過的 postmortem，書裡說等於沒寫。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>事故應變最常見的失敗不是技術，而是沒有人指揮：每個人都在修，沒有人在協調、對外說明、決定先止血。把指揮、動手、溝通拆成不同的角色，並且早點宣告 incident，同樣的故障可以短很多。事後的 postmortem 要 blameless，不是為了對人寬容，而是因為只有不怕受罰，人才會說出讓事故發生的真正條件。</p>
+    <p>到這裡，系列只剩<a href="../health-check/">最後一頁</a>：把整個系列講過的失敗模式，整理成面試和觀察一家公司時可以問的問題。</p>
+    <p>情境裡的時間和數字是編的，真實事故的成因通常更多、更糾纏，也常常牽涉多個團隊和第三方服務。這一頁也沒有談 on-call 的負擔和輪值設計，那是另一個關於人的問題。</p>
+  </section>
+
+  <p class="foot">來源：Betsy Beyer 等編，Site Reliability Engineering（2016），Ch. 14 Managing Incidents、Ch. 15 Postmortem Culture: Learning from Failure；John Allspaw，〈Blameless PostMortems and a Just Culture〉，Etsy Code as Craft，2012；John Allspaw，〈The Infinite Hows (or, the Dangers of the Five Whys)〉，Kitchen Soap，2014。</p>
+</main>
+
+<script>
+const LINES = [
+  { t: '一次事故（Google SRE Ch. 14、15；Allspaw）', head: true },
+  { t: '1  宣告 incident：要找第二個團隊、使用者看得到、或查了一小時還沒解，就宣告' },
+  { t: '2  指派 incident commander：負責協調和決策，不自己下去修' },
+  { t: '3  分工：只有 operations 動系統；communications 定時對內對外更新' },
+  { t: '4  先止血再找原因：rollback、切流量，恢復服務優先，保留證據' },
+  { t: '5  寫 blameless postmortem：時間線、影響、成因、行動項目，不追究個人' },
+  { t: '6  追蹤行動項目直到完成，並分享給其他團隊' },
+];
+const PEOPLE = [
+  ['oncall', 'On-call 工程師', '被告警叫醒的人'],
+  ['ic', 'Incident commander', '負責指揮'],
+  ['ops', 'Operations', '唯一動系統的人'],
+  ['comms', 'Communications', '對內對外更新'],
+  ['other', '其他工程師', '看到告警想幫忙的人'],
+  ['boss', '主管和客服', '要知道狀況的人'],
+];
+
+// 每一步：line、t（事故時間，字串）、ev（加進時間線的事件）、status、act、roles、say、warn；pm 是 postmortem 的狀態
+const SC = {
+  managed: {
+    name: '有指揮的應變',
+    steps: [
+      { line: 1, t: 'T+3', status: 'impact', ev: [['T+0', '告警：結帳錯誤率 12%'], ['T+3', '宣告 incident，SEV2：使用者看得到']], act: ['oncall'], roles: { oncall: '確認告警，看到使用者受影響，立刻宣告 incident。' },
+        say: '告警響起，on-call 三分鐘內確認結帳錯誤率升到 12%。使用者看得到，符合宣告的條件，馬上宣告 incident。' },
+      { line: 2, t: 'T+5', ev: [['T+5', 'On-call 擔任指揮官，開了 incident 頻道']], act: ['oncall', 'ic'], roles: { oncall: '擔任 incident commander。', ic: '開 incident 頻道和即時文件，請 SRE 來動手、請一位同事負責溝通。' },
+        say: 'On-call 自己擔任指揮官：開一個 incident 專屬頻道和一份即時文件，再把動手和溝通分給別人。指揮官不自己下去修。' },
+      { line: 3, t: 'T+7', ev: [['T+7', 'Status page：結帳異常，處理中'], ['T+8', 'Ops：最近的變更是 14:52 的設定變更']], act: ['ops', 'comms', 'boss'], roles: { ops: '查最近的變更：14:52 有一次結帳服務的設定變更。', comms: '更新 status page，每 15 分鐘在頻道和給主管的信裡更新一次。', boss: '從溝通的人那裡拿到更新，不去打擾動手的人。' },
+        say: '分工開始。Ops 查到 14:52 有一次設定變更；溝通的人更新 status page，並且約定每 15 分鐘更新一次，主管和客服就不用去私訊動手的人。' },
+      { line: 4, t: 'T+15', status: 'mitigated', ev: [['T+12', '指揮官：先 rollback，原因之後再查'], ['T+15', 'Rollback 完成'], ['T+18', '錯誤率回到 0.1%']], act: ['ic', 'ops'], roles: { ic: '決定先 rollback，不等找到原因。', ops: 'Rollback 設定，保留變更前後的設定和 log。' },
+        say: '還不確定是不是那次設定變更造成的，但指揮官決定先 rollback：恢復服務優先，原因之後再查，同時保留證據。18 分鐘止血。' },
+      { line: 5, t: '隔週', status: 'resolved', pm: { factors: ['設定變更沒有走 canary，直接全量上線', '告警門檻設在 10%，錯誤率爬升了 6 分鐘才響', '結帳服務的 runbook 沒有寫 rollback 設定的步驟'], actions: [['設定變更改走 canary', 'open'], ['告警門檻降到 3%', 'open'], ['更新 runbook', 'open']] }, ev: [['隔週', 'Postmortem：18 分鐘、約 3,200 筆結帳失敗']], act: ['oncall', 'ops', 'other'], roles: { oncall: '寫 postmortem 的時間線。', ops: '說明自己當時看到什麼、為什麼先查設定。', other: '做那次設定變更的工程師說明當時的判斷：變更看起來很小，流程也允許直接上線。' },
+        say: '隔週寫 postmortem。做設定變更的工程師完整說明了當時的判斷，因為不會被怪罪。找出來的是三個條件，不是一個人：設定變更不走 canary、告警門檻太寬、runbook 缺步驟。' },
+      { line: 6, t: '三週後', pm: { actions: [['設定變更改走 canary', 'done'], ['告警門檻降到 3%', 'done'], ['更新 runbook', 'done']] }, ev: [['三週後', '三個行動項目都完成，postmortem 分享到全工程部門']], act: ['boss'], roles: { boss: '主管追蹤行動項目，每週的營運會議上確認進度。' },
+        say: '三個行動項目都有負責人和期限，主管在每週的營運會議上追蹤到完成。這篇 postmortem 被分享給全工程部門，其他團隊也去檢查自己的設定變更流程。' },
+    ],
+  },
+  unmanaged: {
+    name: '沒有人指揮',
+    steps: [
+      { line: 1, skip: [1], t: 'T+3', status: 'impact', ev: [['T+0', '告警：結帳錯誤率 12%'], ['T+3', 'On-call 開始看 log']], act: ['oncall'], roles: { oncall: '直接開始除錯，沒有宣告 incident。' },
+        say: '同一個告警。On-call 覺得自己應該很快就能找到原因，沒有宣告 incident，直接開始看 log。', warn: '沒有宣告：沒有人知道這是一個需要協調的事故。' },
+      { line: 2, skip: [2, 3], t: 'T+25', ev: [['T+10', '客服私訊 on-call：很多客訴'], ['T+18', '主管在群組問：怎麼了？'], ['T+25', 'On-call 還在追一個看起來可疑的 timeout']], act: ['oncall', 'boss'], roles: { oncall: '一邊除錯，一邊回覆客服和主管的私訊。', boss: '不知道狀況，只能一直問。' },
+        say: '沒有指揮官，也沒有人負責溝通。客服和主管只能直接問動手的人，每一次回覆都打斷除錯。On-call 陷在一個看起來可疑的 timeout 裡，沒有退一步想先止血。', warn: '和 SRE 書裡 Mary 的案例一樣：只盯著技術問題，溝通很差。' },
+      { line: 3, skip: [], t: 'T+38', ev: [['T+38', '另一個工程師自己推了一個 hotfix'], ['T+41', '錯誤率升到 30%']], bad: ['T+38', 'T+41'], act: ['other'], roles: { other: '覺得自己知道問題在哪，沒跟任何人說就推了一個 hotfix。' },
+        say: '另一個工程師看到群組裡的訊息，覺得自己知道問題在哪，沒有和 on-call 協調就推了一個 hotfix。錯誤率升到 30%。', warn: 'Freelancing：沒有協調就改正式環境，讓狀況更糟。' },
+      { line: 4, t: 'T+80', status: 'mitigated', ev: [['T+65', '主管把兩人拉進同一個會議'], ['T+72', '有人提議 rollback 最近的變更'], ['T+80', 'Rollback 設定和 hotfix，錯誤率恢復']], act: ['boss', 'oncall', 'other'], roles: { boss: '把兩個人拉進同一個會議，這時才有人開始協調。', oncall: 'Rollback 設定。', other: '撤回 hotfix。' },
+        say: '一個多小時後，主管把兩個人拉進同一個會議，才有人提議先 rollback 最近的變更。80 分鐘止血，是第一個情境的四倍多。技術問題和解法完全一樣。', warn: '影響時間 80 分鐘，第一個情境是 18 分鐘。' },
+    ],
+  },
+  blame: {
+    name: '追究個人的 postmortem',
+    steps: [
+      { line: 1, t: 'T+3', status: 'impact', ev: [['T+0', '告警：結帳錯誤率 12%'], ['T+3', '宣告 incident，SEV2']], act: ['oncall'], roles: { oncall: '宣告 incident。' },
+        say: '應變的部分和第一個情境一樣。' },
+      { line: 4, t: 'T+18', status: 'mitigated', ev: [['T+5', '指派指揮官，分工'], ['T+15', 'Rollback 完成'], ['T+18', '錯誤率恢復']], act: ['ic', 'ops', 'comms'], roles: { ic: '指揮。', ops: 'Rollback。', comms: '更新 status page。' },
+        say: '一樣是 18 分鐘止血。差別從事後開始。' },
+      { line: 5, skip: [5], t: '隔週', status: 'resolved', pm: { blame: true, factors: ['工程師 X 未經充分測試即變更設定（人為疏失）'], actions: [['對 X 加強教育訓練', 'open'], ['提醒全員變更前要小心', 'open']], hidden: ['設定變更沒有走 canary', '告警門檻太寬', 'runbook 缺步驟'] }, ev: [['隔週', 'Postmortem：成因「人為疏失」']], act: ['other', 'boss'], roles: { other: '被點名的工程師 X 只回答被問到的問題，不再多說。', boss: '主管在 postmortem 會議上問：「是誰改的？」' },
+        say: 'Postmortem 會議的第一個問題是「是誰改的」。成因寫成工程師 X 的人為疏失，行動項目是教育訓練和「大家小心一點」。X 不再主動說明當時看到什麼，其他人也學到出事時少講話比較安全。', warn: 'Blame：真正的條件沒有被找出來。' },
+      { line: 6, t: '兩個月後', status: 'impact', ev: [['兩個月後', '另一個團隊的設定變更讓付款出錯，同樣沒走 canary']], bad: ['兩個月後'], pm: { actions: [['對 X 加強教育訓練', 'done'], ['提醒全員變更前要小心', 'done']] }, act: ['oncall', 'boss'], roles: { oncall: '又被叫醒。', boss: '問：「上次不是已經檢討過了嗎？」' },
+        say: '行動項目都「完成」了，但它們本來就不會改變任何東西。兩個月後，另一個團隊的設定變更同樣沒走 canary，讓付款出錯。設定變更不走 canary 這個條件，從來沒有人寫下來過。', warn: '同一類事故再次發生。' },
+    ],
+  },
+};
+
+const STATUS = { impact: ['影響中', 'miss'], mitigated: ['已止血', 'hit'], resolved: ['已結束', 'outline'] };
+
+function buildTrace(sc) {
+  const s = { status: null, tl: [], bad: new Set(), pm: null, skipped: [] };
+  return sc.steps.map(step => {
+    if (step.status) s.status = step.status;
+    const added = step.ev.map(e => e[0] + e[1]);
+    s.tl.push(...step.ev);
+    (step.bad || []).forEach(b => s.bad.add(b));
+    if (step.pm) s.pm = { ...(s.pm || {}), ...step.pm };
+    (step.skip || []).forEach(i => s.skipped.push(i));
+    return { line: step.line, t: step.t, act: step.act, roles: step.roles, say: step.say, warn: step.warn, added: new Set(added),
+      state: { status: s.status, tl: s.tl.slice(), bad: new Set(s.bad), pm: s.pm ? JSON.parse(JSON.stringify(s.pm)) : null, skipped: new Set(s.skipped) } };
+  });
+}
+
+const $ = id => document.getElementById(id);
+const state = { sc: 'managed', k: 0, trace: [] };
+
+function incHtml(t) {
+  if (!t) return '<p class="hint" style="margin:0">一切正常。</p>';
+  const s = t.state, [stName, stCls] = STATUS[s.status];
+  let h = `<div class="status">狀態<span class="badge ${stCls}">${stName}</span></div>`;
+  h += `<ul class="tl">` + s.tl.map(([tm, txt]) => `<li class="${t.added.has(tm + txt) ? 'new' : ''}${s.bad.has(tm) ? ' bad' : ''}"><time>${tm}</time><span>${txt}</span></li>`).join('') + `</ul>`;
+  if (s.pm) {
+    h += `<div class="pm"><h3>Postmortem</h3>`;
+    h += `<span>成因：</span><ul>${s.pm.factors.map(f => `<li class="${s.pm.blame ? 'miss' : ''}">${f}</li>`).join('')}</ul>`;
+    if (s.pm.hidden) h += `<span>沒被寫下來的條件：</span><ul>${s.pm.hidden.map(f => `<li class="gone">${f}</li>`).join('')}</ul>`;
+    h += `<span>行動項目：</span><ul>${s.pm.actions.map(([a, st]) => `<li class="${st === 'done' ? 'done' : ''}">${a}${st === 'done' ? ' ✓' : ''}</li>`).join('')}</ul></div>`;
+  }
+  return h;
+}
+
+function render() {
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', b.dataset.sc === state.sc));
+  const t = state.k === 0 ? null : state.trace[state.k - 1];
+  $('pseudo').innerHTML = LINES.map((l, i) => {
+    let cls = 'pl' + (l.head ? ' head' : '');
+    if (t && t.state.skipped.has(i)) cls += ' skip';
+    if (t && t.line === i) cls += ' on';
+    return `<span class="${cls}">${l.t}</span>`;
+  }).join('');
+  $('clock').textContent = t ? t.t : '星期五 14:58';
+  $('inc').innerHTML = incHtml(t);
+  $('people').innerHTML = PEOPLE.map(([id, name, desc]) => {
+    const act = t && t.act.includes(id);
+    return `<li class="${act ? 'act' : ''}"><span class="who">${name}</span><span class="what">${t && t.roles[id] ? t.roles[id] : desc}</span></li>`;
+  }).join('');
+  $('say').innerHTML = !t ? `星期五 14:52，有人對結帳服務做了一次設定變更。按「下一步」開始，「${SC[state.sc].name}」一共 ${state.trace.length} 步。`
+    : t.say + (t.warn ? `<span class="warn">${t.warn}</span>` : '');
+}
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; render(); } });
+function load(id) {
+  state.sc = id;
+  state.trace = buildTrace(SC[id]);
+  stepper.setTotal(state.trace.length);
+  stepper.set(0);
+}
+Object.entries(SC).forEach(([id, sc]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.sc = id; b.textContent = sc.name;
+  b.addEventListener('click', () => load(id));
+  $('presets').appendChild(b);
+});
+load('managed');
+</script>
+</body>
+</html>

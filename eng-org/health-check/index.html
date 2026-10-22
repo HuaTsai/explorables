@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>組織健康檢查清單</title>
+<meta name="description" content="把這個系列講過的機制和失敗模式，整理成面試或觀察一家公司時可以問的十六個問題。每一題標出健康和警訊的回答長什麼樣子、對應到哪一頁，並依公司規模排除不適用的題目。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+.ctrl-rows { display: flex; flex-direction: column; gap: 0.5rem; }
+.work.hc-work { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
+
+/* 問題清單 */
+.qs { display: flex; flex-direction: column; gap: 0.9rem; }
+.area h3 { font-size: 0.82rem; color: var(--muted); margin-bottom: 0.35rem; display: flex; justify-content: space-between; gap: 0.5rem; }
+.area h3 a { font-weight: 400; }
+.q { border: 1px solid var(--line); border-radius: 4px; padding: 0.45rem 0.6rem; background: var(--bg); display: flex; flex-direction: column; gap: 0.3rem; }
+.q.warn { border-color: var(--miss); background: var(--miss-soft); }
+.q.ok { border-color: var(--hit); }
+.q.na { opacity: 0.5; }
+.q .ask { font-size: 0.88rem; font-weight: 700; }
+.q .ans { font-size: 0.8rem; color: var(--muted); display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: 0.1rem 0.4rem; }
+.q .ans b { font-weight: 700; }
+.q .ans b.g { color: var(--hit); }
+.q .ans b.w { color: var(--miss); }
+.q .pick { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+.q .pick button { font-size: 0.78rem; padding: 0.1rem 0.55rem; }
+.q .pick button.chosen.g { border-color: var(--hit); color: var(--hit); box-shadow: inset 0 0 0 1px var(--hit); }
+.q .pick button.chosen.w { border-color: var(--miss); color: var(--miss); box-shadow: inset 0 0 0 1px var(--miss); }
+.q .pick .kind { font-size: 0.72rem; color: var(--muted); margin-left: auto; }
+.q .na-note { font-size: 0.75rem; color: var(--muted); }
+
+/* 規則：每一行底下接目前的結果 */
+.pseudo .ans { display: block; white-space: normal; font-family: var(--font-body); font-size: 0.85rem; font-weight: 400; line-height: 1.6; color: var(--ink); padding: 0.1rem 0.3rem 0.5rem 1.6rem; }
+.pseudo .ans.none { color: var(--muted); }
+.pseudo .ans.bad { color: var(--miss); }
+.bars { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.78rem; }
+.bar { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr) 2.2rem; gap: 0.4rem; align-items: center; }
+.bar .track { height: 0.55rem; background: var(--bg); border: 1px solid var(--line); border-radius: 2px; display: flex; overflow: hidden; }
+.bar .track i { display: block; height: 100%; }
+.bar .track i.g { background: var(--hit); }
+.bar .track i.w { background: var(--miss); }
+.bar span:last-child { font-family: var(--font-mono); color: var(--muted); text-align: right; }
+.panel.sticky { align-self: start; position: sticky; top: 1rem; }
+@media (max-width: 980px) { .panel.sticky { position: static; } }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 工程組織怎麼運作</a>
+    <h1>組織健康檢查清單</h1>
+    <p class="lead">這個系列前八頁講了職級、組織形狀、技術決策、團隊切法，以及交付、規劃、考績、事故這四套機制。這一頁把它們整理成十六個面試或觀察一家公司時可以問的問題，每一題標出健康和警訊的回答大概長什麼樣子，以及它對應的是哪一頁。</p>
+  </header>
+
+  <section class="prose">
+    <h2>怎麼問、怎麼讀答案</h2>
+    <p>這份清單是從前面幾頁的來源整理出來的，但「怎麼問」這部分是我的推論，不是哪一本書寫的。最重要的一條是：問具體的最近一次，不要問抽象的原則。「你們重視 postmortem 嗎？」幾乎每個人都會說是；「上一次重大事故是怎麼處理的？postmortem 寫了什麼？」答案就會具體得多，也比較難修飾。</p>
+    <p>第二條是一個訊號不算數。任何一題的警訊都可能有合理的解釋，例如剛經歷一次併購，或某個團隊剛好人手不足。同一個方向出現兩三個警訊，才值得當真。第三條是對照規模：五十人的公司沒有 calibration、沒有 staff 工程師，是正常的；一千人的公司還沒有，才是問題。所以 workbench 會依公司規模把不適用的題目淡掉。</p>
+    <p>第四條是分清楚兩種問題。「沒有這個機制」通常比較好處理，補上就好；「有機制，但用壞了」，例如 OKR 綁考績、DORA 指標拿來排名、postmortem 用來點名，代表組織裡有某種力量把機制扭曲了，比較難改。最後一條是看自己：同樣的警訊，有人覺得不能接受，有人覺得無所謂。</p>
+    <pre class="code">評估一個工程組織（綜合本系列）
+1  問具體的最近一次，不問抽象的原則
+2  一個訊號不算數，同一個方向出現兩三個才算
+3  對照公司規模：小公司沒有的機制，不一定是警訊
+4  分清楚「沒有這個機制」和「有機制但用壞了」
+5  最後看自己：這些警訊裡，哪些是你不能接受的</pre>
+    <p>下面的 workbench 列出十六個問題。每一題可以標成健康、警訊或沒問到；右邊的規則會即時整理結果。上面有兩個編出來的範例公司可以先看看，也可以清空之後，拿你面試過或待過的公司來填。</p>
+  </section>
+
+  <section class="bench" aria-label="組織健康檢查">
+    <div class="row ctrl-rows">
+      <div class="presets" id="size-row"><span class="lbl">公司規模</span></div>
+      <div class="presets" id="ex-row"><span class="lbl">範例</span></div>
+    </div>
+    <div class="row work hc-work">
+      <div class="panel">
+        <div class="panel-head">十六個問題<span class="sub">點選答案</span></div>
+        <div class="panel-body"><div class="qs" id="qs"></div></div>
+      </div>
+      <div class="panel sticky">
+        <div class="panel-head">結果</div>
+        <pre class="pseudo" id="rules"></pre>
+        <div class="bars" id="bars"></div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>兩個範例公司讀出了什麼</h2>
+    <p>範例 A 是一家八十人、快速成長的新創。警訊集中在組織形狀和技術決策：主管帶的人太多、on-call 只有三個人、技術決策在會議裡口頭定案、說不清楚 staff 在做什麼；另外考績沒有 calibration，事故後也沒有 postmortem。這些大多屬於「還沒有這個機制」，是成長太快的典型樣子，補得起來。如果你在意的是學習速度和影響範圍，這類公司可能正好適合；如果在意的是穩定的節奏，就要問清楚這些問題有沒有人在處理。</p>
+    <p>範例 B 是大公司裡一個八百人的老部門。每個機制都有：有職級框架、有 OKR、有 calibration、有 postmortem。但 OKR 綁考績、DORA 指標拿來排名團隊、postmortem 會點名，警訊幾乎都屬於「有機制但用壞了」。表面上流程很完整，真正的問題要多問一層才看得到。這也是為什麼第 1 條要問具體的最近一次：「你們有 postmortem 嗎？」在 B 公司的答案是「有」。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>看一個工程組織健不健康，要看它的機制有沒有在做原本該做的事：職級描述範圍而不是頭銜、團隊形狀讓多數改動留在一個團隊裡、決策有文件和紀錄、指標用來改善而不是排名、OKR 不綁考績、考績經過 calibration、事故後的檢討不點名。問具體的最近一次，看同一個方向有沒有好幾個訊號，再對照規模和自己在乎的事。</p>
+    <p>這是這個系列的最後一頁。每一題後面都連回原本那一頁，那裡有機制的原始來源和逐步的情境。</p>
+    <p>十六題只涵蓋這個系列講過的主題。招募流程、薪資結構、遠距和辦公室的安排、技術債的處理方式這些，同樣會影響在一家公司工作的感受，但這裡沒有收進來。健康和警訊的分界，是這個系列的來源加上我的判斷，不是業界共識。</p>
+  </section>
+</main>
+
+<script>
+// kind：missing 表示「沒有這個機制」，misused 表示「有機制但用壞了」；min：從哪個規模開始適用（0 小、1 中、2 大）
+const AREAS = [
+  ['ladder', '職級', '../ladder/'],
+  ['size', '組織形狀', '../org-size/'],
+  ['decision', '技術決策', '../tech-decision/'],
+  ['conway', '團隊切法', '../conway/'],
+  ['delivery', '交付', '../delivery/'],
+  ['planning', '規劃', '../planning/'],
+  ['perf', '考績', '../performance/'],
+  ['incident', '事故', '../incident/'],
+];
+const QS = [
+  { id: 'q1', a: 'ladder', min: 1, kind: 'missing', ask: '這個職位對應哪一級？那一級的期待寫在哪裡？', g: '有書面的職級框架，能說出這一級的範圍和期待。', w: '沒有框架，職級靠主管印象；或者職稱和實際範圍對不上。' },
+  { id: 'q2', a: 'ladder', min: 1, kind: 'missing', ask: '資深工程師一定要轉管理才能繼續往上嗎？', g: 'IC 線一路到 staff、principal，轉管理是橫移。', w: '往上只能當主管，最資深的 IC 停在 senior。' },
+  { id: 'q3', a: 'size', min: 0, kind: 'misused', ask: '你未來的主管帶幾個人？主管的主管帶幾個主管？', g: 'EM 帶 6 到 8 人，上一層帶 4 到 6 個主管。', w: '一個主管帶十幾個人，或者很多兩三個人的小團隊。' },
+  { id: 'q4', a: 'size', min: 0, kind: 'missing', ask: '團隊的 on-call 是幾個人輪？', g: '八個人左右輪，或者有計畫地和別的團隊合併輪值。', w: '三四個人輪 24 小時，沒有人在處理。' },
+  { id: 'q5', a: 'decision', min: 0, kind: 'missing', ask: '最近一次跨團隊的技術決策是怎麼做的？有留下文件嗎？', g: '有 design doc 或 RFC，列了 approver，決定寫成紀錄。', w: '會議裡口頭定案、沒有紀錄，或者誰的聲音大誰贏。' },
+  { id: 'q6', a: 'decision', min: 1, kind: 'missing', ask: 'Staff 工程師平常在做什麼？', g: '能說出具體在做的事和影響，例如帶一個領域的方向。', w: '只是寫最多程式的資深工程師，或者沒人說得清楚。' },
+  { id: 'q7', a: 'conway', min: 0, kind: 'misused', ask: '做一個一般的功能，要幾個團隊一起改？', g: '多數功能一個團隊就能從頭做到尾。', w: '每個功能都要前端隊、後端隊各自排進度。' },
+  { id: 'q8', a: 'conway', min: 1, kind: 'misused', ask: '最近一次重組是什麼時候？為什麼？', g: '說得出理由，間隔合理，系統邊界也跟著調整。', w: '半年就重組一次，說不出原因，或者只是換主管。' },
+  { id: 'q9', a: 'delivery', min: 0, kind: 'missing', ask: '一個改動從 merge 到上線要多久？多久部署一次？', g: '一天以內，需要時隨時可以部署。', w: '兩週一次大版本，部署前要凍結程式碼。' },
+  { id: 'q10', a: 'delivery', min: 1, kind: 'misused', ask: '這些交付指標是誰在看、拿來做什麼？', g: '團隊自己看，用來找出要改善的地方。', w: '拿來排名團隊，或者拆到個人頭上考核。' },
+  { id: 'q11', a: 'planning', min: 0, kind: 'misused', ask: '這一季團隊的目標是什麼？是誰訂的？', g: '說得出要解決的問題和量化的結果，團隊有參與。', w: '一份功能清單和上線日期，由上面決定好。' },
+  { id: 'q12', a: 'planning', min: 1, kind: 'misused', ask: 'OKR 的分數會影響考績嗎？', g: '不會，OKR 是團隊的目標。', w: '會，所以大家都把目標訂得很保守。' },
+  { id: 'q13', a: 'perf', min: 1, kind: 'misused', ask: '考績怎麼決定？主管之間會一起對照嗎？', g: '有 calibration，主管之間對照證據。', w: '主管各自決定；或者每個團隊固定比例拿低分。' },
+  { id: 'q14', a: 'perf', min: 1, kind: 'missing', ask: '上一個升到 staff 的人是怎麼升上去的？', g: '整理了一段時間的證據，由委員會或 calibration 審。', w: '看年資，或者看主管喜不喜歡。' },
+  { id: 'q15', a: 'incident', min: 0, kind: 'missing', ask: '上一次重大事故是怎麼處理的？', g: '有人指揮、有人對外說明，事後有 postmortem。', w: '大家一起衝進去修，事後沒有紀錄。' },
+  { id: 'q16', a: 'incident', min: 0, kind: 'misused', ask: 'Postmortem 會寫是誰做錯的嗎？', g: '不會，寫的是讓事故發生的條件。', w: '會點名，有時候還會影響考績。' },
+];
+const SIZES = [['小（50 人以下）', 0], ['中（50 到 300 人）', 1], ['大（300 人以上）', 2]];
+const EXAMPLES = {
+  a: { name: '範例 A：快速成長的新創（80 人）', size: 1, ans: { q1: 'g', q2: 'g', q3: 'w', q4: 'w', q5: 'w', q6: 'w', q7: 'g', q8: 'g', q9: 'g', q10: 'g', q11: 'g', q12: 'g', q13: 'w', q14: '', q15: 'w', q16: 'g' } },
+  b: { name: '範例 B：大公司的老部門（800 人）', size: 2, ans: { q1: 'g', q2: 'g', q3: 'g', q4: 'g', q5: 'g', q6: 'g', q7: 'w', q8: 'w', q9: 'w', q10: 'w', q11: 'w', q12: 'w', q13: 'g', q14: 'g', q15: 'g', q16: 'w' } },
+  clear: { name: '清空', size: null, ans: {} },
+};
+
+const $ = id => document.getElementById(id);
+const state = { size: 1, ans: {}, ex: 'a' };
+function applyExample(k) {
+  const ex = EXAMPLES[k];
+  state.ex = k;
+  if (ex.size !== null) state.size = ex.size;
+  state.ans = { ...ex.ans };
+}
+
+function qsHtml() {
+  return AREAS.map(([a, name, href]) => {
+    const qs = QS.filter(q => q.a === a);
+    return `<div class="area"><h3>${name}<a href="${href}">看那一頁 →</a></h3>` + qs.map(q => {
+      const na = q.min > state.size, v = state.ans[q.id] || '';
+      const cls = na ? 'na' : v === 'w' ? 'warn' : v === 'g' ? 'ok' : '';
+      return `<div class="q ${cls}" data-id="${q.id}"><span class="ask">${q.ask}</span>`
+        + `<span class="ans"><b class="g">健康</b><span>${q.g}</span><b class="w">警訊</b><span>${q.w}</span></span>`
+        + (na ? `<span class="na-note">這個規模的公司還沒有這個機制很正常，不列入計算。</span>`
+          : `<span class="pick"><button type="button" data-v="g" class="g${v === 'g' ? ' chosen' : ''}">健康</button><button type="button" data-v="w" class="w${v === 'w' ? ' chosen' : ''}">警訊</button><button type="button" data-v=""${v === '' ? ' class="chosen"' : ''}>沒問到</button><span class="kind">${q.kind === 'missing' ? '缺機制' : '用壞了'}</span></span>`)
+        + `</div>`;
+    }).join('') + `</div>`;
+  }).join('');
+}
+
+function rulesHtml() {
+  const live = QS.filter(q => q.min <= state.size);
+  const asked = live.filter(q => state.ans[q.id]);
+  const warns = live.filter(q => state.ans[q.id] === 'w');
+  const ans = (t, cls) => `<span class="ans ${cls || ''}">${t}</span>`;
+  const byArea = AREAS.map(([a, name]) => ({ a, name, w: warns.filter(q => q.a === a).length, n: live.filter(q => q.a === a).length, g: live.filter(q => q.a === a && state.ans[q.id] === 'g').length }));
+  const hot = byArea.filter(x => x.w >= 2);
+  const a1 = asked.length ? ans(`問到 ${asked.length} / ${live.length} 題。`) : ans('還沒有標任何一題。', 'none');
+  const a2 = !warns.length ? ans('沒有警訊。', 'none')
+    : hot.length ? ans(`警訊集中在：${hot.map(x => `${x.name}（${x.w} 個）`).join('、')}。這些方向值得當真。`, 'bad')
+    : ans(`有 ${warns.length} 個警訊，但分散在不同面向，每個面向都只有一個，先不急著下結論。`);
+  const na = QS.length - live.length;
+  const a3 = na ? ans(`以「${SIZES[state.size][0]}」的規模，有 ${na} 題不適用，已經淡掉。`, 'none') : ans('這個規模所有題目都適用。', 'none');
+  const miss = warns.filter(q => q.kind === 'missing').length, mis = warns.filter(q => q.kind === 'misused').length;
+  const a4 = !warns.length ? ans('—', 'none')
+    : ans(`缺機制 ${miss} 個，用壞了 ${mis} 個。` + (mis > miss ? '多數是有機制但用壞了，代表有某種力量在扭曲它們，比較難改。' : miss > mis ? '多數是還沒有這個機制，通常補得起來。' : ''), mis > miss ? 'bad' : '');
+  const a5 = ans('這一行沒有標準答案：同樣的警訊，有人不能接受，有人無所謂。', 'none');
+  const L = [['評估一個工程組織（綜合本系列）', null, true], ['1  問具體的最近一次，不問抽象的原則', a1], ['2  一個訊號不算數，同一個方向出現兩三個才算', a2], ['3  對照公司規模：小公司沒有的機制，不一定是警訊', a3], ['4  分清楚「沒有這個機制」和「有機制但用壞了」', a4], ['5  最後看自己：這些警訊裡，哪些是你不能接受的', a5]];
+  $('bars').innerHTML = byArea.map(x => `<div class="bar"><span>${x.name}</span><span class="track">${x.n ? `<i class="g" style="width:${100 * x.g / x.n}%"></i><i class="w" style="width:${100 * x.w / x.n}%"></i>` : ''}</span><span>${x.n ? `${x.w}/${x.n}` : '—'}</span></div>`).join('');
+  return L.map(([t, a, head]) => `<span class="pl${head ? ' head' : ''}">${t}</span>${a || ''}`).join('');
+}
+
+function render() {
+  document.querySelectorAll('#size-row button').forEach(b => b.classList.toggle('chosen', +b.dataset.s === state.size));
+  document.querySelectorAll('#ex-row button').forEach(b => b.classList.toggle('chosen', b.dataset.k === state.ex));
+  $('qs').innerHTML = qsHtml();
+  $('rules').innerHTML = rulesHtml();
+  const ex = EXAMPLES[state.ex];
+  $('say').innerHTML = state.ex && state.ex !== 'clear' ? `${ex.name}。這是編出來的範例，用來示範兩種典型的樣子。<span class="note">右邊每一行都會隨著你改答案即時更新；條狀圖的綠色是健康、紅色是警訊。</span>`
+    : '自己填：選公司規模，再逐題標成健康、警訊或沒問到。<span class="note">右邊每一行都會隨著你改答案即時更新；條狀圖的綠色是健康、紅色是警訊。</span>';
+}
+
+SIZES.forEach(([name, s]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.s = s; b.textContent = name;
+  b.addEventListener('click', () => { state.size = s; state.ex = null; render(); });
+  $('size-row').appendChild(b);
+});
+Object.entries(EXAMPLES).forEach(([k, ex]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.k = k; b.textContent = ex.name;
+  b.addEventListener('click', () => { applyExample(k); render(); });
+  $('ex-row').appendChild(b);
+});
+$('qs').addEventListener('click', e => {
+  const b = e.target.closest('.pick button');
+  if (!b) return;
+  const id = b.closest('.q').dataset.id;
+  state.ans[id] = b.dataset.v;
+  state.ex = null;
+  render();
+});
+applyExample('a');
+render();
+</script>
+</body>
+</html>
