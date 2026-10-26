@@ -10,6 +10,10 @@
 
 完成前執行 `python3 tools/check-punct.py`，輸出 `ok` 才算完成。加 `--fix` 會自動改寫，只動緊貼中文的符號，改完看一眼 diff 再收工。
 
+## 寫完給使用者看
+
+每次寫完或改完一頁，先確認本機靜態伺服器有沒有在跑（`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/`），沒有就在 repo 根目錄用 `python3 -m http.server 8765 --bind 127.0.0.1` 背景啟動，然後用 Chrome 工具開一個分頁到 `http://127.0.0.1:8765/<目錄>/`，分頁留著不要關，讓使用者直接看。瀏覽器開不了 `file://`，一定要走這個伺服器。
+
 ## 頁面格式
 
 每一頁的順序：標題和導言、幾節說明（問題是什麼、核心觀察或定義、書上或原始資料的虛擬碼，節數不限）、逐步執行的 workbench、其餘說明（證明、陷阱、變形、跑出什麼結果）、結語、來源註腳。**workbench 緊接在虛擬碼那一節之後**，中間不插別的節。說明的份量維持「解說加證明摘要」，不要為了精簡把推理拿掉。
@@ -72,6 +76,20 @@
 - **探索型**：改輸入、看結果，沒有步驟，就不放控制列，不要為了符合規格硬改成逐步。
 
 每一步的說明放在 workbench 最底下的 `<p class="say">`，警告用 `<span class="warn">`，補充用 `<span class="note">`。
+
+### 公式
+
+這一節是選用的：預設不載 KaTeX，大部分頁面不需要，不要每個 html 都加。只有一頁真的要排數學式（像資料流方程式）時才照這裡做。要用時從 cdnjs 載入，版本寫死、每個檔案都帶 SRI hash（hash 從 `https://api.cdnjs.com/libraries/KaTeX/<版本>?fields=sri` 取得，換版本要一起換）。在 `<head>` 裡緊接 site.js 之後加：
+
+```html
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css" integrity="sha512-aOFyMMzZF7l7ei3vOKgQiRhZnYqk9YC/uMzl4T0j5N5D3Kul+QAFU8ssENDRMAqr/lxDOjMF69dSYJ8HYqY+WQ==" crossorigin="anonymous">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js" integrity="sha512-UPFOadao2nEorjtjl0xUTtN3w20Ja143UPEU6EyJ1mi5MB2bDtMkiWmqGDqi47xNLB5z1dy31GKJDEWhjUJFiQ==" crossorigin="anonymous"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/contrib/auto-render.min.js" integrity="sha512-YJVxTjqttjsU3cSvaTRqsSl0wbRgZUNF+NGGCgto/MUbIvaLdXQzGTCQu4CvyJZbZctgflVB0PXw9LLmTWm5/w==" crossorigin="anonymous" onload="renderMathInElement(document.body)"></script>
+```
+
+- 展示公式寫成 `<div class="eq">\[ … \]</div>`，`.eq` 的框（邊框、底色、`overflow-x: auto`）寫在該頁的 `<style>`；行內用 `\( … \)`。正文裡簡單的 v ∈ UEVar(m) 這種可以直接打 Unicode，不必進公式。
+- 多字母的名字一律 `\mathrm{LiveOut}`、`\mathrm{UEVar}` 正體，單字母變數維持斜體。補集用 `\overline{…}`。KaTeX 沒有 `\textsc`。
+- 公式都是頁面自己寫的，不渲染讀者輸入；workbench 裡的集合和算式維持純文字。
 
 ### 右側註解
 

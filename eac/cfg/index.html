@@ -194,7 +194,7 @@ textarea { min-height: 12.5rem; font-size: 0.82rem; }
   <section class="prose">
     <h2>結語</h2>
     <p>找 leader 就是在找「能從別處進來的點」：ILOC 沒有 fall-through，所以等於找 label；有 fall-through 的 IR 要再算上每條 branch 的下一條。block 的結尾由下一個 leader 決定，邊由 block 最後一條指令決定，這是兩件事，演算法也分成兩段。整個做法的正確性靠 IR 的性質撐著，換一個 IR，先問「哪些指令能被跳到」和「哪些指令會跳走」，再改這兩段。</p>
-    <p>有了 CFG，接下來的最佳化都在它上面走。同一本書第八章的 <a href="../lvn/">區域值編號</a>只看一個 block 裡面，是最先遇到的 pass；<a href="../tree-balance/">樹高平衡</a>也是 block 內的變換。跨 block 的分析（dominator、資料流分析）需要的就是這張圖的節點和邊，書上第九章開始講。</p>
+    <p>有了 CFG，接下來的最佳化都在它上面走。同一本書第八章的 <a href="../lvn/">區域值編號</a>只看一個 block 裡面，是最先遇到的 pass；<a href="../tree-balance/">樹高平衡</a>也是 block 內的變換。跨 block 的分析（dominator、資料流分析）需要的就是這張圖的節點和邊，<a href="../liveout/">LiveOut</a> 頁是第一個例子，書上第九章開始講一般的做法。block 在記憶體裡的順序也是在這張圖上決定的，<a href="../code-placement/">程式碼放置</a>頁照邊的執行次數重排。</p>
     <p>很多編譯器會加 entry 和 exit 兩個虛擬節點代表程序的進入和離開，這裡只有 block。節點和邊的資料結構、重複邊怎麼去重，書上這一段沒講，這一頁重複的邊只畫一條。建完圖之後把沒有入邊的 block 拿掉是另一個 pass。例外、間接呼叫、多目標的 jump table 這些控制轉移，這裡只用 <code>jump → r</code> 一種代表；算術、載入、儲存、比較都當普通指令，內容不影響建圖。</p>
   </section>
 

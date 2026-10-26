@@ -1,0 +1,706 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiveOut 活躍變數分析：迭代到不動點</title>
+<meta name="description" content="把 Engineering a Compiler 第八章的全局活躍變數分析一步步跑給你看：UEVar 和 VarKill 怎麼從每個 block 的運算收集出來、LiveOut 方程式怎麼寫、從空集合開始反覆代入為什麼一定會停在同一個答案、走訪順序只影響圈數，以及怎麼用 LiveOut(n0) 找出可能沒初始化就被用到的變數。可以自己改程式碼和 block 的順序。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css" integrity="sha512-aOFyMMzZF7l7ei3vOKgQiRhZnYqk9YC/uMzl4T0j5N5D3Kul+QAFU8ssENDRMAqr/lxDOjMF69dSYJ8HYqY+WQ==" crossorigin="anonymous">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js" integrity="sha512-UPFOadao2nEorjtjl0xUTtN3w20Ja143UPEU6EyJ1mi5MB2bDtMkiWmqGDqi47xNLB5z1dy31GKJDEWhjUJFiQ==" crossorigin="anonymous"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/contrib/auto-render.min.js" integrity="sha512-YJVxTjqttjsU3cSvaTRqsSl0wbRgZUNF+NGGCgto/MUbIvaLdXQzGTCQu4CvyJZbZctgflVB0PXw9LLmTWm5/w==" crossorigin="anonymous" onload="renderMathInElement(document.body)"></script>
+<style>
+/* 這一頁特有的：方程式、CFG 圖、分 block 的程式碼列表、三個集合的表、每一圈的紀錄。 */
+textarea { min-height: 14rem; font-size: 0.82rem; }
+.work { grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(0, 1.3fr); }
+
+/* 方程式（KaTeX） */
+.eq { padding: 0.5rem 0.75rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); overflow-x: auto; }
+.eq .katex-display { margin: 0.25rem 0; }
+
+/* CFG：節點裡直接是運算 */
+.graph { padding: 0.6rem 0.5rem; background: var(--bg); display: flex; justify-content: center; flex: 1; overflow-x: auto; }
+.graph svg { width: 100%; height: auto; max-width: 26rem; font-family: var(--font-mono); overflow: visible; }
+.graph .node rect.box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.graph .node.cur rect.box { stroke: var(--ink); stroke-width: 1.6; }
+.graph .node.cur.sol rect.box { fill: var(--mark); }
+.graph .node.succ rect.box { fill: var(--hit-soft); stroke: var(--hit); stroke-width: 1.6; }
+.graph .node.unreach rect.box { stroke-dasharray: 2 2; }
+.graph .node.unreach text { fill: var(--muted); }
+.graph rect.line { fill: var(--mark); }
+.graph text { fill: var(--ink); font-size: 11px; }
+.graph text.name { font-weight: 600; }
+.graph text.br { fill: var(--muted); }
+.graph tspan.u { fill: var(--hit); font-weight: 600; }
+.graph tspan.k { font-weight: 600; text-decoration: underline; }
+.graph .edge { fill: none; stroke: var(--ink); stroke-width: 1.3; }
+.graph .edge.new { stroke: var(--hit); stroke-width: 2.4; }
+
+/* 集合表、這一步的計算、每一圈的紀錄 */
+.sets, .calc, .hist { padding: 0.5rem 0.6rem; background: var(--bg); font-family: var(--font-mono); font-size: 0.76rem; overflow-x: auto; }
+.calc, .hist { border-top: 1px solid var(--line); }
+.hist { flex: 1; }
+.sets h3, .calc h3, .hist h3 { margin: 0 0 0.35rem; font-family: var(--font-body); font-size: 0.72rem; font-weight: 700; color: var(--muted); }
+table.tb { border-collapse: collapse; width: 100%; }
+.tb th, .tb td { padding: 0.14rem 0.5rem; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: baseline; }
+.tb th { font-family: var(--font-body); font-size: 0.68rem; color: var(--muted); font-weight: 700; }
+.tb tr:last-child td { border-bottom: 0; }
+.tb tr.cur td { background: var(--mark); }
+.tb tr.succ td { background: var(--hit-soft); }
+.tb td.bn { font-weight: 600; }
+.tb .new { color: var(--hit); font-weight: 600; }
+.tb td.chg { background: var(--hit-soft); }
+.tb tr.cur td.chg { box-shadow: inset 0 0 0 1px var(--hit); }
+.tb td.now { font-weight: 600; }
+.calc .line { display: flex; flex-wrap: wrap; gap: 0.3rem 0.5rem; padding: 0.1rem 0; align-items: baseline; }
+.calc .line .m { font-weight: 600; min-width: 2.2em; }
+.calc .line .c { color: var(--muted); }
+.calc .line.sum { border-top: 1px solid var(--line); margin-top: 0.2rem; padding-top: 0.3rem; }
+.calc .line.n0 { border-top: 1px dashed var(--line); margin-top: 0.4rem; padding-top: 0.35rem; }
+.calc .empty { color: var(--muted); font-family: var(--font-body); }
+.calc .bad { color: var(--miss); font-weight: 600; }
+.calc .new { color: var(--hit); font-weight: 600; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Engineering a Compiler 筆記</a>
+    <h1><span class="mono">LiveOut</span> 活躍變數分析：迭代到不動點</h1>
+    <p class="lead"><a href="../svn/">SVN</a> 碰到 join point 就從空表開始，因為它不敢對「從哪一邊來」做任何假設。全局最佳化要對整張 CFG 推理，就得有辦法把每一條路徑都算進來。Engineering a Compiler 第八章用<span class="term" data-def="變數 v 在程式點 p 活躍，表示從 p 出發有某條路徑在重新賦值 v 之前先讀了 v。live variable。">活躍變數</span>當第一個例子：對每個 block 算出 LiveOut(b)，也就是離開 b 時哪些變數的值之後還會被讀到。做法是對整張圖寫一組方程式，從空集合開始反覆代入，直到沒有東西再變。這一頁照書上的兩段虛擬碼一步步跑，最後用 LiveOut 找出可能沒初始化就被用到的變數。</p>
+  </header>
+
+  <section class="prose">
+    <h2>區域方法到此為止</h2>
+    <p><a href="../lvn/">LVN</a> 看一個 block，<a href="../svn/">SVN</a> 看一條路徑，兩者共同的限制是碰到有多個前驅的 block 就得把知道的事全部丟掉。全局最佳化不沿著這條路繼續走：它不去模擬執行順序，而是對 CFG 的每個節點列一條方程式，描述「這個 block 的事實」和「它鄰居的事實」之間的關係，再把整組方程式解出來。這一類分析叫<span class="term" data-def="在 CFG 上沿著邊傳遞資訊的分析。每個節點的結果用鄰居的結果表示，整組方程式一起解。data-flow analysis，書上第九章整章講。">資料流分析</span>，書上第九章整章講它，8.6 節先用最經典的一個問題示範。</p>
+    <p>問題是這樣：變數 v 在程式點 p 活躍，若且唯若從 p 出發存在一條路徑，在重新給 v 賦值之前先讀了 v 的值。這是一個「看未來」的性質，要考慮 p 之後所有可能的執行路徑，所以 block 內的方法做不到。編譯器很多地方要用這個資訊：暫存器分配時不活躍的值不必留在暫存器裡，存到記憶體之後再也沒人讀的 store 可以刪掉，建 SSA 時只有活躍的變數需要 φ 函數。這一節的目標是其中最直接的一個，找出可能還沒初始化就被用到的變數。</p>
+  </section>
+
+  <section class="prose">
+    <h2>三個集合和一條方程式</h2>
+    <p>先把「活躍」的定義搬到 block 的粒度。每個 block b 有兩個只看自己就能算出來的集合，和一個要看鄰居的集合：</p>
+    <div class="defn">
+      <ul>
+        <li><strong>UEVar(b)</strong>：在 b 裡被讀、而且那次讀之前 b 自己沒有先給它賦值的變數。這些變數的值是從 b 的入口帶進來的，書上叫 <span class="term" data-def="upward-exposed：往上（往 block 入口的方向）露出來的使用，值來自 block 外面。">upward-exposed</span>。</li>
+        <li><strong>VarKill(b)</strong>：在 b 裡被賦值的變數。不管進 b 的時候帶著什麼值，離開 b 時這些名字的值一定已經被 b 蓋掉。</li>
+        <li><strong>LiveOut(b)</strong>：離開 b 的那一刻活躍的變數。這是要算的東西。</li>
+      </ul>
+    </div>
+    <p>離開 n 之後下一步一定是進入某個後繼 m。變數 v 離開 n 時活著，只有兩種可能：m 自己在賦值之前就讀了 v，也就是 v ∈ UEVar(m)；或者 v 穿過 m 沒有被改（v ∉ VarKill(m)），而且離開 m 的時候還活著（v ∈ LiveOut(m)）。n 有好幾個後繼時走哪一條都有可能，「存在一條路徑」對應到聯集。寫成方程式：</p>
+    <div class="eq">\[ \mathrm{LiveOut}(n) = \bigcup_{m \in \mathrm{succ}(n)} \Big( \mathrm{UEVar}(m) \cup \big( \mathrm{LiveOut}(m) \cap \overline{\mathrm{VarKill}(m)} \big) \Big) \]</div>
+    <p>上面那條橫線是補集，\(\mathrm{LiveOut}(m) \cap \overline{\mathrm{VarKill}(m)}\) 就是 LiveOut(m) 扣掉 VarKill(m)，這一頁的 workbench 寫成 LiveOut(m) ∖ VarKill(m)。沒有後繼的出口 block，右邊是空的聯集，LiveOut 是 ∅：離開程式之後什麼都不會再被讀。</p>
+    <p>這條方程式有兩個特點決定了解法。第一，資訊從後繼流向前驅，和執行方向相反，所以這是一個<span class="term" data-def="每個節點的結果由它的後繼決定，資訊逆著邊往回流。活躍變數、very busy expressions 都是；dominator、可達定義則是順著邊流的 forward 問題。">backward</span> 問題。第二，有迴圈的時候方程式會互相依賴：書上例子裡 B<sub>1</sub> 的 LiveOut 要看 B<sub>3</sub>，B<sub>3</sub> 的又要看 B<sub>1</sub>，沒辦法排一個順序一條一條算完，只能先猜一組值，反覆代入，直到每一條方程式都同時成立。這種「代入到不再改變」的點叫<span class="term" data-def="fixed point。把方程式右邊代一次，左邊算出來和原本一樣，所有集合都不再改變的狀態。">不動點</span>。</p>
+  </section>
+
+  <section class="prose">
+    <h2>虛擬碼</h2>
+    <p>書上分成兩段。第一段對每個 block 掃一遍運算，收集 UEVar 和 VarKill；第二段把所有 LiveOut 設成空集合，然後一圈一圈重算，直到某一圈沒有任何集合改變。<span class="sn">中譯本把兩段虛擬碼放在圖 8-15，範例的 CFG、初始集合和每一圈的 LiveOut 表是圖 8-16。書上 B<sub>1</sub> 的內容只寫 <code>(test on i)</code>，表示一個讀 i 的分支條件，這一頁的輸入格式照抄這個寫法。</span></p>
+  </section>
+  <div class="cols">
+    <div class="col">
+<pre class="code"><span class="c">// each block has k operations
+// of the form "x ← y op z"</span>
+for each block b do
+  <span class="c">// Initialize the sets for b</span>
+  UEVar(b) ← ∅
+  VarKill(b) ← ∅
+  for i ← 1 to k do
+    if y ∉ VarKill(b) then
+      add y to UEVar(b)
+    if z ∉ VarKill(b) then
+      add z to UEVar(b)
+    add x to VarKill(b)</pre>
+      <p>收集初始資訊。掃到第 i 條運算時，VarKill(b) 裡是前 i − 1 條賦值過的名字，所以「y ∉ VarKill(b)」問的是「y 的值是不是從 block 外面帶進來的」。</p>
+    </div>
+    <div class="col">
+<pre class="code"><span class="c">// assume the CFG has N blocks
+// numbered 0 to N-1</span>
+for i ← 0 to N-1 do
+  LiveOut(i) ← ∅
+changed ← true
+while (changed) do
+  changed ← false
+  for i ← 0 to N-1 do
+    recompute LiveOut(i)
+    if LiveOut(i) changed then
+      changed ← true</pre>
+      <p>求解方程式。「recompute LiveOut(i)」就是把上一節的方程式右邊代一次，用的是此刻手上的 LiveOut(m)。</p>
+    </div>
+  </div>
+  <section class="prose">
+    <ul>
+      <li><strong>只有讀才會進 UEVar，而且要在同一個 block 賦值之前。</strong>s ← s + i 裡右邊的 s 進 UEVar，因為掃到它時 s 還不在 VarKill；如果同一個 block 後面還有一條 t ← s + 1，那個 s 就不進了，它讀的是 block 自己算出來的值。運算的順序在這裡有意義，集合本身沒有。</li>
+      <li><strong>從 ∅ 開始是刻意的。</strong>∅ 是「什麼都不活躍」，最樂觀的猜測。重算只會往集合裡加名字，不會拿掉，所以最後停下來的地方是所有解裡最小的那一個。從全集開始也會停，但可能停在一個把多餘名字算成活躍的解，下一節證明。</li>
+      <li><strong>同一圈裡前面算過的 block 已經是新值。</strong>照編號 0 到 N − 1 走，重算 LiveOut(i) 時，編號比 i 小的後繼在這一圈已經更新過，編號比 i 大的還是上一圈的值。這就是為什麼走訪順序會影響圈數。</li>
+      <li><strong>changed 只在集合真的變大時設 true。</strong>停下來的條件是「整整一圈沒有任何改變」，所以至少跑兩圈：一圈算出答案，一圈確認它不再變。書上的例子要三圈。</li>
+    </ul>
+  </section>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">CFG 和程式碼（可以改）</p>
+        <textarea id="src" spellcheck="false" aria-label="CFG 和程式碼"></textarea>
+        <div class="errs" id="errs"></div>
+        <p class="hint"><code>B0:</code> 開始一個 block。block 裡每行一條運算，格式 <code>a ← b + c</code>、<code>a ← b</code>、<code>a ← 17</code> 或只讀不寫的 <code>print a, b</code>，箭頭可以打 <code>&lt;-</code> 或 <code>=</code>。最後一行 <code>→ B1, B2</code> 列出後繼，前面可以加分支條件 <code>(i &lt; 100)</code> 或書上的 <code>(test on i)</code>，括號裡的名字算讀取；<code>→ exit</code> 或不寫代表沒有後繼。入口是第一個沒有前驅的 block，求解時照列出的順序走訪，調換順序可以看圈數怎麼變。</p>
+      </div>
+      <div>
+        <p class="panel-title">執行</p>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
+        </div>
+        <div class="jumps">
+          <button id="btn-solve" type="button">跳到求解</button>
+        </div>
+        <p class="hint" id="phint"></p>
+        <p class="hint">第一階段一步掃一條運算，第二階段一步重算一個 block。圖上黃底是正在處理的 block，<i class="hit">綠框</i>是它的後繼，也就是方程式右邊要看的那幾個。表裡 <i class="hit">綠色</i> 的名字是這一步新加進集合的；方塊裡的運算，<i class="hit">綠色</i> 是進了 UEVar 的讀取，底線是進了 VarKill 的賦值，黃底是正在掃的那一條。最後一步會用 <i class="miss">紫色</i> 標出可能沒初始化就被讀的變數。</p>
+      </div>
+    </div>
+
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span>CFG 和運算</span><span class="sub" id="nlabel"></span></div>
+        <div class="graph" id="graph"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>虛擬碼</span><span class="sub" id="phase"></span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+        <div class="vars" id="vars"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>集合</span><span class="sub" id="sstat"></span></div>
+        <div class="sets" id="sets"></div>
+        <div class="calc" id="calc"></div>
+        <div class="hist" id="hist"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>為什麼一定會停，而且停在同一個答案</h2>
+    <p>每次重算只做聯集和交集，用到的 UEVar 和 VarKill 整個過程都不變。所以只要右邊用到的 LiveOut(m) 都只變大或不變，左邊算出來的 LiveOut(n) 也只會變大或不變；從 ∅ 開始，歸納下去，每個集合都<span class="term" data-def="每一步之後集合只會包含之前的集合，不會掉出任何元素。monotone。">單調遞增</span>。它們又都是「程式裡出現過的變數名」這個有限集合的子集，不能無限長大。每一圈要不是至少多一個名字進某個集合，就是什麼都沒變而停下，所以圈數有上界，演算法一定終止。這是書上給的論證。</p>
+    <p>走訪順序會改變圈數，但不會改變答案。書上的例子照 B<sub>0</sub> 到 B<sub>4</sub> 走要三圈，因為算 B<sub>0</sub> 的時候 B<sub>1</sub> 還是 ∅，s 要等第二圈才傳到；改成先算出口再往回（B<sub>4</sub>、B<sub>3</sub>、B<sub>2</sub>、B<sub>1</sub>、B<sub>0</sub>）兩圈就停。<span class="sn">這個順序是反向 CFG 的 reverse postorder，第九章 9.2 節講 backward 問題該用它。範例「直線程式，照執行順序列」和「同一段程式，倒過來列」是同一段程式的兩種順序，一個五圈、一個兩圈。</span>答案不變的理由比終止多一步，摺疊在下面。</p>
+    <details>
+      <summary>證明：從 ∅ 開始迭代，不管順序，都停在方程組最小的解</summary>
+      <p>設 S 是方程組的任何一個解（每個 block 一個集合，同時滿足所有方程式），X 是演算法某一刻手上的集合。</p>
+      <ol>
+        <li><strong>單調。</strong>方程式右邊只有聯集、交集和不變的集合，所以如果每個 LiveOut(m) 都換成包含它的集合，算出來的 LiveOut(n) 也只會包含原來的。</li>
+        <li><strong>X 永遠不超過 S。</strong>一開始 X 全是 ∅，當然在 S 裡面。重算某個 block 時，新值是用 X 的分量代進右邊算的；X ⊆ S 加上單調，新值 ⊆ 用 S 代進去的值，而 S 是解，代進去正好等於 S 的那個分量。所以重算之後還是 X ⊆ S。這一步沒有用到是哪個 block、什麼順序。</li>
+        <li><strong>停下來的 X 自己是解。</strong>最後一圈每個 block 都重算過而且沒有改變，表示每一條方程式代入 X 都成立。</li>
+      </ol>
+      <p>由 2 和 3，X 是解而且包含在每一個解裡，它是最小的解；最小的解只有一個，所以任何順序都停在同一個 X。書上說「迭代資料流分析理論保證該方程組只有唯一解」指的就是這個最小解。<span class="sn">方程組本身可以有不只一個解。如果某個變數 v 在迴圈 B<sub>1</sub>、B<sub>3</sub> 裡既沒被讀也沒被賦值，「v 在 B<sub>1</sub> 和 B<sub>3</sub> 出口都活躍」也同時滿足兩條方程式，只是沒有任何路徑支持它。從 ∅ 開始正是為了不把這種名字放進來；從全集開始會停在最大的解，就會把它算成活躍。</span></p>
+    </details>
+    <p>8.6 節末的復習題問一個反過來的問題：有時候編譯器要的不是「某一條路徑會讀」，而是「離開 b 之後每一條路徑都會在賦值前讀到」。方程式的形狀一樣，只是後繼之間的聯集換成交集；出口 block 沒有後繼，交集的「空」是全集，所以要另外規定它是 ∅，而且初始值要改成全集、讓集合單調遞減，停下來的是最大的解。同一套單調和有限的論證仍然成立，只是方向相反。</p>
+  </section>
+
+  <section class="prose">
+    <h2>用 LiveOut 找沒初始化的變數</h2>
+    <p>假設有一個虛擬的入口節點 n<sub>0</sub>，它有邊連到每一個真正的入口 block。在 n<sub>0</sub> 出口活躍的變數，就是從程式開頭出發有某條路徑在賦值之前就讀到它的變數，也就是可能沒初始化就被使用的那些。書上的例子只有 B<sub>0</sub> 一個入口，所以：</p>
+    <div class="eq">\[ \mathrm{LiveOut}(n_0) = \mathrm{UEVar}(B_0) \cup \big( \mathrm{LiveOut}(B_0) \cap \overline{\mathrm{VarKill}(B_0)} \big) = \{ s \} \]</div>
+    <p>沿著 ⟨B<sub>0</sub>, B<sub>1</sub>, B<sub>3</sub>⟩ 走，s ← s + i 讀了還沒有被賦值的 s。workbench 跑到最後一步會算這個集合；範例「把 s 的初始化搬到 B<sub>0</sub>」讓 s 在入口就被賦值，LiveOut(n<sub>0</sub>) 就變成 ∅。</p>
+    <p>這個方法抓到的是「可能」，不是「一定」，所以可能誤報。分析看不出分支條件之間的關聯，一條實際上走不到的路徑在它眼裡照樣算數；透過指標、陣列元素或呼叫別的程序做的初始化，這一頁的模型完全看不到；在沒有被呼叫者資訊的時候，呼叫點必須假設每個可能被改的變數都被改、每個可能被讀的變數都被讀，這是安全的最壞假設，但會讓集合變大。所以編譯器回報的是警告，不是錯誤。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>全局分析不模擬執行，而是對每個 block 列一條方程式再解出不動點。活躍變數要三個集合：UEVar 和 VarKill 掃一次 block 就有，LiveOut 由後繼決定，有迴圈時方程式互相依賴，只能從 ∅ 開始反覆代入。重算只做聯集和交集，集合只會長大又有上界，所以一定停；停下來的是最小的解，任何走訪順序都到同一個地方，順序只決定要幾圈。入口的 LiveOut 就是可能沒初始化就被讀的變數。</p>
+    <p>書上第九章把這套做法推廣成一般的迭代資料流框架：換一組集合和一條方程式就是可用運算式、可達定義這些問題，反向 CFG 的 reverse postorder 和 worklist 是讓它跑快的兩個工具，dominator 也是用同一種迭代算出來的。LiveOut 之後會在 SSA 建構（只替活躍的變數放 φ）和 13.4 節的全局暫存器分配裡再出現。這一頁建立在 <a href="../cfg/">CFG</a> 的節點和邊上，接在 <a href="../svn/">SVN</a> 停下來的地方；同一節的下一個小節是<a href="../code-placement/">程式碼放置</a>，用的不是資料流分析而是 profile。</p>
+    <p>這裡的「變數」是程式裡出現過的名字這個隱含的集合，書上提到暫存器分配時會改成對一組精心切出來的 live range 算同樣的方程式。陣列、指標、程序呼叫都不在這一頁的模型裡，多個入口的 CFG 也只有講法沒有範例。</p>
+  </section>
+
+  <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, Chapter 8, Section 8.6.1（Finding Uninitialized Variables with Live Information）。兩段虛擬碼照中譯本（第二版）圖 8-15 的寫法，範例、初始集合和每一圈的表是圖 8-16，終止的論證和未初始化變數的計算照同節正文。「每一條路徑都會讀到」那一段是 8.6 節末的復習題 1。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const OPS = { '+': '+', '-': '−', '*': '×', '/': '÷' };
+const STOP = new Set(['test', 'on', 'and', 'or', 'not', 'true', 'false']);
+
+const PRESETS = [
+  { title: '書上的例子', hint: '圖 8-16 的 CFG。B3 的 LiveOut 第一圈就拿到 {i, s}，因為它的後繼 B1 在這一圈已經算過；B0 要等第二圈 s 才從 B1 傳過來。第三圈什麼都沒變，停。最後 LiveOut(n0) = {s}，s 可能沒初始化就被讀。',
+    src: `B0: i ← 1
+    → B1
+B1: (test on i) → B2, B3
+B2: s ← 0
+    → B3
+B3: s ← s + i
+    i ← i + 1
+    → B1, B4
+B4: print s
+    → exit` },
+  { title: '把 s 的初始化搬到 B0', hint: '同一張圖，s ← 0 搬進 B0。VarKill(B0) 多了 s，所以 s 穿不過 B0，LiveOut(n0) 變成 ∅：沒有變數會在賦值前被讀到。LiveOut 的表和書上一模一樣，差別只在入口那一行。',
+    src: `B0: i ← 1
+    s ← 0
+    → B1
+B1: (test on i) → B2, B3
+B2: s ← 0
+    → B3
+B3: s ← s + i
+    i ← i + 1
+    → B1, B4
+B4: print s
+    → exit` },
+  { title: '直線程式，照執行順序列', hint: '五個 block 排成一條線，x 只在最後被讀。照 B0 到 B4 的順序走，每一圈只能把 x 往回傳一個 block，要第四圈才到 B0，第五圈確認沒變。這是照編號走最差的情況。',
+    src: `B0: a ← 1
+    → B1
+B1: b ← a + 1
+    → B2
+B2: c ← b + 1
+    → B3
+B3: d ← c + 1
+    → B4
+B4: print d, x
+    → exit` },
+  { title: '同一段程式，倒過來列', hint: '程式完全一樣，只是 block 從 B4 往前列。入口還是 B0（第一個沒有前驅的 block），但求解時先算出口再往回，每個 block 重算時後繼都已經是新值，第一圈就算完，第二圈確認。',
+    src: `B4: print d, x
+    → exit
+B3: d ← c + 1
+    → B4
+B2: c ← b + 1
+    → B3
+B1: b ← a + 1
+    → B2
+B0: a ← 1
+    → B1` },
+];
+
+const LINE = {
+  Ch1: '// each block has k operations',
+  Ch2: '// of the form "x ← y op z"',
+  C0: 'for each block b do',
+  Ch3: '  // Initialize the sets for b',
+  C1: '  UEVar(b) ← ∅',
+  C2: '  VarKill(b) ← ∅',
+  C3: '  for i ← 1 to k do',
+  C4: '    if y ∉ VarKill(b) then',
+  C5: '      add y to UEVar(b)',
+  C6: '    if z ∉ VarKill(b) then',
+  C7: '      add z to UEVar(b)',
+  C8: '    add x to VarKill(b)',
+  Sh1: '// assume the CFG has N blocks',
+  Sh2: '// numbered 0 to N-1',
+  S0: 'for i ← 0 to N-1 do',
+  S1: '  LiveOut(i) ← ∅',
+  S2: 'changed ← true',
+  S3: 'while (changed) do',
+  S4: '  changed ← false',
+  S5: '  for i ← 0 to N-1 do',
+  S6: '    recompute LiveOut(i)',
+  S7: '    if LiveOut(i) changed then',
+  S8: '      changed ← true',
+};
+const PSEUDO = { col: ['Ch1', 'Ch2', 'C0', 'Ch3', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8'], sol: ['Sh1', 'Sh2', 'S0', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8'] };
+
+// ---- parser: "Name:" starts a block, ops one per line, "(cond) → A, B" ends it ----
+function parse(src) {
+  const blocks = [], errors = [], names = [];
+  const seen = n => { if (!names.includes(n)) names.push(n); };
+  const isName = s => /^[A-Za-z_]\w*$/.test(s), isConst = s => /^-?\d+$/.test(s);
+  let cur = null;
+  src.split('\n').forEach((raw, idx) => {
+    const ln = idx + 1;
+    let t = raw.replace(/(#|\/\/).*$/, '').trim();
+    if (!t) return;
+    const bh = t.match(/^([A-Za-z_]\w*)\s*:\s*(.*)$/);
+    if (bh) {
+      if (blocks.some(b => b.name === bh[1])) errors.push(`第 ${ln} 行：block ${bh[1]} 定義了兩次。`);
+      cur = { name: bh[1], ops: [], succs: null, ln };
+      blocks.push(cur);
+      t = bh[2].trim();
+      if (!t) return;
+    }
+    if (!cur) { errors.push(`第 ${ln} 行：要先寫 block 的名字加冒號，例如 B0 那樣，運算才能放在它底下。`); return; }
+    const norm = t.replace(/->/g, '→').replace(/<-|←|:=/g, '=').replace(/−/g, '-').replace(/×/g, '*').replace(/÷/g, '/');
+    const br = norm.match(/^(?:\((.*)\)\s*)?→\s*(.*)$/);
+    if (br) {
+      if (cur.succs) { errors.push(`第 ${ln} 行：block ${cur.name} 已經有一行後繼了。`); return; }
+      const list = br[2].trim();
+      cur.succs = list === '' || /^exit$/i.test(list) ? [] : list.split(/\s*,\s*/);
+      cur.succs.forEach(s => { if (!isName(s)) errors.push(`第 ${ln} 行：後繼「${s}」不是 block 的名字。`); });
+      if (br[1] !== undefined) {
+        const uses = [...new Set((br[1].match(/[A-Za-z_]\w*/g) || []).filter(w => !STOP.has(w)))];
+        uses.forEach(seen);
+        cur.ops.push({ ln, kind: 'br', dst: null, uses, text: `(${br[1].trim()}) → ${cur.succs.length ? cur.succs.join(', ') : 'exit'}` });
+      }
+      return;
+    }
+    if (cur.succs) { errors.push(`第 ${ln} 行：後繼那一行要放在 block 的最後，「${t}」在它後面。`); return; }
+    let m = norm.match(/^(?:print|use)\s+(.+)$/i);
+    if (m) {
+      const us = m[1].split(/\s*,\s*/).map(s => s.trim()).filter(Boolean);
+      const bad = us.find(u => !isName(u));
+      if (bad) { errors.push(`第 ${ln} 行：print 後面要是變數名，「${bad}」不是。`); return; }
+      us.forEach(seen);
+      cur.ops.push({ ln, kind: 'use', dst: null, uses: [...new Set(us)], text: `print ${us.join(', ')}` }); return;
+    }
+    m = norm.match(/^([A-Za-z_]\w*)\s*=\s*(-?\w+)\s*([-+*\/])\s*(-?\w+)$/);
+    if (m) {
+      const bad = [m[2], m[4]].find(o => !isName(o) && !isConst(o));
+      if (bad) { errors.push(`第 ${ln} 行：運算元要是名字或整數，「${bad}」不是。`); return; }
+      const uses = [...new Set([m[2], m[4]].filter(isName))];
+      uses.forEach(seen); seen(m[1]);
+      cur.ops.push({ ln, kind: 'asg', dst: m[1], uses, text: `${m[1]} ← ${m[2]} ${OPS[m[3]]} ${m[4]}` }); return;
+    }
+    m = norm.match(/^([A-Za-z_]\w*)\s*=\s*(-?\w+)$/);
+    if (m) {
+      if (!isName(m[2]) && !isConst(m[2])) { errors.push(`第 ${ln} 行：運算元要是名字或整數，「${m[2]}」不是。`); return; }
+      const uses = isName(m[2]) ? [m[2]] : [];
+      uses.forEach(seen); seen(m[1]);
+      cur.ops.push({ ln, kind: 'asg', dst: m[1], uses, text: `${m[1]} ← ${m[2]}` }); return;
+    }
+    errors.push(`第 ${ln} 行：看不懂「${t}」。格式是 a ← b + c、a ← 17、print a，或後繼 (a < b) → B1, B2。`);
+  });
+  if (!blocks.length) errors.push('至少要有一個 block。');
+  const byName = new Map(blocks.map(b => [b.name, b]));
+  blocks.forEach(b => {
+    b.succs = [...new Set(b.succs || [])];
+    b.succs.forEach(s => { if (!byName.has(s)) errors.push(`block ${b.name} 的後繼 ${s} 不存在。`); });
+    b.preds = [];
+  });
+  if (errors.length) return { blocks, byName, errors, names };
+  blocks.forEach(b => b.succs.forEach(s => byName.get(s).preds.push(b.name)));
+  const entry = blocks.find(b => !b.preds.length) || blocks[0];
+  const reach = new Set([entry.name]), q = [entry.name];
+  while (q.length) byName.get(q.shift()).succs.forEach(s => { if (!reach.has(s)) { reach.add(s); q.push(s); } });
+  blocks.forEach((b, i) => { b.idx = i; b.reach = reach.has(b.name); });
+  return { blocks, byName, errors, names, entry };
+}
+
+// ---- graph layout: nodes sized by their code, levels by longest path on the DAG (back edges ignored) ----
+const CH = 6.7, LH = 15, PX = 9, PY = 6, GX = 28, GY = 30;
+function nodeLines(b) {
+  const lines = [{ kind: 'name', text: b.name }];
+  b.ops.forEach((op, i) => lines.push({ kind: op.kind === 'br' ? 'br' : 'op', text: op.text, i }));
+  const last = b.ops[b.ops.length - 1];
+  if (!last || last.kind !== 'br') lines.push({ kind: 'br', text: `→ ${b.succs.length ? b.succs.join(', ') : 'exit'}` });
+  return lines;
+}
+function layoutGraph(P) {
+  const blocks = P.blocks, byName = P.byName, entry = P.entry.name;
+  const size = new Map(blocks.map(b => { const ls = nodeLines(b); return [b.name, { w: Math.max(...ls.map(l => l.text.length + (l.kind === 'name' && b === P.entry ? 4 : 0))) * CH + 2 * PX, h: ls.length * LH + 2 * PY, lines: ls }]; }));
+  const state = new Map(), back = new Set(), post = [];
+  const dfs = u => { state.set(u, 1); byName.get(u).succs.forEach(v => { if (state.get(v) === 1) back.add(u + '>' + v); else if (!state.has(v)) dfs(v); }); state.set(u, 2); post.push(u); };
+  dfs(entry);
+  const topo = post.reverse();
+  const level = new Map(topo.map(n => [n, 0]));
+  topo.forEach(u => byName.get(u).succs.forEach(v => { if (!back.has(u + '>' + v)) level.set(v, Math.max(level.get(v), level.get(u) + 1)); }));
+  let maxL = Math.max(...level.values());
+  blocks.filter(b => !level.has(b.name)).forEach(b => level.set(b.name, maxL + 1));
+  const rows = [];
+  blocks.forEach(b => { const l = level.get(b.name); (rows[l] ||= []).push(b.name); });
+  const pos = new Map();
+  let y = 0, width = 0;
+  rows.forEach((row, l) => {
+    if (l > 0) {
+      const bary = n => { const ps = byName.get(n).preds.filter(p => pos.has(p)); return ps.length ? ps.reduce((a, p) => a + pos.get(p).cx, 0) / ps.length : 0; };
+      row.sort((a, b) => bary(a) - bary(b));
+    }
+    const total = row.reduce((a, n) => a + size.get(n).w, 0) + (row.length - 1) * GX;
+    const rowH = Math.max(...row.map(n => size.get(n).h));
+    let x = -total / 2;
+    row.forEach(n => { const sz = size.get(n); pos.set(n, { x, y, w: sz.w, h: sz.h, cx: x + sz.w / 2, l, lines: sz.lines }); x += sz.w + GX; });
+    width = Math.max(width, total);
+    y += rowH + GY;
+  });
+  return { pos, back, width, height: y - GY };
+}
+
+// ---- run both phases, snapshotting after every operation (phase a) and every block (phase b) ----
+function buildTrace(P) {
+  const blocks = P.blocks, byName = P.byName, N = blocks.length, names = P.names, entry = P.entry.name;
+  const steps = [], hist = [];
+  const ue = {}, vk = {}, lo = {};
+  blocks.forEach(b => { ue[b.name] = []; vk[b.name] = []; lo[b.name] = []; });
+  const sorted = a => names.filter(n => a.includes(n));
+  const clone = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, sorted(v)]));
+  const set = a => a.length ? `{${sorted(a).join(', ')}}` : '∅';
+  const st = { b: null, opIdx: null, pass: 0, changed: null, passChanged: [] };
+  const snap = (proc, lines, x) => steps.push(Object.assign({
+    proc, lines, b: st.b, opIdx: st.opIdx, pass: st.pass, changed: st.changed, passChanged: st.passChanged.slice(),
+    ue: clone(ue), vk: clone(vk), lo: clone(lo), hist: hist.map(h => ({ pass: h.pass, lo: h.lo, changed: h.changed })),
+    chg: null, contrib: null, n0: null, edges: [], chV: [], say: '', warn: '', note: '',
+  }, x));
+
+  // phase a: collect UEVar and VarKill
+  blocks.forEach(b => {
+    const B = b.name;
+    st.b = B;
+    if (!b.ops.length) {
+      st.opIdx = null;
+      snap('col', ['C0', 'C1', 'C2'], { chV: ['b'], say: `進入 ${B}，UEVar(${B}) 和 VarKill(${B}) 先歸零。${B} 沒有運算，兩個集合都留在 ∅。` });
+      return;
+    }
+    b.ops.forEach((op, i) => {
+      st.opIdx = i;
+      const added = [], killed = [], parts = [], lines = ['C3'];
+      op.uses.forEach((y, j) => {
+        lines.push(j === 0 ? 'C4' : 'C6');
+        if (vk[B].includes(y)) parts.push(`${y} 已經在 VarKill(${B}) 裡，讀的是 ${B} 自己前面算出來的值，不加`);
+        else {
+          lines.push(j === 0 ? 'C5' : 'C7');
+          if (ue[B].includes(y)) parts.push(`${y} 不在 VarKill(${B})，本來就在 UEVar 裡`);
+          else { ue[B].push(y); added.push(y); parts.push(`${y} 不在 VarKill(${B})，值是從外面帶進來的，加進 UEVar(${B})`); }
+        }
+      });
+      if (op.dst) {
+        lines.push('C8');
+        if (vk[B].includes(op.dst)) parts.push(`${op.dst} 已經在 VarKill(${B}) 裡`);
+        else { vk[B].push(op.dst); killed.push(op.dst); parts.push(`${op.dst} 被賦值，加進 VarKill(${B})`); }
+      }
+      let say = i === 0 ? `進入 ${B}，UEVar(${B}) 和 VarKill(${B}) 先歸零。` : '';
+      say += `${op.text}：`;
+      if (op.kind === 'use') say += 'print 只讀不寫，照同一條規則看它的運算元。';
+      else if (op.kind === 'br') say += '分支條件只讀不寫，照同一條規則看它讀的名字。';
+      if (!op.uses.length && !op.dst) say += '沒有讀任何變數。';
+      else if (!op.uses.length) say += '右邊是常數，不讀任何變數。';
+      say += parts.length ? parts.join('；') + '。' : '';
+      snap('col', lines, { chg: { block: B, ue: added, vk: killed }, chV: i === 0 ? ['b', 'i'] : ['i'], say });
+    });
+  });
+
+  // phase b: iterate to a fixed point
+  st.b = null; st.opIdx = null;
+  blocks.forEach(b => { lo[b.name] = []; });
+  st.changed = true;
+  snap('sol', ['S0', 'S1', 'S2'], { chV: ['changed'], say: `收集完了。${N} 個 block 的 LiveOut 全部設成 ∅，先假設離開每個 block 時什麼都不活躍，之後只會往上加。changed ← true 讓 while 進得去。` });
+  let passes = 0;
+  while (st.changed) {
+    st.pass = ++passes;
+    st.changed = false;
+    st.passChanged = [];
+    blocks.forEach((b, i) => {
+      const B = b.name;
+      st.b = B;
+      const old = sorted(lo[B]);
+      const contrib = b.succs.map(m => {
+        const through = sorted(lo[m].filter(v => !vk[m].includes(v)));
+        return { m, ue: sorted(ue[m]), lo: sorted(lo[m]), vk: sorted(vk[m]), through, total: sorted([...new Set([...ue[m], ...through])]) };
+      });
+      const next = sorted([...new Set(contrib.flatMap(c => c.total))]);
+      const added = next.filter(v => !old.includes(v));
+      lo[B] = next;
+      const lines = i === 0 ? ['S3', 'S4', 'S5', 'S6'] : ['S5', 'S6'];
+      let say = i === 0 ? `第 ${passes} 圈開始，changed ← false。` : '';
+      say += `重算 LiveOut(${B})，i = ${i}。`;
+      if (!b.succs.length) say += `${B} 沒有後繼，右邊是空的聯集，LiveOut(${B}) = ∅。出口 block 永遠是 ∅。`;
+      else {
+        say += contrib.map(c => `後繼 ${c.m}：UEVar(${c.m}) = ${set(c.ue)}，LiveOut(${c.m}) ∖ VarKill(${c.m}) = ${set(c.lo)} ∖ ${set(c.vk)} = ${set(c.through)}，合起來 ${set(c.total)}`).join('；') + '。';
+        if (contrib.length > 1) say += `取聯集得到 ${set(next)}。`;
+      }
+      const chV = ['b', 'i'];
+      if (added.length) {
+        st.changed = true; st.passChanged.push(B);
+        lines.push('S7', 'S8'); chV.push('changed');
+        say += `比原本的 ${set(old)} 多了 ${added.join('、')}，changed ← true。`;
+      } else if (b.succs.length) {
+        lines.push('S7');
+        say += `和原本的 ${set(old)} 一樣，不算改變。`;
+      }
+      snap('sol', lines, { chg: { block: B, lo: added }, contrib, edges: b.succs.map(m => [B, m]), chV, say });
+    });
+    st.b = null;
+    hist.push({ pass: passes, lo: clone(lo), changed: st.passChanged.slice() });
+    if (st.changed) {
+      snap('sol', ['S3'], { chV: ['changed', 'pass'], say: `第 ${passes} 圈結束，${st.passChanged.join('、')} 的 LiveOut 變了，changed 是 true，再跑一圈。` });
+    } else {
+      const ueE = sorted(ue[entry]), thr = sorted(lo[entry].filter(v => !vk[entry].includes(v)));
+      const n0 = sorted([...new Set([...ueE, ...thr])]);
+      const unreach = blocks.filter(b => !b.reach).map(b => b.name);
+      snap('sol', ['S3'], { chV: ['changed', 'pass'], n0: { entry, ue: ueE, lo: sorted(lo[entry]), vk: sorted(vk[entry]), through: thr, set: n0 },
+        say: `第 ${passes} 圈結束，沒有任何 LiveOut 變動，changed 還是 false，while 停下。這組集合同時滿足每一條方程式，是方程組最小的解。接著看入口：LiveOut(n0) = UEVar(${entry}) ∪ (LiveOut(${entry}) ∖ VarKill(${entry})) = ${set(ueE)} ∪ ${set(thr)} = ${set(n0)}。`,
+        warn: n0.length ? `${n0.join('、')} 在從程式開頭出發的某條路徑上，賦值之前就被讀了：可能沒初始化就使用。` : '',
+        note: (n0.length ? '' : '空集合，沒有變數會在賦值前被讀到。') + `總共 ${passes} 圈，所有集合最多只能長到 ${set(names)}。` + (unreach.length ? `${unreach.join('、')} 從入口到不了，演算法照樣算了它們的集合。` : '') });
+    }
+  }
+  return steps;
+}
+
+// ---- UI ----
+const INIT = { proc: null, lines: [], b: null, opIdx: null, pass: 0, changed: null, passChanged: [], ue: {}, vk: {}, lo: {}, hist: [], chg: null, contrib: null, n0: null, edges: [], chV: [], say: '', warn: '', note: '' };
+const state = { pi: 0, k: 0, parsed: null, trace: [], layout: null };
+const total = () => state.trace.length;
+const cur = () => state.k === 0 ? INIT : state.trace[state.k - 1];
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
+const fmtSet = (a, hot) => !a || !a.length ? '∅' : '{' + a.map(n => hot && hot.includes(n) ? `<span class="new">${esc(n)}</span>` : esc(n)).join(', ') + '}';
+
+function rebuild() {
+  state.parsed = parse($('src').value);
+  const ok = !state.parsed.errors.length;
+  state.layout = ok ? layoutGraph(state.parsed) : null;
+  state.trace = ok ? buildTrace(state.parsed) : [];
+  state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
+}
+
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.pi = i; $('src').value = c.src; rebuild(); renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderPseudoShell() {
+  $('pseudo').innerHTML = ['col', 'sol'].map(proc =>
+    `<span class="proc" data-p="${proc}">` + PSEUDO[proc].map(id =>
+      `<span class="pl${/h\d$/.test(id) ? ' cm' : ''}" data-l="${id}">${LINE[id]}</span>`).join('') + '</span>').join('');
+}
+
+function renderGraph(s) {
+  const P = state.parsed, L = state.layout;
+  if (!L) { $('graph').innerHTML = ''; $('nlabel').textContent = ''; return; }
+  const nOps = P.blocks.reduce((a, b) => a + b.ops.length, 0);
+  $('nlabel').textContent = `${P.blocks.length} 個 block · ${nOps} 條運算`;
+  const M = 40, W = L.width + 2 * M, H = L.height + 24, cx = W / 2, top = 12;
+  const X = n => cx + L.pos.get(n).x, Y = n => top + L.pos.get(n).y;
+  const succ = new Set(s.edges.map(e => e[1]));
+  const curIdx = s.b && P.byName.get(s.b) ? P.byName.get(s.b).idx : -1;
+  let out = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="控制流程圖，方塊裡是每個 block 的運算">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker>
+      <marker id="arr-new" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--hit)"/></marker>
+    </defs>`;
+  P.blocks.forEach(b => b.succs.forEach(t => {
+    const isNew = s.edges.some(e => e[0] === b.name && e[1] === t);
+    const a = L.pos.get(b.name), c = L.pos.get(t);
+    const ax = X(b.name), ay = Y(b.name), bx = X(t), by = Y(t);
+    let d;
+    if (b.name === t) d = `M ${ax + a.w} ${ay + 8} C ${ax + a.w + 28} ${ay - 6}, ${ax + a.w + 28} ${ay + a.h + 6}, ${ax + a.w} ${ay + a.h - 8}`;
+    else if (c.l <= a.l) { const k = 26 + 8 * (a.l - c.l); d = `M ${ax + a.w} ${ay + a.h / 2} C ${ax + a.w + k} ${ay + a.h / 2}, ${bx + c.w + k} ${by + c.h / 2}, ${bx + c.w} ${by + c.h / 2}`; }
+    else if (c.l === a.l + 1) d = `M ${a.cx + cx} ${ay + a.h} L ${c.cx + cx} ${by}`;
+    else { const dx = (a.cx <= 0 ? -1 : 1) * (a.w * 0.5 + 10 * (c.l - a.l)); d = `M ${a.cx + cx} ${ay + a.h} C ${a.cx + cx + dx} ${ay + a.h + 24}, ${c.cx + cx + dx} ${by - 24}, ${c.cx + cx} ${by}`; }
+    out += `<path class="edge${isNew ? ' new' : ''}" d="${d}" marker-end="url(#${isNew ? 'arr-new' : 'arr'})"/>`;
+  }));
+  P.blocks.forEach(b => {
+    const n = b.name, p = L.pos.get(n), x = X(n), y = Y(n);
+    const isCur = s.b === n;
+    const cls = 'node' + (isCur ? ' cur' : succ.has(n) ? ' succ' : '') + (isCur && s.proc === 'sol' ? ' sol' : '') + (b.reach ? '' : ' unreach');
+    // which ops have been scanned, so their reads and writes can be marked
+    const scanned = i => s.proc === 'sol' || (s.proc === 'col' && (b.idx < curIdx || (b.idx === curIdx && (s.opIdx === null || i <= s.opIdx))));
+    const ueB = s.ue[n] || [], vkB = s.vk[n] || [];
+    let g = `<g class="${cls}"><rect class="box" x="${x}" y="${y}" width="${p.w}" height="${p.h}" rx="4"/>`;
+    p.lines.forEach((ln, li) => {
+      const ty = y + PY + li * LH + 11;
+      if (ln.kind === 'op' || (ln.kind === 'br' && ln.i !== undefined)) {
+        const op = b.ops[ln.i];
+        if (s.proc === 'col' && isCur && s.opIdx === ln.i) g += `<rect class="line" x="${x + 3}" y="${ty - 11}" width="${p.w - 6}" height="${LH}" rx="2"/>`;
+        let body = esc(op.text);
+        if (scanned(ln.i)) {
+          const prevKilled = new Set(b.ops.slice(0, ln.i).map(o => o.dst).filter(Boolean));
+          let first = true;
+          body = body.replace(/[A-Za-z_]\w*/g, w => {
+            const isDst = op.kind === 'asg' && first && w === op.dst; first = false;
+            if (isDst) return vkB.includes(w) ? `<tspan class="k">${w}</tspan>` : w;
+            if (op.uses.includes(w) && ueB.includes(w) && !prevKilled.has(w)) return `<tspan class="u">${w}</tspan>`;
+            return w;
+          });
+        }
+        g += `<text class="${ln.kind === 'br' ? 'br' : ''}" x="${x + PX}" y="${ty}">${body}</text>`;
+      } else {
+        g += `<text class="${ln.kind}" x="${x + PX}" y="${ty}">${esc(ln.text)}${ln.kind === 'name' ? `<tspan class="br"> ${b === P.entry ? '入口' : ''}</tspan>` : ''}</text>`;
+      }
+    });
+    out += g + '</g>';
+  });
+  $('graph').innerHTML = out + '</svg>';
+}
+
+function renderPseudo(s) {
+  document.querySelectorAll('#pseudo .pl').forEach(el => el.classList.toggle('on', s.lines.includes(el.dataset.l)));
+  document.querySelectorAll('#pseudo .proc').forEach(el => el.classList.toggle('active', s.proc === null || el.dataset.p === s.proc));
+  $('phase').textContent = s.proc === 'col' ? '收集初始資訊' : s.proc === 'sol' ? (s.pass ? `求解，第 ${s.pass} 圈` : '求解') : '';
+}
+
+function renderVars(s) {
+  const ch = new Set(s.chV);
+  const P = state.parsed;
+  const v = (key, name, val) => `<span class="var${ch.has(key) ? ' chg' : ''}"><span class="k">${name}</span><span class="v">${val ?? '–'}</span></span>`;
+  const idx = s.b && P && P.byName.get(s.b) ? P.byName.get(s.b).idx : null;
+  const vars = s.proc === 'col'
+    ? v('b', 'b', s.b) + v('i', 'i（第幾條運算）', s.opIdx === null ? '–' : s.opIdx + 1)
+    : v('b', 'LiveOut(i) 的 i', idx === null ? '–' : `${idx}（${s.b}）`) + v('pass', '第幾圈', s.pass || '–') + v('changed', 'changed', s.changed === null ? '–' : String(s.changed));
+  $('vars').innerHTML = vars;
+}
+
+function renderSets(s) {
+  const P = state.parsed;
+  if (!P || P.errors.length) { $('sets').innerHTML = ''; $('calc').innerHTML = ''; $('hist').innerHTML = ''; $('sstat').textContent = ''; return; }
+  const succ = new Set(s.edges.map(e => e[1]));
+  const chg = s.chg || {};
+  $('sstat').textContent = s.proc === 'sol' && s.pass ? `第 ${s.pass} 圈` : '';
+  // the three sets per block
+  const rows = P.blocks.map(b => {
+    const n = b.name, isCur = s.b === n, isSucc = succ.has(n);
+    const cell = (key, hot) => `<td class="${isCur && hot && hot.length ? 'chg' : ''}">${fmtSet(s[key][n], isCur ? hot : null)}</td>`;
+    return `<tr class="${isCur ? 'cur' : isSucc ? 'succ' : ''}"><td class="bn">${esc(n)}</td>${cell('ue', chg.block === n ? chg.ue : null)}${cell('vk', chg.block === n ? chg.vk : null)}${cell('lo', chg.block === n ? chg.lo : null)}</tr>`;
+  }).join('');
+  $('sets').innerHTML = `<table class="tb"><thead><tr><th>block</th><th>UEVar</th><th>VarKill</th><th>LiveOut</th></tr></thead><tbody>${rows}</tbody></table>`;
+  // this step's recompute
+  let calc = '';
+  if (s.contrib) {
+    const B = s.b;
+    calc += '<h3>這一步的計算</h3>';
+    if (!s.contrib.length) calc += `<div class="line"><span class="m">${esc(B)}</span><span class="empty">沒有後繼，LiveOut(${esc(B)}) = ∅</span></div>`;
+    else {
+      s.contrib.forEach(c => { calc += `<div class="line"><span class="m">${esc(c.m)}</span><span>${fmtSet(c.ue)} ∪ (${fmtSet(c.lo)} ∖ ${fmtSet(c.vk)})</span><span class="c">=</span><span>${fmtSet(c.total)}</span></div>`; });
+      calc += `<div class="line sum"><span class="m">∪</span><span>LiveOut(${esc(B)}) = ${fmtSet(s.lo[B], chg.lo)}</span>` + (chg.lo && chg.lo.length ? `<span class="c">新增 ${chg.lo.map(esc).join('、')}</span>` : `<span class="c">沒變</span>`) + '</div>';
+    }
+  }
+  if (s.n0) {
+    const n = s.n0;
+    calc += (calc ? '' : '<h3>入口</h3>') + `<div class="line n0"><span class="m">n<sub>0</sub></span><span>UEVar(${esc(n.entry)}) ∪ (LiveOut(${esc(n.entry)}) ∖ VarKill(${esc(n.entry)}))</span></div><div class="line"><span class="m"></span><span>= ${fmtSet(n.ue)} ∪ (${fmtSet(n.lo)} ∖ ${fmtSet(n.vk)})</span><span class="c">=</span><span class="${n.set.length ? 'bad' : ''}">${fmtSet(n.set)}</span></div>`;
+  }
+  $('calc').innerHTML = calc;
+  // LiveOut after every pass, like the book's table
+  if (s.proc !== 'sol') { $('hist').innerHTML = ''; return; }
+  const head = `<tr><th>圈</th>${P.blocks.map(b => `<th>${esc(b.name)}</th>`).join('')}</tr>`;
+  let body = `<tr><td>—</td>${P.blocks.map(() => '<td>∅</td>').join('')}</tr>`;
+  s.hist.forEach(h => { body += `<tr><td>${h.pass}</td>${P.blocks.map(b => `<td class="${h.changed.includes(b.name) ? 'chg' : ''}">${fmtSet(h.lo[b.name])}</td>`).join('')}</tr>`; });
+  if (s.pass && s.hist.length < s.pass) body += `<tr><td>${s.pass}…</td>${P.blocks.map(b => `<td class="now${s.passChanged.includes(b.name) ? ' chg' : ''}">${fmtSet(s.lo[b.name])}</td>`).join('')}</tr>`;
+  $('hist').innerHTML = `<h3>每一圈結束時的 LiveOut</h3><table class="tb"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+function renderAll() {
+  const bad = state.parsed.errors.length > 0;
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && $('src').value === PRESETS[i].src));
+  $('errs').innerHTML = state.parsed.errors.map(e => `<span>${esc(e)}</span>`).join('');
+  $('phint').textContent = $('src').value === PRESETS[state.pi].src ? PRESETS[state.pi].hint : '';
+  $('btn-solve').disabled = bad;
+  const s = bad ? INIT : cur();
+  if (bad) { $('graph').innerHTML = ''; $('nlabel').textContent = ''; }
+  else renderGraph(s);
+  renderPseudo(s);
+  renderVars(s);
+  renderSets(bad ? INIT : s);
+  const say = $('say');
+  if (bad) say.textContent = '程式碼有錯，修好之後再開始。';
+  else if (state.k === 0) say.textContent = '三個集合都還是空的。按「下一步」開始掃第一個 block 的運算，或按「跳到求解」直接看迭代。';
+  else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '') + (s.note ? `<span class="note">${s.note}</span>` : '');
+}
+
+$('src').addEventListener('input', () => { rebuild(); renderAll(); });
+$('btn-solve').addEventListener('click', () => { const idx = state.trace.findIndex(s => s.proc === 'sol'); if (idx >= 0) stepper.set(idx + 1); });
+
+renderPresets();
+renderPseudoShell();
+$('src').value = PRESETS[0].src;
+rebuild();
+renderAll();
+</script>
+</body>
+</html>

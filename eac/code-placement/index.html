@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>程式碼放置：把 hot path 排成 fall-through</title>
+<meta name="description" content="把 Engineering a Compiler 第八章的全局程式碼放置一步步跑給你看：怎麼照邊的執行次數把 block 貪婪地串成鏈、優先序是怎麼算出來的、worklist 怎麼把鏈排成一列讓最常走的邊變成 fall-through，以及次數相同時順序怎麼影響結果。可以自己改邊和次數。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* 這一頁特有的：帶次數的 CFG 圖、鏈的表、置放的紀錄。 */
+textarea { min-height: 12rem; font-size: 0.82rem; }
+.work { grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr) minmax(0, 1.3fr); }
+
+/* CFG：節點只有名字，邊上標次數 */
+.graph { padding: 0.6rem 0.5rem; background: var(--bg); display: flex; justify-content: center; align-items: flex-start; flex: 1; overflow-x: auto; }
+.graph svg { width: 100%; height: auto; max-width: 22rem; font-family: var(--font-mono); overflow: visible; }
+.graph .node rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.graph .node.placed rect { fill: var(--hit-soft); stroke: var(--hit); stroke-width: 1.6; }
+.graph .node.cur rect { fill: var(--mark); stroke: var(--ink); stroke-width: 1.6; }
+.graph .node.unreach rect { stroke-dasharray: 2 2; }
+.graph .node.unreach text { fill: var(--muted); }
+.graph text { fill: var(--ink); font-size: 11px; }
+.graph text.name { font-weight: 600; }
+.graph tspan.tag { fill: var(--muted); font-weight: 400; }
+.graph .edge { fill: none; stroke: var(--ink); stroke-width: 1.3; }
+.graph .edge.chain { stroke: var(--hit); stroke-width: 2.6; }
+.graph .edge.skip, .graph .edge.self { stroke: var(--muted); stroke-dasharray: 4 3; }
+.graph .edge.cur { stroke: var(--ink); stroke-width: 2.8; }
+.graph .edge.scan { stroke: var(--ink); stroke-width: 2.4; stroke-dasharray: 6 3; }
+.graph text.w { paint-order: stroke; stroke: var(--bg); stroke-width: 3px; font-size: 10.5px; }
+.graph text.w.chain { fill: var(--hit); font-weight: 600; }
+.graph text.w.skip, .graph text.w.self { fill: var(--muted); }
+.graph text.w.cur { font-weight: 600; stroke: var(--mark); stroke-width: 5px; }
+
+/* 鏈的表、置放的狀態、置放的紀錄 */
+.chains, .lay, .final { padding: 0.5rem 0.6rem; background: var(--bg); font-family: var(--font-mono); font-size: 0.76rem; overflow-x: auto; }
+.lay, .final { border-top: 1px solid var(--line); }
+.final { flex: 1; }
+.chains h3, .lay h3, .final h3 { margin: 0 0 0.35rem; font-family: var(--font-body); font-size: 0.72rem; font-weight: 700; color: var(--muted); }
+table.tb { border-collapse: collapse; width: 100%; }
+.tb th, .tb td { padding: 0.14rem 0.5rem; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: baseline; }
+.tb th { font-family: var(--font-body); font-size: 0.68rem; color: var(--muted); font-weight: 700; }
+.tb tr:last-child td { border-bottom: 0; }
+.tb tr.cur td { background: var(--mark); }
+.tb td.bn { font-weight: 600; }
+.tb td.cs { white-space: normal; min-width: 14rem; }
+.chains .chn, .lay .chn { white-space: nowrap; }
+.tb .new, .lay .new, .final .new { color: var(--hit); font-weight: 600; }
+.tb .dim, .lay .dim, .final .dim { color: var(--muted); }
+.tb sub, .lay sub { font-size: 0.68em; }
+.lay .line, .final .line { display: flex; flex-wrap: wrap; gap: 0.3rem 0.5rem; padding: 0.1rem 0; align-items: baseline; }
+.lay .line .m, .final .line .m { font-weight: 600; min-width: 4.5em; color: var(--muted); font-family: var(--font-body); font-size: 0.72rem; }
+.final .line .m { min-width: 2.2em; }
+.lay .empty, .final .empty { color: var(--muted); font-family: var(--font-body); }
+.final .line.sum { border-top: 1px solid var(--line); margin-top: 0.2rem; padding-top: 0.3rem; }
+.lay .seq span.cur { background: var(--mark); padding: 0 0.25em; border-radius: 3px; font-weight: 600; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Engineering a Compiler 筆記</a>
+    <h1>程式碼放置：把 <span class="mono">hot path</span> 排成 fall-through</h1>
+    <p class="lead"><a href="../cfg/">CFG</a> 那一頁把程式切成 block，順序就是原始碼的順序。但 block 最後要排回一條線放進記憶體，誰接在誰後面是編譯器可以選的。分支如果跳到緊接在後面的那個 block，就是 fall-through，不用真的跳；跳到別的地方才要一條跳躍，會打斷指令的預取，也可能把常一起跑的兩段程式碼放到不同的 cache line。全局程式碼放置的目標就是讓最常走的那些邊變成 fall-through。Engineering a Compiler 8.6.2 的做法分兩段：先照邊的執行次數把 block 貪婪地串成鏈，再按優先序把鏈排成一列。這一頁照書上的兩段虛擬碼一步步跑，可以自己改邊和次數。</p>
+  </header>
+
+  <section class="prose">
+    <h2>為什麼 block 的順序有關係</h2>
+    <p>在 ILOC 裡一條分支把兩個目標都寫明，看不出哪一個比較便宜。真的機器不是這樣：block 結束時如果下一個要執行的 block 就排在正後方，那條跳躍可以省掉，或者至少是一條不會跳的分支；指令預取和 cache 都偏好直直往下走。所以同一張 CFG，不同的線性順序，執行時真的跳的次數不同。每個 block 只有一個正後方，所以最多只能把一條出邊變成 fall-through，其他的出邊一定要跳。</p>
+    <p>要知道哪些邊常走，需要每條邊的執行次數。這個數字可以來自 <span class="term" data-def="拿一組有代表性的輸入跑一次程式，在每條邊上插計數器，記下每條邊實際走過幾次。profile data。">profile</span>，也可以來自靜態估計，像是把迴圈的 back edge 當作走十次；演算法本身不在乎數字從哪裡來。<span class="sn">書上在這一節旁邊有一段對照：資料流分析在編譯期用數學把所有可能的路徑都算進去，所以保守；profile 記的是某一組輸入的某一次執行，所以激進，它假設未來的執行會像這一次。兩種資訊在最佳化裡都有用，上一頁的 <a href="../liveout/">LiveOut</a> 用前者，這一頁用後者。</span>書上的例子直接把次數標在邊上，這一頁的輸入也是。</p>
+  </section>
+
+  <section class="prose">
+    <h2>鏈、優先序和兩條規則</h2>
+    <p>第一段演算法把 block 串成<span class="term" data-def="一串 block，演算法打算讓它們在最後的程式碼裡緊接著、照這個順序出現。chain。">鏈</span>。開始時每個 block 自己是一條<span class="term" data-def="只有一個 block 的鏈。degenerate chain。">退化鏈</span>。接著把所有的邊照次數從高到低看一遍：邊 ⟨x, y⟩ 只有在 x 是它那條鏈的尾、y 是另一條鏈的頭時，才能把 y 那條鏈整個接到 x 後面。一旦接上，x → y 就注定會是 fall-through。這個條件是「每個 block 的正前方和正後方都只有一個位置」的直接結果：x 後面已經接了別人，就沒有位置給 y；y 前面已經有別人，x 就擠不進去。越熱的邊越早處理，位置先給它。</p>
+    <p>每條鏈還帶一個<span class="term" data-def="每條鏈一個整數，越小越早被放進程式碼。開始時是 E，也就是邊的總數，當作無限大。priority。">優先序</span>。開始時是 E，也就是邊的總數，等於無限大。有一個計數器 P 從 0 起算，每處理一條邊就加一，所以 P 的值就是「這是第幾條被處理的邊」，數字越小代表這條邊越熱。接鏈時新鏈的優先序取兩條舊鏈和這條邊的最小值；接不上時，包含 y 的鏈也拿這條邊的序號去比，比較小就換成它。結果是：一條鏈的優先序等於「碰過它的最熱的那條邊」的序號。</p>
+    <p>第二段演算法把鏈排成一列。鏈的集合只是 block 上的一個<span class="term" data-def="只規定了某些 block 之間的先後（同一條鏈裡的），沒有規定不同鏈之間誰先誰後。partial order。">偏序</span>，要變成全序，書上用兩條啟發式規則：一條鏈裡的 block 照鏈的順序放，讓 hot path 成為 fall-through；鏈和鏈之間按優先序從低到高放。第二條用一個 <span class="term" data-def="待處理的集合，每次從裡面挑一個出來處理，處理時可能再往裡面加新的。worklist。">worklist</span> 實作：從入口所在的鏈開始，放完一條鏈，就把它指出去、還沒放的 block 所屬的鏈加進 worklist，每次取優先序最低的那條來放。</p>
+  </section>
+
+  <section class="prose">
+    <h2>虛擬碼</h2>
+    <p>書上分成兩段。第一段建鏈，第二段排版。<span class="sn">中譯本的兩段虛擬碼分別是圖 8-17 和圖 8-19，第一個範例的 CFG 和每一步的鏈集合表是圖 8-18，第二個範例是同節末尾的「最終示例」。</span></p>
+  </section>
+  <div class="cols">
+    <div class="col">
+<pre class="code">E ← |edges|
+for each block b do
+  create a degenerate chain, d, for b
+  priority(d) ← E
+P ← 0
+for each CFG edge ⟨x,y⟩, x ≠ y,
+    in decreasing frequency order do
+  if x is the tail of chain a and
+     y is the head of chain b then
+    t ← priority(a)
+    append b onto a
+    priority(a) ← min(t, priority(b), P++)
+  else priority(b) ← min(priority(b), P++)</pre>
+      <p>建鏈。P++ 是「先用現在的值，再加一」，所以每條邊拿到的序號就是它被處理的順序。else 那一行的 b 是包含 y 的鏈。</p>
+    </div>
+    <div class="col">
+<pre class="code">t ← chain headed by the CFG entry node
+WorkList ← { (t, priority(t)) }
+while (WorkList ≠ ∅) do
+  remove a chain c of lowest priority from WorkList
+  for each block x in c in chain order do
+    place x at the end of the executable code
+  for each block x in c do
+    for each edge ⟨x,y⟩ where y is unplaced do
+      t ← chain containing y
+      if (t, priority(t)) ∉ WorkList then
+        WorkList ← WorkList ∪ { (t, priority(t)) }</pre>
+      <p>排版。放完一條鏈才掃它出去的邊，所以 worklist 裡永遠是「已經放好的程式碼有邊指過去」的鏈。</p>
+    </div>
+  </div>
+  <section class="prose">
+    <ul>
+      <li><strong>x ≠ y 把自己指自己的邊排除。</strong>一個 block 回到自己的 back edge 不管怎麼排版都是一條跳躍，對置放沒有影響，所以跳過。</li>
+      <li><strong>else 那一行也會動優先序。</strong>接不上的邊沒有白費：包含 y 的鏈拿到這條邊的序號，如果比它原本的優先序小就換成它。這樣一條被很熱的邊指到、但接不上的鏈，排版時還是會早早被放，離跳過來的地方近一點。圖 8-18b 裡處理 ⟨B<sub>4</sub>, B<sub>3</sub>⟩ 那一步可以確認 b 是包含 y 的鏈：B<sub>3</sub> 所在的 ⟨B<sub>2</sub>, B<sub>3</sub>⟩ 優先序已經是 1，min(1, 2) 沒變，而 ⟨B<sub>4</sub>⟩ 維持 E。</li>
+      <li><strong>次數相同的邊，書上沒有規定順序。</strong>不同的順序會做出不同的鏈。這一頁在次數相同時照輸入列出的順序處理，所以調換兩行就能看到另一種結果。</li>
+      <li><strong>這一頁補了兩條書上沒寫的規則。</strong>如果 x 是鏈尾、y 是鏈頭、而且是同一條鏈，接上去鏈會變成一個圈，所以當作接不上；有迴圈的圖一定會碰到這個情況。另外，指向入口的邊也不接，因為入口必須是程式碼的第一個 block，不能排在別人後面。<span class="sn">書上排版的第一行寫「以入口為頭的鏈」，隱含了入口一定是鏈頭；沒有第二條規則的話，一條指回入口的熱邊會把它接到別的 block 後面，第一行就找不到鏈了。</span></li>
+      <li><strong>worklist 裡優先序相同時取先進來的。</strong>書上只說取最低的；這一頁用先進先出打平手，和 P 的序號一樣反映「先碰到的先放」。</li>
+    </ul>
+  </section>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">邊和執行次數（可以改）</p>
+        <textarea id="src" spellcheck="false" aria-label="邊和執行次數"></textarea>
+        <div class="errs" id="errs"></div>
+        <p class="hint">每行一條邊，格式 <code>B0 → B1 7</code>，最後的數字是執行次數，箭頭可以打 <code>-&gt;</code>。入口是第一個沒有前驅的 block，也可以用一行 <code>entry B0</code> 指定。邊照次數從高到低處理，次數相同的照列出的順序，所以調換兩行可以看到不同的鏈。</p>
+      </div>
+      <div>
+        <p class="panel-title">執行</p>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
+        </div>
+        <div class="jumps">
+          <button id="btn-lay" type="button">跳到排版</button>
+        </div>
+        <p class="hint" id="phint"></p>
+        <p class="hint">第一階段一步處理一條邊，第二階段每條鏈兩步：先取出來放，再掃它出去的邊。圖上黃底是這一步的邊或正在放的 block，<i class="hit">綠色粗邊</i>是已經接進鏈裡、注定變成 fall-through 的邊，灰色虛線是處理過但接不上的邊，<i class="hit">綠底</i>是已經放進程式碼的 block。表裡 <i class="hit">綠色</i> 的鏈是這一步改動的。</p>
+      </div>
+    </div>
+
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span>CFG</span><span class="sub" id="nlabel"></span></div>
+        <div class="graph" id="graph"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>虛擬碼</span><span class="sub" id="phase"></span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+        <div class="vars" id="vars"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>鏈和程式碼</span><span class="sub" id="sstat"></span></div>
+        <div class="chains" id="chains"></div>
+        <div class="lay" id="lay"></div>
+        <div class="final" id="final"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>次數相同時，順序不只一種</h2>
+    <p>書上的例子有三條次數都是 5 的邊。照圖 8-18b 的順序，先處理 ⟨B<sub>2</sub>, B<sub>3</sub>⟩，B<sub>3</sub> 就接在 B<sub>2</sub> 後面，之後的 ⟨B<sub>4</sub>, B<sub>3</sub>⟩ 接不上，最後得到 ⟨B<sub>0</sub>, B<sub>1</sub>, B<sub>2</sub>, B<sub>3</sub>⟩ 和 ⟨B<sub>5</sub>, B<sub>4</sub>⟩。如果先處理 ⟨B<sub>4</sub>, B<sub>3</sub>⟩，就變成 ⟨B<sub>0</sub>, B<sub>1</sub>, B<sub>2</sub>⟩ 和 ⟨B<sub>5</sub>, B<sub>4</sub>, B<sub>3</sub>⟩，排版出來是 B<sub>0</sub> B<sub>1</sub> B<sub>2</sub> B<sub>5</sub> B<sub>4</sub> B<sub>3</sub>。範例「先處理 ⟨B4, B3⟩」就是這個順序。書上說，只要次數的估計是對的，這兩種佈局沒有優劣之分：兩種都讓 20 次執行走在 fall-through 上，剩下 10 次要跳。<span class="sn">「fall-through 承接的次數」是這一頁拿來比較佈局的方法，不是書上的：把相鄰的 block 兩兩看一遍，中間有邊的就把次數加起來。workbench 的最後一步會算。</span></p>
+    <p>貪婪法不保證找到最好的順序。找最好的線性順序本身是個難題，它包含了帶權重的 Hamiltonian path，所以實務上都是貪婪加啟發式。書上的說法是：就算鏈的處理順序不是最好的，排版演算法還是能做出不錯的結果。因為排版只看鏈和優先序，鏈怎麼切、優先序差多少，影響的只是哪幾條次要的邊要跳。<span class="sn">這套「照邊的權重貪婪接鏈、再照優先序排鏈」的做法來自 Pettis 和 Hansen 1990 年的論文，GCC 的 bb-reorder 和 LLVM 的 MachineBlockPlacement 都是它的後代，只是多了對迴圈、block 大小和分支預測的考慮。</span></p>
+  </section>
+
+  <section class="prose">
+    <h2>迴圈和入口</h2>
+    <p>有迴圈的圖裡最熱的邊常常是 back edge。範例「迴圈裡有一條少走的分支」裡，⟨B<sub>5</sub>, B<sub>1</sub>⟩ 是第二熱的邊，而且 B<sub>5</sub> 是鏈尾、B<sub>1</sub> 是鏈頭，所以它被接上了：迴圈的最後一個 block 排在 header 前面，鏈變成 ⟨B<sub>5</sub>, B<sub>1</sub>, B<sub>2</sub>⟩。這沒有錯，一個迴圈每繞一圈至少要跳一次，演算法只是把那一次跳放在別的邊上。後來 ⟨B<sub>3</sub>, B<sub>5</sub>⟩ 的 B<sub>3</sub> 是這條鏈的尾、B<sub>5</sub> 是這條鏈的頭，接上去就成了圈，所以照這一頁補的規則當作接不上。最後少走的 B<sub>4</sub> 反而接到 B<sub>5</sub> 前面，整條鏈是 ⟨B<sub>4</sub>, B<sub>5</sub>, B<sub>1</sub>, B<sub>2</sub>, B<sub>3</sub>⟩：進迴圈要跳一次，每圈 B<sub>3</sub> 回 B<sub>5</sub> 跳一次，其他都是 fall-through。</p>
+    <p>入口 B<sub>0</sub> 在這個範例裡自己一條鏈，優先序一直是 E，因為沒有任何邊指向它。排版的第一行不看優先序，直接從入口的鏈開始，所以 E 不是問題；它只對排版中途才進 worklist 的鏈有意義。</p>
+  </section>
+
+  <section class="prose">
+    <h2>次數從哪裡來，和為什麼不用每條邊都插樁</h2>
+    <p>最直接的做法是在每條邊上插一個計數器。但計數有守恆：除了入口和出口，每個 block 進來的次數總和等於出去的次數總和，因為執行流進了一個 block 一定會從某條出邊離開。圖 8-18a 裡 B<sub>4</sub> 進來 2 + 3，出去 5；B<sub>0</sub> 進來 10，出去 7 + 3。所以只要量了一部分的邊，其他的可以用守恆算回來。把出口接一條虛擬的邊回入口，整張圖的次數就是一個處處守恆的流，這時任何一棵生成樹上的邊都可以不量，由樹外的邊推回來；要插樁的只有樹外的邊，而且挑權重最大的生成樹可以讓插在熱邊上的計數器最少。<span class="sn">這是 8.6 節末復習題 2 問的東西。Knuth 和 Stevenson 1973 年提出用生成樹減少測量點，Ball 和 Larus 1994 年做成了挑最大權重生成樹的版本，gcov 和 LLVM 的 instrumentation profiling 到現在還是這麼做。</span></p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>程式碼放置把 CFG 排回一條線，目標是讓最常走的邊變成 fall-through。每個 block 的正後方只有一個位置，所以演算法照次數從高到低分配：x 是鏈尾、y 是鏈頭才能接，接上的邊注定是 fall-through。優先序記的是碰過這條鏈的最熱的邊是第幾條，排版時從入口的鏈開始，用 worklist 每次放優先序最低的鏈，再把它指出去的鏈加進來。次數相同的邊處理順序不同，鏈就不同，但只要次數是對的，結果差不多一樣好。</p>
+    <p>這是書上第八章四個例子裡唯一用 profile 而不是資料流分析的。第九章接著把 LiveOut 推廣成資料流框架，並且講 dominator；程式碼放置本身在真的編譯器裡還要處理迴圈對齊、把冷的 block 搬到函式的另一頭、以及看分支預測器的習慣。它建立在 <a href="../cfg/">CFG</a> 的 block 和邊上，和 <a href="../liveout/">LiveOut</a> 是同一節的兩個小節。同樣的想法放大到整個程式，就是 8.7.2 的<a href="../procedure-placement/">過程放置</a>：在 call graph 上縮邊，讓常互相呼叫的過程放得近。</p>
+    <p>這一頁的模型把 block 當成沒有大小的點，只看邊的次數。真的機器還在乎 block 的位元組數和 cache line 對齊、分支預測器對前向和後向分支的預設猜測、跳躍能跳多遠；排好之後每個 block 末尾的分支也要重寫，fall-through 那邊的跳躍要拿掉，必要時把條件反過來。這些都不在書上這一節，也不在 workbench 裡。</p>
+  </section>
+
+  <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, Chapter 8, Section 8.6.2（Global Code Placement）。兩段虛擬碼照中譯本（第二版）圖 8-17 和圖 8-19 的寫法，第一個範例的 CFG 和鏈集合的表是圖 8-18，第二個範例是同節末尾的「最終示例」，插樁那一段是 8.6 節末的復習題 2。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const PRESETS = [
+  { title: '書上的例子', hint: '圖 8-18 的 CFG，邊照書上處理的順序列。三條次數是 5 的邊先處理 ⟨B2, B3⟩，所以 B3 接在 B2 後面，⟨B4, B3⟩ 就接不上。最後兩條鏈 ⟨B0, B1, B2, B3⟩ 和 ⟨B5, B4⟩，排版 B0 B1 B2 B3 B5 B4。',
+    src: `B0 → B1 7
+B2 → B3 5
+B4 → B3 5
+B1 → B2 5
+B0 → B5 3
+B5 → B4 3
+B1 → B4 2` },
+  { title: '先處理 ⟨B4, B3⟩', hint: '同一張圖，只把 ⟨B4, B3⟩ 和 ⟨B2, B3⟩ 兩行對調。這次 B3 接在 B4 後面，⟨B2, B3⟩ 接不上，最後是 ⟨B0, B1, B2⟩ 和 ⟨B5, B4, B3⟩，排版 B0 B1 B2 B5 B4 B3。fall-through 承接的次數和書上的順序一樣是 20。',
+    src: `B0 → B1 7
+B4 → B3 5
+B2 → B3 5
+B1 → B2 5
+B0 → B5 3
+B5 → B4 3
+B1 → B4 2` },
+  { title: '書上的最終示例', hint: '同節末尾的第二個例子。熱路徑 ⟨B0, B2, B3⟩ 接起來之後，B1 和 B4 都留在退化鏈，但優先序不同：⟨B4⟩ 是 2，⟨B1⟩ 是 4。排版時兩條都在 worklist 裡，先放優先序低的 B4，所以是 B0 B2 B3 B4 B1。',
+    src: `B2 → B3 8
+B0 → B2 7
+B0 → B4 2
+B4 → B3 2
+B0 → B1 1
+B1 → B2 1` },
+  { title: '迴圈裡有一條少走的分支', hint: '一個繞 99 圈的迴圈，身體裡有一條只走 3 次的分支 B4。back edge ⟨B5, B1⟩ 第二個被處理而且接上了，所以 B5 排在 header B1 前面；⟨B3, B5⟩ 會把鏈接成圈，當作接不上。入口 B0 自己一條鏈，優先序一直是 E。',
+    src: `B0 → B1 1
+B1 → B2 100
+B2 → B3 97
+B2 → B4 3
+B3 → B5 97
+B4 → B5 3
+B5 → B1 99
+B5 → B6 1` },
+];
+
+const LINE = {
+  H0: 'E ← |edges|',
+  H1: 'for each block b do',
+  H2: '  create a degenerate chain, d, for b',
+  H3: '  priority(d) ← E',
+  H4: 'P ← 0',
+  H5: 'for each CFG edge ⟨x,y⟩, x ≠ y,\n    in decreasing frequency order do',
+  H6: '  if x is the tail of chain a and\n     y is the head of chain b then',
+  H7: '    t ← priority(a)',
+  H8: '    append b onto a',
+  H9: '    priority(a) ←\n      min(t, priority(b), P++)',
+  H10: '  else priority(b) ← min(priority(b), P++)',
+  L0: 't ← chain headed by\n    the CFG entry node',
+  L1: 'WorkList ← { (t, priority(t)) }',
+  L2: 'while (WorkList ≠ ∅) do',
+  L3: '  remove a chain c of lowest priority\n    from WorkList',
+  L4: '  for each block x in c in chain order do',
+  L5: '    place x at the end of\n      the executable code',
+  L6: '  for each block x in c do',
+  L7: '    for each edge ⟨x,y⟩\n        where y is unplaced do',
+  L8: '      t ← chain containing y',
+  L9: '      if (t, priority(t)) ∉ WorkList then',
+  L10: '        WorkList ← WorkList ∪\n          { (t, priority(t)) }',
+};
+const PSEUDO = { chain: ['H0', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7', 'H8', 'H9', 'H10'], lay: ['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10'] };
+
+// ---- parser: one edge per line, "X → Y n"; optional "entry X" ----
+function parse(src) {
+  const errors = [], edges = [], names = [], keys = new Set();
+  let entryName = null;
+  src.split('\n').forEach((raw, li) => {
+    const line = raw.trim();
+    if (!line || /^(\/\/|#)/.test(line)) return;
+    let m = line.match(/^(?:entry|入口)\s+([A-Za-z_]\w*)$/i);
+    if (m) { entryName = m[1]; return; }
+    m = line.match(/^([A-Za-z_]\w*)\s*(?:→|->|=>|,)?\s*([A-Za-z_]\w*)\s*[:,]?\s*(\d+)$/);
+    if (!m) { errors.push(`第 ${li + 1} 行看不懂：「${line}」。格式是 B0 → B1 7。`); return; }
+    const [, x, y, f] = m;
+    if (keys.has(x + '>' + y)) { errors.push(`第 ${li + 1} 行：${x} → ${y} 已經列過了。`); return; }
+    keys.add(x + '>' + y);
+    [x, y].forEach(n => { if (!names.includes(n)) names.push(n); });
+    edges.push({ x, y, f: +f, key: x + '>' + y, li });
+  });
+  if (!edges.length && !errors.length) errors.push('至少要有一條邊。');
+  names.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+  const blocks = names.map((name, idx) => ({ name, idx, succs: [], preds: [], out: [] }));
+  const byName = new Map(blocks.map(b => [b.name, b]));
+  edges.forEach(e => { byName.get(e.x).succs.push(e.y); byName.get(e.y).preds.push(e.x); byName.get(e.x).out.push(e); });
+  let entry = null;
+  if (entryName) { entry = byName.get(entryName); if (!entry) errors.push(`entry 指定的 ${entryName} 不在任何一條邊上。`); }
+  else entry = blocks.find(b => !b.preds.some(p => p !== b.name)) || blocks[0];
+  if (entry) {
+    const seen = new Set();
+    const dfs = u => { if (seen.has(u)) return; seen.add(u); byName.get(u).succs.forEach(dfs); };
+    dfs(entry.name);
+    blocks.forEach(b => { b.reach = seen.has(b.name); });
+  }
+  const sorted = edges.filter(e => e.x !== e.y).map((e, i) => ({ e, i })).sort((a, b) => b.e.f - a.e.f || a.i - b.i).map(o => o.e);
+  return { errors, edges, blocks, byName, names, entry, sorted };
+}
+
+// ---- layout: longest-path layering from the entry, back edges aside ----
+const CH = 7, NH = 24, PX = 9, GX = 26, GY = 38;
+function layoutGraph(P) {
+  const blocks = P.blocks, byName = P.byName, entry = P.entry.name;
+  const size = new Map(blocks.map(b => [b.name, { w: Math.max(44, b.name.length * CH + 2 * PX + 16 + (b === P.entry ? 30 : 0)), h: NH }]));
+  const state = new Map(), back = new Set(), post = [];
+  const dfs = u => { state.set(u, 1); byName.get(u).succs.forEach(v => { if (state.get(v) === 1) back.add(u + '>' + v); else if (!state.has(v)) dfs(v); }); state.set(u, 2); post.push(u); };
+  dfs(entry);
+  const topo = post.reverse();
+  const level = new Map(topo.map(n => [n, 0]));
+  topo.forEach(u => byName.get(u).succs.forEach(v => { if (!back.has(u + '>' + v)) level.set(v, Math.max(level.get(v), level.get(u) + 1)); }));
+  const maxL = Math.max(...level.values());
+  blocks.filter(b => !level.has(b.name)).forEach(b => level.set(b.name, maxL + 1));
+  const rows = [];
+  blocks.forEach(b => { const l = level.get(b.name); (rows[l] ||= []).push(b.name); });
+  const pos = new Map();
+  let y = 0, width = 0;
+  rows.forEach((row, l) => {
+    if (l > 0) {
+      const bary = n => { const ps = byName.get(n).preds.filter(p => pos.has(p)); return ps.length ? ps.reduce((a, p) => a + pos.get(p).cx, 0) / ps.length : 0; };
+      row.sort((a, b) => bary(a) - bary(b));
+    }
+    const total = row.reduce((a, n) => a + size.get(n).w, 0) + (row.length - 1) * GX;
+    let x = -total / 2;
+    row.forEach(n => { const sz = size.get(n); pos.set(n, { x, y, w: sz.w, h: sz.h, cx: x + sz.w / 2, l }); x += sz.w + GX; });
+    width = Math.max(width, total);
+    y += NH + GY;
+  });
+  return { pos, back, width, height: y - GY };
+}
+function edgeGeom(L, cx, top, x, y) {
+  const a = L.pos.get(x), c = L.pos.get(y);
+  const ax = cx + a.x, ay = top + a.y, bx = cx + c.x, by = top + c.y;
+  const bez = (p0, p1, p2, p3, t = 0.5) => { const u = 1 - t, k = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t]; return { d: `M ${p0[0]} ${p0[1]} C ${p1[0]} ${p1[1]}, ${p2[0]} ${p2[1]}, ${p3[0]} ${p3[1]}`, lx: k[0] * p0[0] + k[1] * p1[0] + k[2] * p2[0] + k[3] * p3[0], ly: k[0] * p0[1] + k[1] * p1[1] + k[2] * p2[1] + k[3] * p3[1] }; };
+  if (x === y) return bez([ax + a.w, ay + 5], [ax + a.w + 32, ay - 10], [ax + a.w + 32, ay + a.h + 10], [ax + a.w, ay + a.h - 5]);
+  if (c.l <= a.l) { const k = 30 + 10 * (a.l - c.l); return bez([ax + a.w, ay + a.h / 2], [ax + a.w + k, ay + a.h / 2], [bx + c.w + k, by + c.h / 2], [bx + c.w, by + c.h / 2]); }
+  if (c.l === a.l + 1) return { d: `M ${a.cx + cx} ${ay + a.h} L ${c.cx + cx} ${by}`, lx: (a.cx + c.cx) / 2 + cx + 9, ly: (ay + a.h + by) / 2 };
+  const span = c.l - a.l, dx = Math.abs(c.cx - a.cx) < 1 ? 0 : (c.cx - a.cx < 0 ? -1 : 1) * 12 * span;
+  return bez([a.cx + cx, ay + a.h], [a.cx + cx + dx, ay + a.h + 26], [c.cx + cx + dx, by - 26], [c.cx + cx, by], 0.5 / span);
+}
+
+// ---- run both phases: one step per edge (chain), two steps per chain (layout) ----
+function buildTrace(P) {
+  const E = P.edges.length, entry = P.entry.name;
+  const steps = [], hist = [], lhist = [];
+  let chains = P.blocks.map((b, i) => ({ id: i, blocks: [b.name], pr: E }));
+  const chainOf = new Map(chains.map(c => [c.blocks[0], c]));
+  let Pc = 0;
+  const merged = [], done = [];
+  const pr = v => v >= E ? 'E' : String(v);
+  const ch = c => `⟨${c.blocks.join(', ')}⟩`;
+  const snapChains = () => chains.map(c => ({ id: c.id, blocks: c.blocks.slice(), pr: c.pr }));
+  const snap = (proc, lines, x) => steps.push(Object.assign({
+    proc, lines, chains: snapChains(), P: Pc, E, hist: hist.slice(), lhist: lhist.slice(), merged: merged.slice(), done: done.slice(),
+    edge: null, hot: null, placed: [], work: [], cur: null, added: [], scan: [], final: null, say: '', warn: '', note: '', chV: [],
+  }, x));
+
+  hist.push({ edge: null, chains: snapChains(), P: 0 });
+  snap('chain', ['H0', 'H1', 'H2', 'H3', 'H4'], { chV: ['E', 'P'], say: `E = ${E}，${P.blocks.length} 個 block 各自一條退化鏈，優先序都是 E。P 從 0 開始。接下來把 ${P.sorted.length} 條邊照次數從高到低處理${P.edges.length > P.sorted.length ? '（自己指自己的邊跳過）' : ''}。` });
+
+  P.sorted.forEach(e => {
+    const a = chainOf.get(e.x), b = chainOf.get(e.y);
+    const xTail = a.blocks[a.blocks.length - 1] === e.x, yHead = b.blocks[0] === e.y;
+    const yEntry = e.y === entry;
+    const head = `⟨${e.x}, ${e.y}⟩ 次數 ${e.f}：`;
+    let lines, say, hot, note = '';
+    if (xTail && yHead && a !== b && !yEntry) {
+      const t = a.pr, pb = b.pr, pc = Pc++;
+      const oldA = ch(a), oldB = ch(b);
+      a.blocks.push(...b.blocks);
+      b.blocks.forEach(n => chainOf.set(n, a));
+      chains = chains.filter(c => c !== b);
+      a.pr = Math.min(t, pb, pc);
+      merged.push(e.key);
+      lines = ['H5', 'H6', 'H7', 'H8', 'H9']; hot = a.id;
+      say = `${head}${e.x} 是 ${oldA} 的尾，${e.y} 是 ${oldB} 的頭，把後者接上去得到 ${ch(a)}，${e.x} → ${e.y} 注定是 fall-through。優先序 min(${pr(t)}, ${pr(pb)}, ${pc}) = ${pr(a.pr)}，P 變成 ${Pc}。`;
+    } else {
+      const pb = b.pr, pc = Pc++;
+      b.pr = Math.min(pb, pc);
+      lines = ['H5', 'H6', 'H10']; hot = b.id;
+      let why;
+      if (yEntry) why = `${e.y} 是入口，必須留在程式碼的最前面，不能接在 ${e.x} 後面`;
+      else if (a === b) why = `${e.x} 和 ${e.y} 已經在同一條鏈 ${ch(a)} 裡，${e.y} 是頭、${e.x} 是尾，接上去會變成一個圈`;
+      else if (!xTail) why = `${e.x} 不是 ${ch(a)} 的尾，它後面已經接了 ${a.blocks[a.blocks.indexOf(e.x) + 1]}`;
+      else why = `${e.y} 不是 ${ch(b)} 的頭，它前面已經是 ${b.blocks[b.blocks.indexOf(e.y) - 1]}`;
+      say = `${head}${why}，所以不接。包含 ${e.y} 的鏈 ${ch(b)} 的優先序 min(${pr(pb)}, ${pc}) = ${pr(b.pr)}${b.pr === pb ? '，沒變' : `，從 ${pr(pb)} 降下來`}。P 變成 ${Pc}。`;
+    }
+    done.push(e.key);
+    hist.push({ edge: e, chains: snapChains(), P: Pc, hot });
+    snap('chain', lines, { edge: e, hot, say, note, chV: ['P', 'edge'] });
+  });
+
+  // phase b: layout
+  const placed = [], placedSet = new Set();
+  const work = [];
+  const entryChain = chainOf.get(entry);
+  work.push(entryChain);
+  const workIds = () => work.map(c => c.id);
+  const fmtWork = () => work.length ? work.map(c => `(${ch(c)}, ${pr(c.pr)})`).join('、') : '∅';
+  snap('lay', ['L0', 'L1'], { work: workIds(), hot: entryChain.id, chV: ['work'],
+    say: `建鏈結束，${chains.length} 條鏈。排版從入口 ${entry} 所在的鏈 ${ch(entryChain)} 開始，WorkList 先只放它。`,
+    note: entryChain.pr >= E ? `它的優先序還是 E，因為沒有邊指向 ${entry}；入口的鏈反正第一個放，優先序只對之後進 WorkList 的鏈有意義。` : '' });
+  while (work.length) {
+    let ci = 0;
+    work.forEach((c, i) => { if (c.pr < work[ci].pr) ci = i; });
+    const tie = work.filter((c, i) => i !== ci && c.pr === work[ci].pr);
+    const c = work.splice(ci, 1)[0];
+    c.blocks.forEach(n => { placed.push(n); placedSet.add(n); });
+    snap('lay', ['L2', 'L3', 'L4', 'L5'], { cur: c.id, placed: placed.slice(), work: workIds(), chV: ['c', 'placed'],
+      say: `WorkList 裡優先序最低的是 ${ch(c)}（${pr(c.pr)}${tie.length ? `，和 ${tie.map(ch).join('、')} 一樣，取先進來的` : ''}），取出來，照鏈的順序把 ${c.blocks.join('、')} 接在程式碼後面。` });
+    const added = [], scan = [], parts = [];
+    c.blocks.forEach(x => P.byName.get(x).out.forEach(e => {
+      if (placedSet.has(e.y)) return;
+      const t = chainOf.get(e.y);
+      scan.push(e.key);
+      if (work.includes(t)) parts.push(`${e.x} → ${e.y}：${e.y} 在 ${ch(t)} 裡，已經在 WorkList`);
+      else { work.push(t); added.push(t.id); parts.push(`${e.x} → ${e.y}：${e.y} 還沒放，它在 ${ch(t)} 裡，優先序 ${pr(t.pr)}，加進 WorkList`); }
+    }));
+    lhist.push({ chain: { id: c.id, blocks: c.blocks.slice(), pr: c.pr }, placed: placed.slice(), work: work.map(w => ({ blocks: w.blocks.slice(), pr: w.pr })) });
+    snap('lay', ['L6', 'L7', 'L8', 'L9', 'L10'], { cur: c.id, placed: placed.slice(), work: workIds(), added, scan, chV: added.length ? ['work'] : [],
+      say: parts.length ? `掃這條鏈每個 block 出去的邊。${parts.join('；')}。` : `這條鏈出去的邊都指向已經放好的 block，WorkList 沒有新東西。` });
+  }
+  // leftovers (unreachable blocks) and the fall-through tally
+  const left = chains.filter(c => !placedSet.has(c.blocks[0])).sort((a, b) => a.pr - b.pr);
+  let warn = '';
+  if (left.length) {
+    left.forEach(c => c.blocks.forEach(n => { placed.push(n); placedSet.add(n); }));
+    warn = `${left.map(c => c.blocks.join('、')).join('、')} 從入口走不到，WorkList 永遠碰不到它們。這裡補在最後面；真的編譯器會直接刪掉。`;
+  }
+  const pairs = [];
+  let ft = 0;
+  for (let i = 0; i + 1 < placed.length; i++) {
+    const e = P.edges.find(e => e.x === placed[i] && e.y === placed[i + 1]);
+    pairs.push({ x: placed[i], y: placed[i + 1], f: e ? e.f : null });
+    if (e) ft += e.f;
+  }
+  const total = P.edges.filter(e => e.x !== e.y).reduce((a, e) => a + e.f, 0);
+  const taken = P.edges.filter(e => e.x !== e.y && !pairs.some(p => p.x === e.x && p.y === e.y));
+  snap('lay', [], { placed: placed.slice(), final: { pairs, ft, total, taken }, warn, chV: ['placed'],
+    say: `WorkList 空了。佈局是 ${placed.join(' ')}。相鄰的 block 之間有邊的就是 fall-through，承接了 ${ft} 次執行，全部邊的次數是 ${total}${taken.length ? `，剩下 ${total - ft} 次要跳` : ''}。` });
+  return steps;
+}
+
+// ---- state and rendering ----
+const INIT = { proc: null, lines: [], chains: [], hist: [], lhist: [], merged: [], done: [], edge: null, hot: null, placed: [], work: [], cur: null, added: [], scan: [], final: null, say: '', warn: '', note: '', chV: [], P: 0, E: 0 };
+const state = { pi: 0, parsed: null, layout: null, trace: [], k: 0 };
+const total = () => state.trace.length ? state.trace.length - 1 : 0;
+const cur = () => state.trace[state.k] || INIT;
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
+const prS = (v, E) => v >= E ? 'E' : String(v);
+const fmtChain = (c, E, hot) => `<span class="chn${hot ? ' new' : ''}">⟨${c.blocks.map(esc).join(', ')}⟩<sub>${prS(c.pr, E)}</sub></span>`;
+
+function rebuild() {
+  state.parsed = parse($('src').value);
+  const ok = !state.parsed.errors.length;
+  state.layout = ok ? layoutGraph(state.parsed) : null;
+  state.trace = ok ? buildTrace(state.parsed) : [];
+  state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
+}
+
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.pi = i; $('src').value = c.src; rebuild(); renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderPseudoShell() {
+  $('pseudo').innerHTML = ['chain', 'lay'].map(proc =>
+    `<span class="proc" data-p="${proc}">` + PSEUDO[proc].map(id => `<span class="pl" data-l="${id}">${esc(LINE[id])}</span>`).join('') + '</span>').join('');
+}
+
+function renderGraph(s) {
+  const P = state.parsed, L = state.layout;
+  if (!L) { $('graph').innerHTML = ''; $('nlabel').textContent = ''; return; }
+  $('nlabel').textContent = `${P.blocks.length} 個 block · ${P.edges.length} 條邊`;
+  const M = 48, W = L.width + 2 * M, H = L.height + 24, cx = W / 2, top = 12;
+  const merged = new Set(s.merged), done = new Set(s.done), scan = new Set(s.scan), placed = new Set(s.placed);
+  const curChain = s.cur !== null ? s.chains.find(c => c.id === s.cur) : null;
+  const curBlocks = new Set(curChain ? curChain.blocks : []);
+  let out = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="控制流程圖，邊上是執行次數">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker>
+      <marker id="arr-chain" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--hit)"/></marker>
+      <marker id="arr-skip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+    </defs>`;
+  let labels = '';
+  P.edges.forEach(e => {
+    const g = edgeGeom(L, cx, top, e.x, e.y);
+    const isCur = s.edge && s.edge.key === e.key;
+    const cls = e.x === e.y ? 'self' : isCur ? 'cur' : merged.has(e.key) ? 'chain' : scan.has(e.key) ? 'scan' : done.has(e.key) ? 'skip' : '';
+    const mk = cls === 'chain' ? 'arr-chain' : (cls === 'skip' || cls === 'self') ? 'arr-skip' : 'arr';
+    out += `<path class="edge ${cls}" d="${g.d}" marker-end="url(#${mk})"/>`;
+    labels += `<text class="w ${cls}" x="${g.lx}" y="${g.ly + 4}" text-anchor="middle">${e.f}</text>`;
+  });
+  P.blocks.forEach(b => {
+    const n = b.name, p = L.pos.get(n), x = cx + p.x, y = top + p.y;
+    const cls = 'node' + (curBlocks.has(n) && s.proc === 'lay' && !s.final ? ' cur' : placed.has(n) ? ' placed' : '') + (b.reach ? '' : ' unreach');
+    const idx = s.placed.indexOf(n);
+    out += `<g class="${cls}"><rect x="${x}" y="${y}" width="${p.w}" height="${p.h}" rx="4"/><text class="name" x="${x + PX}" y="${y + 16}">${esc(n)}${b === P.entry ? '<tspan class="tag"> 入口</tspan>' : ''}${idx >= 0 ? `<tspan class="tag"> ${idx}</tspan>` : ''}</text></g>`;
+  });
+  $('graph').innerHTML = out + labels + '</svg>';
+}
+
+function renderPseudo(s) {
+  document.querySelectorAll('#pseudo .pl').forEach(el => el.classList.toggle('on', s.lines.includes(el.dataset.l)));
+  document.querySelectorAll('#pseudo .proc').forEach(el => el.classList.toggle('active', s.proc === null || el.dataset.p === s.proc));
+  $('phase').textContent = s.proc === 'chain' ? '建鏈' : s.proc === 'lay' ? '排版' : '';
+}
+
+function renderVars(s) {
+  const ch = new Set(s.chV);
+  const v = (key, name, val) => `<span class="var${ch.has(key) ? ' chg' : ''}"><span class="k">${name}</span><span class="v">${val ?? '–'}</span></span>`;
+  const curChain = s.cur !== null ? s.chains.find(c => c.id === s.cur) : null;
+  $('vars').innerHTML = s.proc === 'lay'
+    ? v('c', 'c', curChain ? `⟨${curChain.blocks.join(', ')}⟩` : '–') + v('work', 'WorkList 裡的鏈', s.work.length) + v('placed', '已置放', `${s.placed.length} / ${state.parsed.blocks.length}`)
+    : v('E', 'E', s.proc ? s.E : '–') + v('P', 'P', s.proc ? s.P : '–') + v('edge', '⟨x, y⟩', s.edge ? `⟨${s.edge.x}, ${s.edge.y}⟩` : '–') + v('edge', '次數', s.edge ? s.edge.f : '–');
+}
+
+function renderChains(s) {
+  const P = state.parsed;
+  if (!P || P.errors.length) { $('chains').innerHTML = ''; $('lay').innerHTML = ''; $('final').innerHTML = ''; $('sstat').textContent = ''; return; }
+  const E = s.E;
+  $('sstat').textContent = s.proc === 'chain' ? `${s.chains.length} 條鏈` : s.proc === 'lay' ? `已置放 ${s.placed.length} 個 block` : '';
+  // chain table in the format of the book's figure 8-18b
+  let rows = '';
+  s.hist.forEach((h, i) => {
+    const isCur = s.proc === 'chain' && i === s.hist.length - 1;
+    rows += `<tr class="${isCur ? 'cur' : ''}"><td class="bn">${h.edge ? `⟨${esc(h.edge.x)}, ${esc(h.edge.y)}⟩` : '—'}</td><td class="cs">${h.chains.map(c => fmtChain(c, E, isCur && c.id === h.hot)).join(', ')}</td><td>${h.P}</td></tr>`;
+  });
+  $('chains').innerHTML = `<h3>鏈的集合（圖 8-18b 的格式）</h3><table class="tb"><thead><tr><th>邊</th><th>鏈集合</th><th>P</th></tr></thead><tbody>${rows}</tbody></table>`;
+  // layout state and trace
+  if (s.proc !== 'lay') { $('lay').innerHTML = ''; $('final').innerHTML = ''; return; }
+  const added = new Set(s.added);
+  const workChains = s.work.map(id => s.chains.find(c => c.id === id));
+  const curChain = s.cur !== null ? s.chains.find(c => c.id === s.cur) : null;
+  const seq = s.placed.length ? s.placed.map(n => `<span class="${curChain && curChain.blocks.includes(n) && !s.final ? 'cur' : ''}">${esc(n)}</span>`).join(' ') : '<span class="empty">還沒放任何 block</span>';
+  let lay = `<h3>置放</h3><div class="line"><span class="m">WorkList</span><span>${workChains.length ? workChains.map(c => `(${fmtChain(c, E, added.has(c.id))}, ${prS(c.pr, E)})`).join('、') : '∅'}</span></div><div class="line seq"><span class="m">程式碼</span><span>${seq}</span></div>`;
+  if (s.lhist.length) {
+    lay += '<h3 style="margin-top:0.5rem">每一輪</h3>' + s.lhist.map(h => `<div class="line"><span class="m">取出</span><span>${fmtChain(h.chain, E)}</span><span class="dim">→ 程式碼</span><span>${h.placed.map(esc).join(' ')}</span></div><div class="line"><span class="m"></span><span class="dim">WorkList</span><span>${h.work.length ? h.work.map(w => fmtChain(w, E)).join(', ') : '∅'}</span></div>`).join('');
+  }
+  $('lay').innerHTML = lay;
+  if (!s.final) { $('final').innerHTML = ''; return; }
+  const f = s.final;
+  let fin = '<h3>佈局：相鄰的 block 之間有沒有邊</h3>';
+  f.pairs.forEach(p => { fin += `<div class="line"><span class="m">${esc(p.x)}</span><span>→ ${esc(p.y)}</span>${p.f === null ? '<span class="dim">沒有邊，不算</span>' : `<span class="new">${p.f}</span>`}</div>`; });
+  fin += `<div class="line sum"><span class="m">合計</span><span>fall-through ${f.ft} / ${f.total}</span></div>`;
+  if (f.taken.length) fin += `<div class="line"><span class="m">要跳</span><span class="dim">${f.taken.map(e => `${esc(e.x)} → ${esc(e.y)} ${e.f}`).join('、')}</span></div>`;
+  $('final').innerHTML = fin;
+}
+
+function renderAll() {
+  const bad = state.parsed.errors.length > 0;
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && $('src').value === PRESETS[i].src));
+  $('errs').innerHTML = state.parsed.errors.map(e => `<span>${esc(e)}</span>`).join('');
+  $('phint').textContent = $('src').value === PRESETS[state.pi].src ? PRESETS[state.pi].hint : '';
+  $('btn-lay').disabled = bad;
+  const s = bad ? INIT : cur();
+  if (bad) { $('graph').innerHTML = ''; $('nlabel').textContent = ''; }
+  else renderGraph(s);
+  renderPseudo(s);
+  renderVars(s);
+  renderChains(bad ? INIT : s);
+  const say = $('say');
+  if (bad) say.textContent = '輸入有錯，修好之後再開始。';
+  else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '') + (s.note ? `<span class="note">${s.note}</span>` : '');
+}
+
+$('src').addEventListener('input', () => { rebuild(); renderAll(); });
+$('btn-lay').addEventListener('click', () => { const idx = state.trace.findIndex(s => s.proc === 'lay'); if (idx >= 0) stepper.set(idx); });
+
+renderPresets();
+renderPseudoShell();
+$('src').value = PRESETS[0].src;
+rebuild();
+renderAll();
+</script>
+</body>
+</html>

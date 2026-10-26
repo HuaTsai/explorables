@@ -64,6 +64,33 @@ a.entry:hover h2 { text-decoration: underline; text-decoration-thickness: 2px; t
       </a>
     </li>
     <li>
+      <a class="entry" href="liveout/">
+        <div class="text">
+          <h2>LiveOut 活躍變數分析</h2>
+          <p>一步步跑全局活躍變數分析，看 UEVar 和 VarKill 怎麼從每個 block 收集、LiveOut 方程式怎麼從空集合反覆代入到不動點、走訪順序怎麼影響圈數，最後用入口的 LiveOut 找出可能沒初始化就被用到的變數。可以自己改程式碼和 block 的順序。</p>
+        </div>
+        <span class="ch">Ch. 8</span>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="code-placement/">
+        <div class="text">
+          <h2>程式碼放置：把 hot path 排成 fall-through</h2>
+          <p>一步步跑全局程式碼放置，看邊的執行次數怎麼把 block 貪婪地串成鏈、優先序怎麼算、worklist 怎麼把鏈排成一列讓最常走的邊不用跳，以及次數相同時處理順序怎麼改變結果。可以自己改邊和次數。</p>
+        </div>
+        <span class="ch">Ch. 8</span>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="procedure-placement/">
+        <div class="text">
+          <h2>過程放置：在 call graph 上縮邊</h2>
+          <p>一步步跑過程放置，看 call multi-graph 怎麼合併平行邊、priority queue 怎麼每次挑呼叫次數最多的邊把 callee 整個併進 caller、合併後的權重怎麼改變後面的選擇，以及它和 block 的放置哪裡不同。可以自己改呼叫邊和次數。</p>
+        </div>
+        <span class="ch">Ch. 8</span>
+      </a>
+    </li>
+    <li>
       <a class="entry" href="tree-balance/">
         <div class="text">
           <h2>樹高平衡</h2>

@@ -254,7 +254,7 @@ SVN(Block, Table)
   <section class="prose">
     <h2>結語</h2>
     <p>EBB 是 CFG 裡「只能從根進來」的一棵樹，樹上每條路徑執行起來都像一條 block。SVN 就是 LVN 加一串 scoped hash table：進入 block 開一張表接在前驅的表外面，離開時整張丟掉，任何時刻活著的那串表正好是從 EBB 入口到目前 block 的路徑。只有一個前驅的後繼帶著表遞迴下去，join point 當作新 EBB 的入口丟進 worklist、從空表開始。「丟掉表就等於撤銷」這件事要靠 SSA 才成立，名字能重複定義的話，新值會寫進別人的表，free 不乾淨。</p>
-    <p>join point 從空表開始是浪費的：B<sub>5</sub> 的兩個前驅都經過 B<sub>3</sub>，B<sub>3</sub> 表裡的東西在 B<sub>5</sub> 其實都還成立。把「唯一前驅」換成「<span class="term" data-def="從入口到 B 的每一條路徑都經過 D，就說 D 支配（dominate）B。B 的所有前驅都經過的最近那個 block 叫 B 的 immediate dominator。">dominator</span>」，就是書上 8.5.2 節的 dominator-based value numbering，需要先算出第九章的 dominator 樹；再往上是整個 CFG 的 global value numbering。同一章末的復習題問把<a href="../tree-balance/">樹高平衡</a>推到 superlocal 範圍會遇到什麼：沿著 ⟨B<sub>0</sub>, B<sub>3</sub>, B<sub>4</sub>⟩ 做完之後要處理 ⟨B<sub>0</sub>, B<sub>3</sub>, B<sub>6</sub>⟩，B<sub>3</sub> 裡已經被改寫過的樹要怎麼復原，和這一頁的「前綴要重用」是同一個問題，但樹的改寫比 hash 表難撤銷。</p>
+    <p>join point 從空表開始是浪費的：B<sub>5</sub> 的兩個前驅都經過 B<sub>3</sub>，B<sub>3</sub> 表裡的東西在 B<sub>5</sub> 其實都還成立。把「唯一前驅」換成「<span class="term" data-def="從入口到 B 的每一條路徑都經過 D，就說 D 支配（dominate）B。B 的所有前驅都經過的最近那個 block 叫 B 的 immediate dominator。">dominator</span>」，就是書上 8.5.2 節的 dominator-based value numbering，需要先算出第九章的 dominator 樹；再往上是整個 CFG 的 global value numbering。要對整張圖推理而不是沿著路徑走，得換成列方程式解不動點的做法，<a href="../liveout/">LiveOut 頁</a>用活躍變數示範。同一章末的復習題問把<a href="../tree-balance/">樹高平衡</a>推到 superlocal 範圍會遇到什麼：沿著 ⟨B<sub>0</sub>, B<sub>3</sub>, B<sub>4</sub>⟩ 做完之後要處理 ⟨B<sub>0</sub>, B<sub>3</sub>, B<sub>6</sub>⟩，B<sub>3</sub> 裡已經被改寫過的樹要怎麼復原，和這一頁的「前綴要重用」是同一個問題，但樹的改寫比 hash 表難撤銷。</p>
     <p>這一頁把 φ 的結果當成新值，沒有比較它的參數；WorkList 的取出順序書上沒規定，這裡先進先出；LVN 用的是基本版，沒有交換律、常數摺疊和恆等式，那些在 <a href="../lvn/">LVN 頁</a>，接上來的方式一樣。load 和 store、跨 block 之後的死碼刪除，都不在這裡。</p>
   </section>
 

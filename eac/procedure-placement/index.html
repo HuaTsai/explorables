@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>過程放置：在 call graph 上縮邊</title>
+<meta name="description" content="把 Engineering a Compiler 第八章的過程放置一步步跑給你看：call multi-graph 怎麼合併平行邊、priority queue 怎麼每次挑呼叫次數最多的邊、被呼叫的過程怎麼整個併進呼叫它的過程、合併後的權重怎麼改變後面的選擇，以及它和 block 的放置哪裡不同。可以自己改呼叫邊和次數。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* 這一頁特有的：帶次數的 call graph、list(x) 的表、Q 和每一輪的紀錄。 */
+textarea { min-height: 12rem; font-size: 0.82rem; }
+.work { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.25fr); }
+
+/* call graph：節點是過程，邊上標呼叫次數 */
+.graph { padding: 0.6rem 0.5rem; background: var(--bg); display: flex; justify-content: flex-start; align-items: flex-start; flex: 1; overflow-x: auto; }
+.graph svg { width: 100%; height: auto; max-width: 20rem; margin: 0 auto; font-family: var(--font-mono); overflow: visible; }
+.graph .node rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.graph .node.x rect { fill: var(--mark); stroke: var(--ink); stroke-width: 1.6; }
+.graph .node.y rect { stroke: var(--ink); stroke-width: 1.8; stroke-dasharray: 4 2; }
+.graph .node.placed rect { fill: var(--hit-soft); stroke: var(--hit); stroke-width: 1.6; }
+.graph .node.ghost { opacity: 0.3; }
+.graph .node.ghost rect { stroke-dasharray: 3 2; }
+.graph text { fill: var(--ink); font-size: 11px; }
+.graph text.name { font-weight: 600; }
+.graph tspan.tag { fill: var(--muted); font-weight: 400; }
+.graph .edge { fill: none; stroke: var(--ink); stroke-width: 1.3; }
+.graph .edge.cur { stroke: var(--ink); stroke-width: 2.8; }
+.graph .edge.new { stroke: var(--hit); stroke-width: 2.6; }
+.graph .edge.gone, .graph .edge.self { stroke: var(--muted); stroke-dasharray: 4 3; }
+.graph text.w { paint-order: stroke; stroke: var(--bg); stroke-width: 3px; font-size: 10.5px; }
+.graph text.w.new { fill: var(--hit); font-weight: 600; }
+.graph text.w.gone, .graph text.w.self { fill: var(--muted); }
+.graph text.w.cur { font-weight: 600; stroke: var(--mark); stroke-width: 5px; }
+
+/* list(x) 的表、Q、每一輪、最後的順序 */
+.lists, .queue, .log, .final { padding: 0.5rem 0.6rem; background: var(--bg); font-family: var(--font-mono); font-size: 0.76rem; overflow-x: auto; }
+.queue, .log, .final { border-top: 1px solid var(--line); }
+.final { flex: 1; }
+.lists h3, .queue h3, .log h3, .final h3 { margin: 0 0 0.35rem; font-family: var(--font-body); font-size: 0.72rem; font-weight: 700; color: var(--muted); }
+table.tb { border-collapse: collapse; width: 100%; }
+.tb th, .tb td { padding: 0.14rem 0.5rem; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: baseline; }
+.tb th { font-family: var(--font-body); font-size: 0.68rem; color: var(--muted); font-weight: 700; }
+.tb tr:last-child td { border-bottom: 0; }
+.tb td.bn, .tb th.bn { font-weight: 600; color: var(--ink); font-family: var(--font-mono); }
+.tb tr.cur td { background: var(--mark); }
+.new { color: var(--hit); font-weight: 600; }
+.dim { color: var(--muted); }
+.lists sub, .queue sub, .log sub, .final sub { font-size: 0.68em; }
+.line { display: flex; flex-wrap: wrap; gap: 0.3rem 0.5rem; padding: 0.1rem 0; align-items: baseline; }
+.line .m { font-weight: 600; min-width: 3.6em; color: var(--muted); font-family: var(--font-body); font-size: 0.72rem; }
+.final .line .m { min-width: 5em; }
+.empty { color: var(--muted); font-family: var(--font-body); }
+.queue .e { white-space: nowrap; }
+.queue .e.cur { background: var(--mark); padding: 0 0.25em; border-radius: 3px; font-weight: 600; }
+.queue .e.gone { color: var(--muted); text-decoration: line-through; }
+.final .line.sum { border-top: 1px solid var(--line); margin-top: 0.2rem; padding-top: 0.3rem; }
+.final .seq span.sep { color: var(--muted); padding: 0 0.3em; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Engineering a Compiler 筆記</a>
+    <h1>過程放置：在 call graph 上縮邊</h1>
+    <p class="lead"><a href="../code-placement/">上一頁</a>把一個過程裡的 block 排成一列，讓最常走的邊變成 fall-through。同樣的問題放大到整個程式：可執行檔裡的過程也要排成一列，誰放在誰旁邊是編譯器和 linker 可以選的。call 和 return 永遠是跳躍，這一層省不了跳躍；省的是 cache 和分頁：常常互相呼叫的過程如果放在一起，會落在同一批 cache line、同一頁，指令 cache 的衝突和 page fault 都變少。Engineering a Compiler 8.7.2 的做法是在 call graph 上貪婪地縮邊：每次挑呼叫次數最多的邊 <span class="mono">(x, y)</span>，把 y 整個併進 x，直到圖縮成一個節點，合併的順序就是過程的順序。這一頁照圖 8-22 的虛擬碼一步步跑，可以自己改呼叫邊和次數。</p>
+  </header>
+
+  <section class="prose">
+    <h2>過程放在一起省的是什麼</h2>
+    <p>書上的原理只有一句：如果過程 p 呼叫 q，而且編譯器把它們放在記憶體裡相鄰的位置，那麼只要 size(p) + size(q) 不超過指令 cache 的大小，它們就不會在 cache 裡互相衝突。相鄰也提高了 p 和 q 落在同一個虛擬記憶體分頁的機會，<span class="term" data-def="程式在一段時間內真的碰到的那些分頁。working set。越小，需要同時留在實體記憶體裡的分頁越少，page fault 越少。">working set</span> 變小，page fault 變少。所以目標是：讓「caller 和 callee 放在相鄰位置」的呼叫次數最多。<span class="sn">書上補了一句：虛擬位址到實體位址的對應會讓「相鄰就不衝突」沒那麼絕對，但 cache 的關聯度（associativity）應該可以緩解。</span></p>
+    <p>這個目標不可能全部滿足。<span class="term" data-def="每個過程一個節點，每一次呼叫一條邊，從 caller 指向 callee。call graph。">call graph</span> 的每條邊 <span class="mono">(p, q)</span> 都是一個「p 和 q 應該相鄰」的要求；p 呼叫了 q、r、s 三個過程，它們不可能全都放在 p 旁邊。所以過程放置用貪婪近似找一個夠好的佈局，不去算最好的。</p>
+    <p>跟 block 的放置一樣，演算法要的是每條邊的執行次數，可以來自 profile 也可以是估計。不一樣的是它要看到整個程式的 call graph，分開編譯時單一個編譯單位看不到，所以這件事通常在 link time 或是 whole-program 的模式下做。</p>
+  </section>
+
+  <section class="prose">
+    <h2>縮邊：把 y 併進 x</h2>
+    <p>演算法分析的對象是 <span class="term" data-def="允許兩個節點之間有多條邊的 call graph。p 裡有三個地方呼叫 q，就有三條從 p 到 q 的邊。multi-graph。">call multi-graph</span>：p 裡有三個地方呼叫 q 就有三條 <span class="mono">(p, q)</span> 的邊。初始化時先把這種平行邊合併成一條，權重相加；過程呼叫自己的 <span class="term" data-def="起點和終點是同一個節點的邊，在 call graph 裡就是遞迴。self loop。">self loop</span> 直接刪掉，因為一個過程本來就和自己相鄰，怎麼放都影響不了它。每個節點 x 帶一個 list(x)，開始時只有 {x}，記的是「這個節點代表的那群過程，照什麼順序放」。所有的邊照權重從高到低放進一個 <span class="term" data-def="每次取出來的都是權重最高的那個元素。priority queue。">priority queue</span> Q。</p>
+    <p>主迴圈每一輪取出 Q 最前面的邊 <span class="mono">(x, y)</span>，然後把 y 塌縮進 x：y 出去的每條邊 <span class="mono">(y, z)</span> 改成 <span class="mono">(x, z)</span>，y 進來的每條邊 <span class="mono">(z, y)</span> 改成 <span class="mono">(z, x)</span>；改出來的邊如果 Q 裡已經有一條一樣的，兩條合併、權重相加，Q 重新排序。接著把 list(y) 接到 list(x) 後面，所以 y 那群過程會緊跟在 x 那群後面；最後把 y 和它的邊從圖上刪掉。這一輪之後 x 代表的是一群過程，x 進出的邊是這一群和其他節點之間呼叫次數的總和。這就是合併權重的意義：一群過程和某個節點的來往加起來，可能比任何一條單獨的邊都大，排到 Q 的前面去。圖 8-23 的畫面 4 就是這種情況，(P<sub>0</sub>, P<sub>5</sub>) 只有 2，併進 (P<sub>0</sub>, P<sub>1</sub>) 之後變成 12，排到了 (P<sub>1</sub>, P<sub>3</sub>) 的前面。</p>
+    <p>Q 空了演算法就停。每合併一次圖少一個節點，所以最後剩下的每個節點對應原始 call graph 的一個連通分量：從入口出發能到達所有過程，就只剩一個節點，它的 list 就是全部過程的全序；有些過程沒有人呼叫，或是呼叫走的是 function pointer 這種看不出目標的路，就會剩好幾個節點、好幾個 list，每個 list 內部的順序還是確定的，list 之間怎麼排演算法沒有規定。</p>
+  </section>
+
+  <section class="prose">
+    <h2>虛擬碼</h2>
+    <p>書上只給分析階段的演算法；變換階段就是照 list 把過程的程式碼重新排一遍，沒有虛擬碼。<span class="sn">中譯本的虛擬碼是圖 8-22，例子和每一輪的狀態是圖 8-23，書上叫每一輪的狀態「畫面」，這一頁沿用。</span></p>
+<pre class="code"><span class="c">// Initialization work</span>
+build the call multi-graph G
+initialize Q as a priority queue           <span class="c">// Order Q highest to lowest</span>
+for each edge (x,y) ∈ G do                 <span class="c">// Add weights to the edges</span>
+  if (x = y) then
+    delete (x,y) from G                    <span class="c">// Self loop is irrelevant</span>
+  else
+    weight((x,y)) ← estimated execution frequency for (x,y)
+for each node x ∈ G do
+  list(x) ← {x}                            <span class="c">// Initialize placement lists</span>
+  if multiple edges exist from x to y then
+    combine them and their weights
+  for each edge (x,z) ∈ G do               <span class="c">// Put each edge into Q</span>
+    Enqueue(Q, (x,z), weight((x,z)))
+
+<span class="c">// Iterative reduction of the graph</span>
+while Q is not empty do
+  (x,y) ← Dequeue(Q)                       <span class="c">// Take highest priority edge</span>
+  for each edge (y,z) ∈ G do               <span class="c">// Move source from y to x</span>
+    ReSource((y,z), x)
+  for each edge (z,y) ∈ G do               <span class="c">// Move target from y to x</span>
+    ReTarget((z,y), x)
+  append list(y) to list(x)                <span class="c">// Update the placement list</span>
+  delete y and its edges from G            <span class="c">// Clean up G</span></pre>
+    <ul>
+      <li><strong>ReSource 和 ReTarget 會合併邊。</strong>書上在圖後面說明：ReSource 把 <span class="mono">(y, z)</span> 換成 <span class="mono">(x, z)</span> 並更新 Q，如果 <span class="mono">(x, z)</span> 已經存在，就把兩條的執行次數合併；ReTarget 對 <span class="mono">(z, y)</span> 做同樣的事。合併後新邊的權重是兩條舊邊之和。</li>
+      <li><strong>self loop 在兩個地方出現。</strong>初始化時遞迴的邊直接刪掉。主迴圈裡如果 y 也呼叫 x，ReSource 會把 <span class="mono">(y, x)</span> 改成 <span class="mono">(x, x)</span>，也是 self loop；書上沒寫怎麼處理，這一頁照同一個理由丟掉。範例「入口不一定排第一」會碰到。</li>
+      <li><strong>Q 怎麼排，書上沒有全部說明。</strong>這一頁照圖 8-23 做：權重相同的邊照輸入列出的順序；改了來源或目標但權重沒變的邊留在原來的位置（畫面 2 的 (P<sub>1</sub>, P<sub>5</sub>)）；合併後權重變大的邊往前移到所有權重不小於它的邊後面（畫面 4 的 (P<sub>0</sub>, P<sub>1</sub>)）。</li>
+      <li><strong>最後剩下好幾個 list 時，</strong>這一頁把入口所在的 list 放最前面，其他照節點名字排。這是為了給 workbench 一個確定的輸出，不是書上的規則。</li>
+    </ul>
+  </section>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">呼叫邊和次數（可以改）</p>
+        <textarea id="src" spellcheck="false" aria-label="呼叫邊和次數"></textarea>
+        <div class="errs" id="errs"></div>
+        <p class="hint">每行一條呼叫邊，格式 <code>P5 → P6 104</code>，最後的數字是呼叫次數，箭頭可以打 <code>-&gt;</code>。同一對過程可以列好幾行（有幾個呼叫點就幾行），初始化時會合併；<code>P5 → P5</code> 這種 self loop 會被刪掉。只寫一個名字的行宣告一個沒有邊的過程。<code>entry main</code> 標記入口，只影響圖上的標籤和最後幾個 list 的先後。次數相同的邊照列出的順序進 Q。</p>
+      </div>
+      <div>
+        <p class="panel-title">執行</p>
+        <div class="controls" data-stepper>
+          <button type="button" data-step="reset">重來</button>
+          <button type="button" data-step="prev">上一步</button>
+          <button type="button" data-step="next" class="primary">下一步</button>
+          <button type="button" data-step="play">播放</button>
+          <input type="range" min="0" max="0" value="0" aria-label="步驟">
+          <span class="count"></span>
+        </div>
+        <p class="hint" id="phint"></p>
+        <p class="hint">初始化兩步，之後每一輪先取出一條邊，再一步改接一條邊，最後一步把 list 接起來、刪掉節點。圖上黃底是這一輪的 x，虛線框是正在被併進去的 y，併完變成淡的；<i class="hit">綠色粗邊</i>是這一步改接或合併出來的邊，灰色虛線是被取代的舊邊或刪掉的 self loop，黑色粗邊是這一輪取出的 <span class="mono">(x, y)</span>。右欄的 list(x) 表照圖 8-23 的格式。</p>
+      </div>
+    </div>
+
+    <div class="row work">
+      <div class="panel">
+        <div class="panel-head"><span>call graph</span><span class="sub" id="nlabel"></span></div>
+        <div class="graph" id="graph"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>虛擬碼</span><span class="sub" id="phase"></span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+        <div class="vars" id="vars"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>list(x)、Q 和每一輪</span><span class="sub" id="sstat"></span></div>
+        <div class="lists" id="lists"></div>
+        <div class="queue" id="queue"></div>
+        <div class="log" id="log"></div>
+        <div class="final" id="final"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>和 block 的放置哪裡不同</h2>
+    <p>書上說兩者有微妙的不同。<a href="../code-placement/">全局程式碼放置</a>要讓 hot path 變成 fall-through，fall-through 要求 x 的最後一條指令緊接 y 的第一條，所以建鏈時只有「x 是一條鏈的尾、y 是另一條鏈的頭」的邊才接得上，其他的邊全部忽略。過程放置的目標只是放得近：p 呼叫 q，只要 p 到 q 的距離小於 cache 的大小就達到目的了。所以它可以用上鏈中間的過程之間的邊，自由度大得多：縮邊沒有頭尾的限制，任何一條邊都能縮，而且縮完的圖還在，合併後的權重會繼續影響後面的選擇。</p>
+    <p>自由度的代價是相鄰關係沒那麼準。list(y) 整串接在 list(x) 整串後面，真正碰在一起的是 x 那群的最後一個和 y 那群的第一個，不一定是 x 和 y 本身。書上的例子裡畫面 4 用 (P<sub>1</sub>, P<sub>5</sub>) 做合併，但接出來的是 {P<sub>1</sub>, P<sub>2</sub>} 加 {P<sub>5</sub>, P<sub>6</sub>, P<sub>4</sub>}，碰在一起的是 P<sub>2</sub> 和 P<sub>5</sub>，P<sub>1</sub> 和 P<sub>5</sub> 隔了一個位置。對「放得近」來說這沒有關係。<span class="sn">Pettis 和 Hansen 1990 年的原始版本在接兩群時會試四種接法（哪一群在前、要不要把一群反過來），挑碰在一起的那一對權重最大的；書上這版省略了。workbench 最後一步算的「每條邊隔多遠」和「相鄰的呼叫次數」是這一頁拿來看結果的方法，不是書上的。</span></p>
+    <ul>
+      <li><strong>省的東西：</strong>block 放置省一條 taken branch；過程放置省 cache 衝突和 page fault。</li>
+      <li><strong>圖：</strong>一個過程的 CFG，有唯一入口；整個程式的 call multi-graph，平行邊要合併，遞迴的 self loop 刪掉。</li>
+      <li><strong>一步做什麼：</strong>把一條鏈接到另一條鏈後面，接不上就跳過；把一個節點併進另一個節點，邊改接、權重相加，永遠不會跳過。</li>
+      <li><strong>結果：</strong>一堆鏈加優先序，還要第二階段用 worklist 排成一列；每個剩下的節點一個 list，list 本身就是順序。</li>
+      <li><strong>誰來做：</strong>編譯單一個過程時就能做；要看到整個程式，通常在 link time 做。</li>
+    </ul>
+  </section>
+
+  <section class="prose">
+    <h2>圖縮到最後剩什麼</h2>
+    <p>書上在例子結尾提醒：這個例子的佈局從入口 P<sub>0</sub> 開始，是權重剛好這樣，不是演算法的設計。演算法裡沒有任何一行看入口。一個沒有人呼叫的過程永遠不會當 y，它的 list 永遠以自己開頭；但入口可以當 x 把別人併進來，併進來的過程如果有別人呼叫，ReTarget 就會造出一條指向入口的邊，入口之後就可能被那個呼叫者併走。範例「入口不一定排第一」就是這樣：main 先吃掉 tick 和 draw，on_event 呼叫 tick 的 300 次變成指向 main 的邊，最後 main 整群被併進 on_event，佈局以 on_event 開頭。對 block 的放置來說入口必須排第一，對過程來說沒有這個限制，main 放在哪裡都能跑。</p>
+    <p>範例「不只一個連通分量」裡有兩個 plugin 只透過 function pointer 被呼叫，call graph 上看不到那條邊，還有一個從來沒被呼叫的過程。最後剩三個節點、三個 list。書上說這兩種情況（沒有呼叫的路，或是路被有歧義的呼叫遮住）都會讓圖剩好幾個節點，編譯器和 linker 一樣可以用這些 list 決定相對的順序；list 之間的先後要另外決定。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>過程放置把整個程式的過程排成一列，目標是讓互相呼叫最多的過程放得近，減少指令 cache 的衝突和 page fault。演算法在 call multi-graph 上貪婪地縮邊：合併平行邊、刪掉 self loop，然後每一輪取權重最高的 <span class="mono">(x, y)</span>，把 y 的邊改接到 x、list(y) 接到 list(x) 後面、刪掉 y。合併後的權重是一群過程和外界來往的總和，會改變後面的選擇。Q 空了之後每個剩下的節點對應一個連通分量，它的 list 就是那群過程的順序。和 block 的放置比，它不要求精確相鄰，所以任何邊都能縮，也不在乎入口排在哪裡。</p>
+    <p>這是 8.7 節過程間最佳化的第二個例子，第一個是 inline substitution，第三個小節講編譯器要怎麼組織才能做過程間的分析。第九章接著把 <a href="../liveout/">LiveOut</a> 推廣成一般的資料流框架。實務上過程放置在 linker 做，輸入是 profile 的 call graph；現代的做法（像 LLVM 的 lld 和 Meta 的 BOLT）用的還是 Pettis 和 Hansen 這一套的後代，只是把 cache line 和分頁的大小、過程的大小都算進去。</p>
+    <p>這一頁的模型把過程當成沒有大小的點，只看呼叫次數；真的 linker 要看每個過程佔幾個位元組，兩個過程相鄰但加起來超過一頁，相鄰就沒有意義。書上這一節也沒有講 list 之間怎麼排、冷的過程要不要集中搬到一邊，這些都不在 workbench 裡。</p>
+  </section>
+
+  <p class="foot">來源：Cooper &amp; Torczon, <i>Engineering a Compiler</i>, Chapter 8, Section 8.7.2（Procedure Placement）。虛擬碼照中譯本（第二版）圖 8-22 的寫法，範例「書上的例子」和每一輪的畫面是圖 8-23。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const PRESETS = [
+  { title: '書上的例子', hint: '圖 8-23 的 call graph，邊照畫面 0 的 Q 列，P5 的 self loop 50 會被刪掉。六輪縮完剩 P0 一個節點，list 是 P0 P1 P2 P5 P6 P4 P3，每一輪的 list(x) 和 Q 可以和書上的畫面逐格對照。',
+    src: `entry P0
+P5 → P6 104
+P5 → P4 52
+P1 → P2 20
+P1 → P4 10
+P1 → P3 10
+P0 → P1 10
+P0 → P5 2
+P5 → P5 50` },
+  { title: '平行邊和遞迴', hint: 'eval 裡有兩個地方呼叫 lookup（6 次和 5 次），合併成 11 才贏過 parse → lookup 的 10，lookup 跟著 eval 走；分開看的話兩條都輸。eval 的遞迴是 self loop，初始化時刪掉。',
+    src: `entry main
+main → parse 3
+main → eval 3
+main → report 1
+parse → lex 12
+parse → lookup 10
+eval → lookup 6
+eval → lookup 5
+eval → eval 40
+report → format 2` },
+  { title: '合併後權重反超', hint: 'd → a 有 9，c → a 和 c → b 各只有 8。b 併進 a 之後 c → b 併進 c → a 變成 16，c 就排到 d 前面：決定順序的是一群過程和外界來往的總和，不是單獨一條邊。',
+    src: `entry main
+main → a 5
+a → b 20
+c → a 8
+c → b 8
+d → a 9` },
+  { title: '入口不一定排第一', hint: 'main 先把 tick 和 draw 併進來，on_event → tick 的 300 次被 ReTarget 改成指向 main，下一輪 main 整群被併進 on_event，佈局以 on_event 開頭。main → on_event 這條邊在 ReSource 時變成 self loop，丟掉。',
+    src: `entry main
+main → tick 1000
+tick → draw 1000
+on_event → tick 300
+main → on_event 50` },
+  { title: '不只一個連通分量', hint: '兩個 plugin 只透過 function pointer 被呼叫，call graph 上沒有那條邊；unused 從來沒被呼叫。Q 空了之後剩三個節點、三個 list，list 之間的先後演算法沒有規定。',
+    src: `entry main
+main → load 1
+main → run 1
+run → step 500
+step → kernel 500
+plugin_a → util 30
+plugin_b → util 30
+unused` },
+];
+
+const LINE = {
+  I0: 'build the call multi-graph G',
+  I1: 'initialize Q as a priority queue',
+  I2: 'for each edge (x,y) ∈ G do',
+  I3: '  if (x = y) then',
+  I4: '    delete (x,y) from G',
+  I5: '  else',
+  I6: '    weight((x,y)) ← estimated\n      execution frequency for (x,y)',
+  I7: 'for each node x ∈ G do',
+  I8: '  list(x) ← {x}',
+  I9: '  if multiple edges exist\n      from x to y then',
+  I10: '    combine them and their weights',
+  I11: '  for each edge (x,z) ∈ G do',
+  I12: '    Enqueue(Q, (x,z), weight((x,z)))',
+  W0: 'while Q is not empty do',
+  W1: '  (x,y) ← Dequeue(Q)',
+  W2: '  for each edge (y,z) ∈ G do',
+  W3: '    ReSource((y,z), x)',
+  W4: '  for each edge (z,y) ∈ G do',
+  W5: '    ReTarget((z,y), x)',
+  W6: '  append list(y) to list(x)',
+  W7: '  delete y and its edges from G',
+};
+const PSEUDO = { init: ['I0', 'I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8', 'I9', 'I10', 'I11', 'I12'], reduce: ['W0', 'W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7'] };
+
+// ---- parser: one call edge per line, "X → Y n"; repeats allowed; "entry X"; a bare name declares a procedure ----
+function parse(src) {
+  const errors = [], raw = [], names = [];
+  let entryName = null;
+  const addName = n => { if (!names.includes(n)) names.push(n); };
+  src.split('\n').forEach((rawLine, li) => {
+    const line = rawLine.trim();
+    if (!line || /^(\/\/|#)/.test(line)) return;
+    let m = line.match(/^(?:entry|入口)\s+([A-Za-z_]\w*)$/i);
+    if (m) { entryName = m[1]; addName(m[1]); return; }
+    m = line.match(/^([A-Za-z_]\w*)$/);
+    if (m) { addName(m[1]); return; }
+    m = line.match(/^([A-Za-z_]\w*)\s*(?:→|->|=>|,)?\s*([A-Za-z_]\w*)\s*[:,]?\s*(\d+)$/);
+    if (!m) { errors.push(`第 ${li + 1} 行看不懂：「${line}」。格式是 P5 → P6 104。`); return; }
+    const [, x, y, w] = m;
+    addName(x); addName(y);
+    raw.push({ x, y, w: +w, li });
+  });
+  if (!names.length && !errors.length) errors.push('至少要有一個過程。');
+  names.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+  const combined = [], byKey = new Map();
+  raw.forEach((e, i) => {
+    if (e.x === e.y) return;
+    const k = e.x + '>' + e.y;
+    let c = byKey.get(k);
+    if (!c) { c = { x: e.x, y: e.y, w: 0, parts: [], first: i }; byKey.set(k, c); combined.push(c); }
+    c.w += e.w; c.parts.push(e.w);
+  });
+  const selfs = raw.filter(e => e.x === e.y);
+  const q0 = combined.slice().sort((a, b) => b.w - a.w || a.first - b.first);
+  const hasIn = new Set(combined.map(c => c.y));
+  const entry = entryName || names.find(n => !hasIn.has(n)) || names[0];
+  const nodes = names.map(name => ({ name, succs: combined.filter(c => c.x === name).map(c => c.y), preds: combined.filter(c => c.y === name).map(c => c.x) }));
+  const byName = new Map(nodes.map(n => [n.name, n]));
+  return { errors, raw, names, nodes, byName, combined, selfs, q0, entry };
+}
+
+// ---- layout: longest-path layering from the roots; positions stay fixed while the graph shrinks ----
+const CH = 7, NH = 24, PX = 9, GX = 26, GY = 40;
+function layoutGraph(P) {
+  const byName = P.byName;
+  const size = new Map(P.names.map(n => [n, { w: Math.max(40, n.length * CH + 2 * PX + (n === P.entry ? 30 : 0)), h: NH }]));
+  const state = new Map(), back = new Set(), post = [];
+  const dfs = u => { state.set(u, 1); byName.get(u).succs.forEach(v => { if (state.get(v) === 1) back.add(u + '>' + v); else if (!state.has(v)) dfs(v); }); state.set(u, 2); post.push(u); };
+  [P.entry, ...P.names.filter(n => n !== P.entry && !byName.get(n).preds.length), ...P.names].forEach(r => { if (!state.has(r)) dfs(r); });
+  const topo = post.reverse();
+  const level = new Map(topo.map(n => [n, 0]));
+  topo.forEach(u => byName.get(u).succs.forEach(v => { if (!back.has(u + '>' + v)) level.set(v, Math.max(level.get(v), level.get(u) + 1)); }));
+  const rows = [];
+  P.names.forEach(n => { (rows[level.get(n)] ||= []).push(n); });
+  const pos = new Map();
+  let y = 0, width = 0;
+  rows.forEach((row, l) => {
+    if (l === 0) row.sort((a, b) => (a === P.entry ? -1 : b === P.entry ? 1 : 0));
+    else {
+      const bary = n => { const ps = byName.get(n).preds.filter(p => pos.has(p)); return ps.length ? ps.reduce((a, p) => a + pos.get(p).cx, 0) / ps.length : 0; };
+      row.sort((a, b) => bary(a) - bary(b));
+    }
+    const total = row.reduce((a, n) => a + size.get(n).w, 0) + (row.length - 1) * GX;
+    let x = -total / 2;
+    row.forEach((n, i) => { const sz = size.get(n); pos.set(n, { x, y, w: sz.w, h: sz.h, cx: x + sz.w / 2, l, i }); x += sz.w + GX; });
+    width = Math.max(width, total);
+    y += NH + GY;
+  });
+  return { pos, width, height: y - GY };
+}
+function edgeGeom(L, cx, top, x, y) {
+  const a = L.pos.get(x), c = L.pos.get(y);
+  const ax = cx + a.x, ay = top + a.y, bx = cx + c.x, by = top + c.y;
+  const bez = (p0, p1, p2, p3, t = 0.5) => { const u = 1 - t, k = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t]; return { d: `M ${p0[0]} ${p0[1]} C ${p1[0]} ${p1[1]}, ${p2[0]} ${p2[1]}, ${p3[0]} ${p3[1]}`, lx: k[0] * p0[0] + k[1] * p1[0] + k[2] * p2[0] + k[3] * p3[0], ly: k[0] * p0[1] + k[1] * p1[1] + k[2] * p2[1] + k[3] * p3[1] }; };
+  if (x === y) return bez([ax + a.w, ay + 5], [ax + a.w + 32, ay - 10], [ax + a.w + 32, ay + a.h + 10], [ax + a.w, ay + a.h - 5]);
+  if (c.l === a.l) {
+    const my = ay + a.h / 2;
+    if (Math.abs(c.i - a.i) === 1) {
+      const x1 = c.i > a.i ? ax + a.w : ax, x2 = c.i > a.i ? bx : bx + c.w;
+      return { d: `M ${x1} ${my} L ${x2} ${my}`, lx: (x1 + x2) / 2, ly: my - 9 };
+    }
+    const lift = 20 + 8 * Math.abs(c.i - a.i);
+    return bez([a.cx + cx, ay], [a.cx + cx, ay - lift], [c.cx + cx, by - lift], [c.cx + cx, by]);
+  }
+  if (c.l < a.l) { const k = 30 + 10 * (a.l - c.l); return bez([ax + a.w, ay + a.h / 2], [ax + a.w + k, ay + a.h / 2], [bx + c.w + k, by + c.h / 2], [bx + c.w, by + c.h / 2]); }
+  if (c.l === a.l + 1) return { d: `M ${a.cx + cx} ${ay + a.h} L ${c.cx + cx} ${by}`, lx: (a.cx + c.cx) / 2 + cx + 9, ly: (ay + a.h + by) / 2 };
+  const span = c.l - a.l, dx = Math.abs(c.cx - a.cx) < 1 ? 0 : (c.cx - a.cx < 0 ? -1 : 1) * 12 * span;
+  return bez([a.cx + cx, ay + a.h], [a.cx + cx + dx, ay + a.h + 26], [c.cx + cx + dx, by - 26], [c.cx + cx, by], 0.5 / span);
+}
+
+// ---- run: two init steps, then per round one dequeue step, one step per moved edge, one append step ----
+const fe = (x, y, w) => `(${x}, ${y})<sub>${w}</sub>`;
+const fl = l => `{${l.join(', ')}}`;
+function buildTrace(P) {
+  const steps = [];
+  let Q = P.q0.map((e, i) => ({ id: i, x: e.x, y: e.y, w: e.w }));
+  const alive = new Set(P.names);
+  const lists = new Map(P.names.map(n => [n, [n]]));
+  const frames = [];
+  const snapQ = () => Q.map(e => ({ ...e }));
+  const snapLists = () => P.names.filter(n => alive.has(n)).map(n => ({ n, l: lists.get(n).slice() }));
+  const snap = (proc, lines, x) => steps.push(Object.assign({
+    proc, lines, Q: snapQ(), lists: snapLists(), alive: [...alive], frames: frames.slice(), round: frames.length,
+    raw: false, cur: null, x: null, y: null, newE: [], goneE: [], hot: null, final: null, say: '', warn: '', note: '', chV: [],
+  }, x));
+  const resort = e => { Q.splice(Q.indexOf(e), 1); let i = 0; while (i < Q.length && Q[i].w >= e.w) i++; Q.splice(i, 0, e); };
+
+  const nSelf = P.selfs.length, nPar = P.combined.filter(c => c.parts.length > 1).length;
+  snap('init', ['I0', 'I1', 'I2', 'I3', 'I4', 'I5', 'I6'], { raw: true, Q: [], lists: [], say: `建好 call multi-graph：${P.names.length} 個過程，${P.raw.length} 條呼叫邊，每條邊標上估計的執行次數。${nSelf ? `${P.selfs.map(e => `${e.x} → ${e.x}`).join('、')} 是 self loop，刪掉；一個過程本來就和自己相鄰。` : '沒有 self loop。'}${nPar ? `${P.combined.filter(c => c.parts.length > 1).map(c => `${c.x} → ${c.y}`).join('、')} 有好幾條平行邊，下一步合併。` : ''}` });
+  snap('init', ['I7', 'I8', 'I9', 'I10', 'I11', 'I12'], { chV: ['q', 'n'], say: `畫面 0：每個節點的 list 只有自己。${nPar ? `平行邊合併、權重相加：${P.combined.filter(c => c.parts.length > 1).map(c => `${c.x} → ${c.y} 變成 ${c.parts.join(' + ')} = ${c.w}`).join('，')}。` : ''}${Q.length} 條邊照權重從高到低進 Q${Q.length ? `，最前面是 ${fe(Q[0].x, Q[0].y, Q[0].w)}` : ''}。`, note: Q.length ? '' : '沒有邊可以縮，每個過程自己一個 list。' });
+
+  while (Q.length) {
+    const e = Q.shift();
+    const x = e.x, y = e.y, round = frames.length + 1;
+    const outs = Q.filter(f => f.x === y), ins = Q.filter(f => f.y === y);
+    snap('reduce', ['W0', 'W1'], { cur: e, x, y, chV: ['x', 'y', 'w', 'q'],
+      say: `第 ${round} 輪：Q 最前面是 ${fe(x, y, e.w)}，取出來。${y} 要併進 ${x}：${y} 出去的 ${outs.length} 條邊、進來的 ${ins.length} 條邊都改接到 ${x}，再把 list(${y}) 接到 list(${x}) 後面。${!outs.length && !ins.length ? `${y} 沒有別的邊，直接接 list。` : ''}` });
+    const moved = [];
+    const move = (f, isOut) => {
+      const z = isOut ? f.y : f.x, old = { x: f.x, y: f.y, w: f.w };
+      const nx = isOut ? x : z, ny = isOut ? z : x;
+      const name = isOut ? 'ReSource' : 'ReTarget', lines = isOut ? ['W2', 'W3'] : ['W4', 'W5'];
+      if (z === x) {
+        Q.splice(Q.indexOf(f), 1);
+        moved.push(`${fe(old.x, old.y, old.w)} 變成 self loop，丟掉`);
+        snap('reduce', lines, { cur: e, x, y, goneE: [old], chV: ['q'], say: `${name}：${fe(old.x, old.y, old.w)} 的${isOut ? '來源' : '目標'}從 ${y} 改成 ${x}，變成 (${x}, ${x})，是 self loop。${y} 和 ${x} 互相呼叫，併成一群之後這 ${old.w} 次呼叫就在群內，對放置沒有影響，丟掉。` });
+        return;
+      }
+      const ex = Q.find(g => g !== f && g.x === nx && g.y === ny);
+      if (ex) {
+        const before = ex.w;
+        Q.splice(Q.indexOf(f), 1);
+        ex.w += old.w;
+        const pos0 = Q.indexOf(ex);
+        resort(ex);
+        const pos1 = Q.indexOf(ex);
+        moved.push(`${fe(old.x, old.y, old.w)} 併進 ${fe(nx, ny, ex.w)}`);
+        snap('reduce', lines, { cur: e, x, y, newE: [ex.id], goneE: [old], chV: ['q'], say: `${name}：${fe(old.x, old.y, old.w)} 的${isOut ? '來源' : '目標'}從 ${y} 改成 ${x}，但 ${fe(nx, ny, before)} 已經在 Q 裡，兩條合併成 ${fe(nx, ny, ex.w)}，${pos1 < pos0 ? `Q 重新排序，它往前移到第 ${pos1 + 1} 個` : 'Q 的順序不變'}。` });
+      } else {
+        f.x = nx; f.y = ny;
+        moved.push(`${fe(old.x, old.y, old.w)} → ${fe(nx, ny, f.w)}`);
+        snap('reduce', lines, { cur: e, x, y, newE: [f.id], goneE: [old], chV: ['q'], say: `${name}：${fe(old.x, old.y, old.w)} 的${isOut ? '來源' : '目標'}從 ${y} 改成 ${x}，變成 ${fe(nx, ny, f.w)}。權重沒變，在 Q 裡的位置也不變。` });
+      }
+    };
+    outs.forEach(f => move(f, true));
+    Q.filter(f => f.y === y).forEach(f => move(f, false));
+    const before = lists.get(x).slice();
+    lists.get(x).push(...lists.get(y));
+    lists.delete(y); alive.delete(y);
+    frames.push({ round, e: { x, y, w: e.w }, moved, list: lists.get(x).slice(), Q: snapQ() });
+    snap('reduce', ['W6', 'W7'], { x, y, hot: x, chV: ['n', 'q'],
+      say: `list(${x}) = ${fl(before)} 接上 list(${y}) 變成 ${fl(lists.get(x))}。刪掉 ${y}，圖剩 ${alive.size} 個節點，Q 剩 ${Q.length} 條邊${Q.length ? `，最前面是 ${fe(Q[0].x, Q[0].y, Q[0].w)}` : ''}。這就是畫面 ${round}。` });
+  }
+
+  // final: concatenate the surviving lists, then measure how far apart each call edge ends up
+  const survivors = P.names.filter(n => alive.has(n)).sort((a, b) => (a === P.entry ? -1 : b === P.entry ? 1 : 0));
+  const order = survivors.flatMap(n => lists.get(n));
+  const at = new Map(order.map((n, i) => [n, i]));
+  const dist = P.q0.map(c => ({ x: c.x, y: c.y, w: c.w, d: Math.abs(at.get(c.x) - at.get(c.y)) }));
+  const adj = dist.filter(r => r.d === 1).reduce((a, r) => a + r.w, 0);
+  const total = dist.reduce((a, r) => a + r.w, 0);
+  const far = dist.reduce((m, r) => (!m || r.d > m.d ? r : m), null);
+  snap('reduce', ['W0'], { final: { survivors, order, dist, adj, total }, chV: ['n'],
+    say: `Q 空了。圖剩 ${survivors.length} 個節點${survivors.length === 1 ? `，就是 ${survivors[0]}，它的 list 是全部過程的順序` : `：${survivors.join('、')}`}。置放順序 ${order.join(' ')}。${dist.length ? `caller 和 callee 相鄰的呼叫有 ${adj} 次，全部是 ${total} 次${far && far.d > 1 ? `；隔最遠的是 ${fe(far.x, far.y, far.w)}，隔 ${far.d} 個位置` : ''}。` : ''}`,
+    warn: survivors.length > 1 ? `留下 ${survivors.length} 個節點，對應原始 call graph 的 ${survivors.length} 個連通分量：有些過程從入口走不到，或是呼叫它的路在 call graph 上看不見。list 之間的先後演算法沒有規定，這裡把入口所在的 list 放最前面，其他照名字排。` : '' });
+  return steps;
+}
+
+// ---- state and rendering ----
+const INIT = { proc: null, lines: [], Q: [], lists: [], alive: [], frames: [], round: 0, raw: false, cur: null, x: null, y: null, newE: [], goneE: [], hot: null, final: null, say: '', warn: '', note: '', chV: [] };
+const state = { pi: 0, parsed: null, layout: null, trace: [], k: 0 };
+const total = () => state.trace.length ? state.trace.length - 1 : 0;
+const cur = () => state.trace[state.k] || INIT;
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderAll(); } });
+
+function rebuild() {
+  state.parsed = parse($('src').value);
+  const ok = !state.parsed.errors.length;
+  state.layout = ok ? layoutGraph(state.parsed) : null;
+  state.trace = ok ? buildTrace(state.parsed) : [];
+  state.k = 0;
+  stepper.setTotal(total());
+  stepper.set(0);
+}
+
+function renderPresets() {
+  const p = $('presets');
+  PRESETS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.title;
+    b.addEventListener('click', () => { state.pi = i; $('src').value = c.src; rebuild(); renderAll(); });
+    p.appendChild(b);
+  });
+}
+
+function renderPseudoShell() {
+  $('pseudo').innerHTML = ['init', 'reduce'].map(proc =>
+    `<span class="proc" data-p="${proc}">` + PSEUDO[proc].map(id => `<span class="pl" data-l="${id}">${esc(LINE[id])}</span>`).join('') + '</span>').join('');
+}
+
+function renderGraph(s) {
+  const P = state.parsed, L = state.layout;
+  if (!L) { $('graph').innerHTML = ''; $('nlabel').textContent = ''; return; }
+  $('nlabel').textContent = s.proc ? `${s.raw ? P.names.length : s.alive.length} 個節點 · ${s.raw ? P.raw.length : s.Q.length + (s.cur ? 1 : 0)} 條邊` : '';
+  const M = 40, W = L.width + 2 * M, H = L.height + 24, cx = W / 2, top = 12;
+  const edges = [];
+  if (s.raw) {
+    P.combined.forEach(c => edges.push({ x: c.x, y: c.y, label: c.parts.join('+'), cls: '' }));
+    P.selfs.forEach(e => edges.push({ x: e.x, y: e.x, label: e.w, cls: 'self' }));
+  } else {
+    const nw = new Set(s.newE);
+    s.goneE.forEach(e => edges.push({ x: e.x, y: e.y, label: e.w, cls: 'gone' }));
+    s.Q.forEach(e => edges.push({ x: e.x, y: e.y, label: e.w, cls: nw.has(e.id) ? 'new' : '' }));
+    if (s.cur) edges.push({ x: s.cur.x, y: s.cur.y, label: s.cur.w, cls: 'cur' });
+  }
+  let out = `<svg viewBox="0 0 ${W} ${H}" style="min-width:${Math.round(W * 0.8)}px" role="img" aria-label="call graph，邊上是呼叫次數">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker>
+      <marker id="arr-new" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--hit)"/></marker>
+      <marker id="arr-gone" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+    </defs>`;
+  let labels = '';
+  edges.forEach(e => {
+    const g = edgeGeom(L, cx, top, e.x, e.y);
+    const mk = e.cls === 'new' ? 'arr-new' : (e.cls === 'gone' || e.cls === 'self') ? 'arr-gone' : 'arr';
+    out += `<path class="edge ${e.cls}" d="${g.d}" marker-end="url(#${mk})"/>`;
+    labels += `<text class="w ${e.cls}" x="${g.lx}" y="${g.ly + 4}" text-anchor="middle">${esc(e.label)}</text>`;
+  });
+  const alive = new Set(s.raw ? P.names : s.alive);
+  const at = s.final ? new Map(s.final.order.map((n, i) => [n, i])) : null;
+  P.names.forEach(n => {
+    const p = L.pos.get(n), x = cx + p.x, y = top + p.y;
+    const cls = 'node' + (!alive.has(n) ? ' ghost' : s.final ? ' placed' : n === s.x ? ' x' : n === s.y ? ' y' : '');
+    out += `<g class="${cls}"><rect x="${x}" y="${y}" width="${p.w}" height="${p.h}" rx="4"/><text class="name" x="${x + PX}" y="${y + 16}">${esc(n)}${n === P.entry ? '<tspan class="tag"> 入口</tspan>' : ''}${at ? `<tspan class="tag"> ${at.get(n)}</tspan>` : ''}</text></g>`;
+  });
+  $('graph').innerHTML = out + labels + '</svg>';
+}
+
+function renderPseudo(s) {
+  document.querySelectorAll('#pseudo .pl').forEach(el => el.classList.toggle('on', s.lines.includes(el.dataset.l)));
+  document.querySelectorAll('#pseudo .proc').forEach(el => el.classList.toggle('active', s.proc === null || el.dataset.p === s.proc));
+  $('phase').textContent = s.proc === 'init' ? '初始化' : s.proc === 'reduce' ? (s.final ? '結束' : `第 ${s.round + (s.hot ? 0 : 1)} 輪`) : '';
+}
+
+function renderVars(s) {
+  const ch = new Set(s.chV);
+  const v = (key, name, val) => `<span class="var${ch.has(key) ? ' chg' : ''}"><span class="k">${name}</span><span class="v">${val ?? '–'}</span></span>`;
+  const P = state.parsed;
+  $('vars').innerHTML = v('x', 'x', s.x) + v('y', 'y', s.y) + v('w', '權重', s.cur ? s.cur.w : s.y ? '–' : '–') + v('q', '|Q|', s.proc && !s.raw ? s.Q.length : '–') + v('n', '節點', s.proc ? `${s.raw ? P.names.length : s.alive.length} / ${P.names.length}` : '–');
+}
+
+function renderLists(s) {
+  const P = state.parsed;
+  if (!P || P.errors.length || !s.proc) { ['lists', 'queue', 'log', 'final'].forEach(id => { $(id).innerHTML = ''; }); $('sstat').textContent = ''; return; }
+  $('sstat').textContent = s.final ? `${s.final.survivors.length} 個 list` : s.raw ? '' : `${s.lists.length} 個節點 · Q 裡 ${s.Q.length} 條邊`;
+  if (s.raw) { $('lists').innerHTML = '<h3>list(x)</h3><p class="empty">還沒初始化</p>'; $('queue').innerHTML = '<h3>Q</h3><p class="empty">還沒建</p>'; $('log').innerHTML = ''; $('final').innerHTML = ''; return; }
+  $('lists').innerHTML = `<h3>list(x)（圖 8-23 的格式）</h3><table class="tb"><thead><tr>${s.lists.map(c => `<th class="bn">${esc(c.n)}</th>`).join('')}</tr></thead><tbody><tr>${s.lists.map(c => `<td class="${c.n === s.hot ? 'new' : ''}">${fl(c.l.map(esc))}</td>`).join('')}</tr></tbody></table>`;
+  const nw = new Set(s.newE);
+  const chips = (s.cur ? [`<span class="e cur">取出 ${fe(esc(s.cur.x), esc(s.cur.y), s.cur.w)}</span>`] : []).concat(s.Q.map(e => `<span class="e${nw.has(e.id) ? ' new' : ''}">${fe(esc(e.x), esc(e.y), e.w)}</span>`));
+  $('queue').innerHTML = `<h3>Q</h3><div class="line"><span>${chips.length ? chips.join('<span class="dim">,</span> ') : '∅'}</span></div>`;
+  $('log').innerHTML = s.frames.length ? '<h3>每一輪</h3>' + s.frames.map(h => `<div class="line"><span class="m">畫面 ${h.round}</span><span>${fe(esc(h.e.x), esc(h.e.y), h.e.w)}：${esc(h.e.y)} 併入 ${esc(h.e.x)}${h.moved.length ? '，' + h.moved.join('，') : ''}</span></div><div class="line"><span class="m"></span><span class="dim">list(${esc(h.e.x)}) =</span><span>${fl(h.list.map(esc))}</span></div>`).join('') : '';
+  if (!s.final) { $('final').innerHTML = ''; return; }
+  const f = s.final;
+  let fin = `<h3>置放順序</h3><div class="line seq"><span>${f.survivors.map(n => s.lists.find(c => c.n === n).l.map(esc).join(' ')).join('<span class="sep">|</span>')}</span></div>`;
+  if (f.dist.length) {
+    fin += '<h3 style="margin-top:0.5rem">每條呼叫邊隔多遠</h3><table class="tb"><thead><tr><th>邊</th><th>次數</th><th>距離</th></tr></thead><tbody>';
+    f.dist.forEach(r => { fin += `<tr><td class="bn">${esc(r.x)} → ${esc(r.y)}</td><td>${r.w}</td><td class="${r.d === 1 ? 'new' : 'dim'}">${r.d}</td></tr>`; });
+    fin += `</tbody></table><div class="line sum"><span class="m">相鄰的呼叫</span><span>${f.adj} / ${f.total}</span></div>`;
+  }
+  $('final').innerHTML = fin;
+}
+
+function renderAll() {
+  const bad = state.parsed.errors.length > 0;
+  document.querySelectorAll('#presets button').forEach((b, i) => b.classList.toggle('chosen', i === state.pi && $('src').value === PRESETS[i].src));
+  $('errs').innerHTML = state.parsed.errors.map(e => `<span>${esc(e)}</span>`).join('');
+  $('phint').textContent = $('src').value === PRESETS[state.pi].src ? PRESETS[state.pi].hint : '';
+  const s = bad ? INIT : cur();
+  if (bad) { $('graph').innerHTML = ''; $('nlabel').textContent = ''; }
+  else renderGraph(s);
+  renderPseudo(s);
+  renderVars(s);
+  renderLists(bad ? INIT : s);
+  const say = $('say');
+  if (bad) say.textContent = '輸入有錯，修好之後再開始。';
+  else say.innerHTML = s.say + (s.warn ? `<span class="warn">${s.warn}</span>` : '') + (s.note ? `<span class="note">${s.note}</span>` : '');
+}
+
+$('src').addEventListener('input', () => { rebuild(); renderAll(); });
+
+renderPresets();
+renderPseudoShell();
+$('src').value = PRESETS[0].src;
+rebuild();
+renderAll();
+</script>
+</body>
+</html>
