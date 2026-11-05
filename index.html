@@ -9,17 +9,19 @@
 <link rel="stylesheet" href="assets/site.css">
 <script src="assets/site.js"></script>
 <style>
-/* 根索引特有的：大標題、每個條目旁的縮圖。--left 和 --right 是縮圖裡「兩邊」的對比色。 */
+/* 根索引特有的：大標題、主題分組、每個條目旁的縮圖。--left 和 --right 是縮圖裡「兩邊」的對比色。 */
 :root { --right: var(--hit); --left: var(--miss); }
 .page { padding-block: 3.5rem 4rem; }
 h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw, 3rem); line-height: 1.1; letter-spacing: -0.03em; }
 .lead { max-width: 34em; }
 
+section { display: flex; flex-direction: column; gap: 0.75rem; }
 .entries { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
 .entries li { border-bottom: 1px solid var(--line); }
 .entry { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem 1.75rem; padding: 1.25rem 0; color: inherit; text-decoration: none; }
-.entry h2 { font-size: 1.2rem; line-height: 1.35; margin: 0; }
-.entry:hover h2 { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.entry h3 { font-size: 1.1rem; line-height: 1.35; margin: 0; }
+.entry:hover h3 { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.entry h3 .badge { margin-left: 0.3rem; vertical-align: 0.15em; }
 .entry p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.95rem; }
 .entry .text { flex: 1 1 16rem; min-width: 0; }
 
@@ -74,178 +76,265 @@ h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(2rem, 6vw
 .mini-ladder i.gap { background: transparent; }
 .mini-ladder i.r { background: var(--right); opacity: 0.8; }
 .mini-ladder i.l { background: var(--left); opacity: 0.8; }
+.mini-pack { display: flex; gap: 0.2rem; width: 100%; padding: 0.35rem 0; }
+.mini-pack i { display: block; flex: 1; height: 1.1rem; border-radius: 1px; opacity: 0.75; }
+.mini-pack i.r { background: var(--right); }
+.mini-pack i.l { background: var(--left); }
+.mini-pack .low { flex: 1; display: flex; }
+.mini-pack .low i { border-radius: 0; }
+.mini-wire { display: flex; flex-direction: column; gap: 0.3rem; width: 100%; padding: 0.15rem 0; }
+.mini-wire .r { display: flex; gap: 0.12rem; }
+.mini-wire i { display: block; width: 0.62rem; height: 0.7rem; border-radius: 1px; background: var(--line); }
+.mini-wire i.r { background: var(--right); opacity: 0.75; }
+.mini-wire i.l { background: var(--left); opacity: 0.75; }
+.mini-wire i.p { background: transparent; border: 1px dashed var(--muted); }
+.mini-dds { width: 100%; height: 3.4rem; }
+.mini-dds rect { fill: var(--bg); stroke: var(--line); }
+.mini-dds rect.w { stroke: var(--right); }
+.mini-dds rect.r { stroke: var(--left); }
+.mini-dds path { fill: none; stroke: var(--right); stroke-width: 1.5; }
+.mini-dds path.d { stroke: var(--muted); stroke-dasharray: 3 3; }
 </style>
 </head>
 <body>
 <main class="page index">
   <header>
     <h1>Explorables</h1>
-    <p class="lead">可以動手操作的互動解說。每一頁挑一個主題，讓你自己一步一步走過去。</p>
+    <p class="lead">我讀書和工作時想弄懂的東西，做成可以操作的頁。</p>
   </header>
 
-  <ul class="entries">
-    <li>
-      <a class="entry" href="pratt-parser/">
-        <div class="glyph" aria-hidden="true">
-          <div class="mini-tape">
-            <span>1<small></small></span>
-            <span>+<small><b class="l">10</b><b class="r">11</b></small></span>
-            <span>2<small></small></span>
-            <span>*<small><b class="l">20</b><b class="r">21</b></small></span>
-            <span>3<small></small></span>
+  <section>
+    <h2>硬體與系統底層</h2>
+    <ul class="entries">
+      <li>
+        <a class="entry" href="x86-registers/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-regs">
+              <div class="mini-bar"><span style="width:100%">rax</span></div>
+              <div class="mini-bar"><span style="width:50%">eax</span></div>
+              <div class="mini-bar"><span style="width:25%">ax</span></div>
+              <div class="mini-bar"><span style="width:12.5%" class="l">al</span><span style="width:12.5%; right:12.5%" class="r">ah</span></div>
+            </div>
           </div>
-        </div>
-        <div class="text">
-          <h2>Pratt Parser 逐步圖解</h2>
-          <p>逐步執行運算子優先級解析，看每一步怎麼比較 l_bp 和 min_bp，也可以自己改結合力。</p>
-        </div>
-      </a>
-    </li>
-    <li>
-      <a class="entry" href="dns-resolution/">
-        <div class="glyph" aria-hidden="true">
+          <div class="text">
+            <h3>x86-64 暫存器地圖</h3>
+            <p>點開每一個暫存器看別名怎麼疊、SysV 和 Win64 各給它什麼角色，再用幾個 C 函式逐步看參數怎麼進暫存器。</p>
+          </div>
+        </a>
+      </li>
+      <li>
+        <a class="entry" href="call-stack/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-frames">
+              <div class="mf a">add</div>
+              <div class="mf b">printf <span>ret→</span></div>
+              <div class="mf sp">rsp →</div>
+            </div>
+          </div>
+          <div class="text">
+            <h3>函式呼叫與 Stack 逐步圖解</h3>
+            <p>用真實位址一步步看 call 和 ret 怎麼搬動 rip 與 rsp、frame 怎麼疊起來又拆掉、為什麼 call 的瞬間 rsp 必須是 16 的倍數，還有返回位址被蓋掉會怎樣。</p>
+          </div>
+        </a>
+      </li>
+      <li>
+        <a class="entry" href="isa/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-isa">
+              <div class="r"><i class="a" style="flex:4"></i><i style="flex:1"></i><i class="b" style="flex:7"></i><i style="flex:2"></i></div>
+              <div class="r"><i class="a" style="flex:4"></i><i style="flex:4"></i><i class="b" style="flex:4"></i><i style="flex:4"></i></div>
+              <div class="r"><i class="a" style="flex:2"></i><i style="flex:2"></i><i class="b" style="flex:4"></i><i style="flex:2"></i><i style="flex:2"></i></div>
+            </div>
+          </div>
+          <div class="text">
+            <h3>ISA 比較：x86、ARM、RISC-V <span class="badge outline">系列</span></h3>
+            <p>每篇挑一個設計上的取捨，例如編碼長度或呼叫慣例，看三個指令集各自選了什麼、換到了什麼。</p>
+          </div>
+        </a>
+      </li>
+      <li>
+        <a class="entry" href="gpu-memory/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-chip">
+              <i class="hbm"></i><i class="on"></i><i></i><i></i><i></i><i class="hbm"></i>
+              <i class="hbm"></i><i></i><i></i><i></i><i></i><i class="hbm"></i>
+              <i class="l2"></i>
+              <i class="hbm"></i><i></i><i></i><i></i><i></i><i class="hbm"></i>
+              <i class="hbm"></i><i></i><i></i><i></i><i></i><i class="hbm"></i>
+            </div>
+          </div>
+          <div class="text">
+            <h3>GPU 記憶體階層逐步圖解</h3>
+            <p>逐步執行一個 warp 的指令，看每次存取在 H100 晶片上走到 register、shared、L1、L2 還是 HBM，花了多少 cycle。可切換 H200，後面附 Blackwell 和 GB300 多了什麼。</p>
+          </div>
+        </a>
+      </li>
+      <li>
+        <a class="entry" href="v4l2-formats/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-pack">
+              <i class="r"></i><i class="l"></i><i class="r"></i><i class="l"></i>
+              <span class="low"><i class="l"></i><i class="r"></i><i class="l"></i><i class="r"></i></span>
+            </div>
+          </div>
+          <div class="text">
+            <h3>V4L2 影像格式名稱怎麼讀</h3>
+            <p>從 V4L2 的 pipeline 講起，拆解 CSI-2 Data Type、media bus code、fourcc 三套名字。選一個格式，看它在記憶體裡每個 bit 怎麼排、一行和一張 frame 要幾個 byte。</p>
+          </div>
+        </a>
+      </li>
+    </ul>
+  </section>
+  <section>
+    <h2>編譯器</h2>
+    <ul class="entries">
+      <li>
+        <a class="entry" href="pratt-parser/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-tape">
+              <span>1<small></small></span>
+              <span>+<small><b class="l">10</b><b class="r">11</b></small></span>
+              <span>2<small></small></span>
+              <span>*<small><b class="l">20</b><b class="r">21</b></small></span>
+              <span>3<small></small></span>
+            </div>
+          </div>
+          <div class="text">
+            <h3>Pratt Parser 逐步圖解</h3>
+            <p>逐步執行運算子優先級解析，看每一步怎麼比較 l_bp 和 min_bp，也可以自己改結合力。</p>
+          </div>
+        </a>
+      </li>
+      <li>
+        <a class="entry" href="eac/">
+          <div class="glyph" aria-hidden="true">
+            <svg class="mini-cfg" viewBox="0 0 120 56">
+              <rect x="40" y="2" width="40" height="12" rx="2"/>
+              <rect class="l" x="6" y="22" width="40" height="12" rx="2"/>
+              <rect class="l" x="74" y="22" width="40" height="12" rx="2"/>
+              <rect class="l" x="40" y="42" width="40" height="12" rx="2"/>
+              <path d="M52 14 L30 22 M68 14 L90 22 M30 34 L52 42 M90 34 L68 42"/>
+            </svg>
+          </div>
+          <div class="text">
+            <h3>Engineering a Compiler 筆記 <span class="badge outline">系列</span></h3>
+            <p>讀 Cooper 和 Torczon 的編譯器教科書時，把值得動手走一遍的演算法做成互動頁。</p>
+          </div>
+        </a>
+      </li>
+    </ul>
+  </section>
+  <section>
+    <h2>演算法</h2>
+    <ul class="entries">
+      <li>
+        <a class="entry" href="ita/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-heap-wrap">
+              <svg class="mini-heap" viewBox="0 0 120 48">
+                <line x1="60" y1="10" x2="30" y2="26"/><line x1="60" y1="10" x2="90" y2="26"/>
+                <line x1="30" y1="26" x2="15" y2="42"/><line x1="30" y1="26" x2="45" y2="42"/>
+                <line x1="90" y1="26" x2="75" y2="42"/><line x1="90" y1="26" x2="105" y2="42"/>
+                <circle class="r" cx="60" cy="10" r="5"/>
+                <circle class="l" cx="30" cy="26" r="5"/><circle cx="90" cy="26" r="5"/>
+                <circle cx="15" cy="42" r="5"/><circle class="l" cx="45" cy="42" r="5"/><circle cx="75" cy="42" r="5"/><circle cx="105" cy="42" r="5"/>
+              </svg>
+              <div class="mini-heap-cells"><i class="r"></i><i class="l"></i><i></i><i></i><i class="l"></i><i></i><i></i></div>
+            </div>
+          </div>
+          <div class="text">
+            <h3>Introduction to Algorithms 筆記 <span class="badge outline">系列</span></h3>
+            <p>讀 CLRS 時，把值得動手走一遍的演算法做成互動頁，都照書上的虛擬碼逐步執行。</p>
+          </div>
+        </a>
+      </li>
+      <li>
+        <a class="entry" href="find-rows/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-tape">
+              <span>3<small><b class="r">p0</b><b class="l">r3</b></small></span>
+              <span>7<small><b class="r">p1</b><b class="l">r1</b></small></span>
+              <span>19<small><b class="r">p2</b><b class="l">r2</b></small></span>
+              <span>42<small><b class="r">p3</b><b class="l">r0</b></small></span>
+            </div>
+          </div>
+          <div class="text">
+            <h3>find_rows 逐步圖解</h3>
+            <p>一行 code 一步，看排序加二分搜尋的向量化查表怎麼把二維 queries 變成 pos、hit、row，以及為什麼 clamp 不會製造假命中。</p>
+          </div>
+        </a>
+      </li>
+    </ul>
+  </section>
+  <section>
+    <h2>網路與通訊</h2>
+    <ul class="entries">
+      <li>
+        <a class="entry" href="dns-resolution/">
+          <div class="glyph" aria-hidden="true">
 <pre class="mini-tree"><b>.</b>
 <span class="dim">└─</span> <b>dev</b>
    <span class="dim">└─</span> <b>huatsai.dev</b></pre>
-        </div>
-        <div class="text">
-          <h2>DNS 解析逐步圖解</h2>
-          <p>逐步執行一次 DNS 查詢，看解析器怎麼從根伺服器一路問到權威伺服器，也可以改紀錄、讓快取過期。</p>
-        </div>
-      </a>
-    </li>
-    <li>
-      <a class="entry" href="gpu-memory/">
-        <div class="glyph" aria-hidden="true">
-          <div class="mini-chip">
-            <i class="hbm"></i><i class="on"></i><i></i><i></i><i></i><i class="hbm"></i>
-            <i class="hbm"></i><i></i><i></i><i></i><i></i><i class="hbm"></i>
-            <i class="l2"></i>
-            <i class="hbm"></i><i></i><i></i><i></i><i></i><i class="hbm"></i>
-            <i class="hbm"></i><i></i><i></i><i></i><i></i><i class="hbm"></i>
           </div>
-        </div>
-        <div class="text">
-          <h2>GPU 記憶體階層逐步圖解</h2>
-          <p>逐步執行一個 warp 的指令，看每次存取在 H100 晶片上走到 register、shared、L1、L2 還是 HBM，花了多少 cycle。可切換 H200，後面附 Blackwell 和 GB300 多了什麼。</p>
-        </div>
-      </a>
-    </li>
-    <li>
-      <a class="entry" href="isa/">
-        <div class="glyph" aria-hidden="true">
-          <div class="mini-isa">
-            <div class="r"><i class="a" style="flex:4"></i><i style="flex:1"></i><i class="b" style="flex:7"></i><i style="flex:2"></i></div>
-            <div class="r"><i class="a" style="flex:4"></i><i style="flex:4"></i><i class="b" style="flex:4"></i><i style="flex:4"></i></div>
-            <div class="r"><i class="a" style="flex:2"></i><i style="flex:2"></i><i class="b" style="flex:4"></i><i style="flex:2"></i><i style="flex:2"></i></div>
+          <div class="text">
+            <h3>DNS 解析逐步圖解</h3>
+            <p>逐步執行一次 DNS 查詢，看解析器怎麼從根伺服器一路問到權威伺服器，也可以改紀錄、讓快取過期。</p>
           </div>
-        </div>
-        <div class="text">
-          <h2>ISA 比較：x86、ARM、RISC-V</h2>
-          <p>七篇系列，每篇挑一個設計決定，看三個指令集各自選了什麼、換到了什麼：編碼長度、暫存器數量、呼叫慣例、條件分支、定址模式、立即值、micro-op。</p>
-        </div>
-      </a>
-    </li>
-    <li>
-      <a class="entry" href="eac/">
-        <div class="glyph" aria-hidden="true">
-          <svg class="mini-cfg" viewBox="0 0 120 56">
-            <rect x="40" y="2" width="40" height="12" rx="2"/>
-            <rect class="l" x="6" y="22" width="40" height="12" rx="2"/>
-            <rect class="l" x="74" y="22" width="40" height="12" rx="2"/>
-            <rect class="l" x="40" y="42" width="40" height="12" rx="2"/>
-            <path d="M52 14 L30 22 M68 14 L90 22 M30 34 L52 42 M90 34 L68 42"/>
-          </svg>
-        </div>
-        <div class="text">
-          <h2>Engineering a Compiler 筆記</h2>
-          <p>讀 Cooper 和 Torczon 的編譯器教科書時，把值得動手走一遍的演算法做成互動頁。目前四篇：建控制流程圖、區域值編號、超區域值編號、樹高平衡。</p>
-        </div>
-      </a>
-    </li>
-    <li>
-      <a class="entry" href="find-rows/">
-        <div class="glyph" aria-hidden="true">
-          <div class="mini-tape">
-            <span>3<small><b class="r">p0</b><b class="l">r3</b></small></span>
-            <span>7<small><b class="r">p1</b><b class="l">r1</b></small></span>
-            <span>19<small><b class="r">p2</b><b class="l">r2</b></small></span>
-            <span>42<small><b class="r">p3</b><b class="l">r0</b></small></span>
-          </div>
-        </div>
-        <div class="text">
-          <h2>find_rows 逐步圖解</h2>
-          <p>一行 code 一步，看排序加二分搜尋的向量化查表怎麼把二維 queries 變成 pos、hit、row，以及為什麼 clamp 不會製造假命中。</p>
-        </div>
-      </a>
-    </li>
-    <li>
-      <a class="entry" href="x86-registers/">
-        <div class="glyph" aria-hidden="true">
-          <div class="mini-regs">
-            <div class="mini-bar"><span style="width:100%">rax</span></div>
-            <div class="mini-bar"><span style="width:50%">eax</span></div>
-            <div class="mini-bar"><span style="width:25%">ax</span></div>
-            <div class="mini-bar"><span style="width:12.5%" class="l">al</span><span style="width:12.5%; right:12.5%" class="r">ah</span></div>
-          </div>
-        </div>
-        <div class="text">
-          <h2>x86-64 暫存器地圖</h2>
-          <p>點開每一個暫存器看別名怎麼疊、SysV 和 Win64 各給它什麼角色，再用幾個 C 函式逐步看參數怎麼進暫存器。</p>
-        </div>
-      </a>
-    </li>
-    <li>
-      <a class="entry" href="call-stack/">
-        <div class="glyph" aria-hidden="true">
-          <div class="mini-frames">
-            <div class="mf a">add</div>
-            <div class="mf b">printf <span>ret→</span></div>
-            <div class="mf sp">rsp →</div>
-          </div>
-        </div>
-        <div class="text">
-          <h2>函式呼叫與 Stack 逐步圖解</h2>
-          <p>用真實位址一步步看 call 和 ret 怎麼搬動 rip 與 rsp、frame 怎麼疊起來又拆掉、為什麼 call 的瞬間 rsp 必須是 16 的倍數，還有返回位址被蓋掉會怎樣。</p>
-        </div>
-      </a>
-    </li>
-    <li>
-      <a class="entry" href="ita/">
-        <div class="glyph" aria-hidden="true">
-          <div class="mini-heap-wrap">
-            <svg class="mini-heap" viewBox="0 0 120 48">
-              <line x1="60" y1="10" x2="30" y2="26"/><line x1="60" y1="10" x2="90" y2="26"/>
-              <line x1="30" y1="26" x2="15" y2="42"/><line x1="30" y1="26" x2="45" y2="42"/>
-              <line x1="90" y1="26" x2="75" y2="42"/><line x1="90" y1="26" x2="105" y2="42"/>
-              <circle class="r" cx="60" cy="10" r="5"/>
-              <circle class="l" cx="30" cy="26" r="5"/><circle cx="90" cy="26" r="5"/>
-              <circle cx="15" cy="42" r="5"/><circle class="l" cx="45" cy="42" r="5"/><circle cx="75" cy="42" r="5"/><circle cx="105" cy="42" r="5"/>
+        </a>
+      </li>
+      <li>
+        <a class="entry" href="dds/">
+          <div class="glyph" aria-hidden="true">
+            <svg class="mini-dds" viewBox="0 0 120 54">
+              <rect x="4" y="6" width="44" height="42" rx="3"/>
+              <rect x="72" y="6" width="44" height="42" rx="3"/>
+              <rect class="w" x="12" y="20" width="28" height="14" rx="2"/>
+              <rect class="r" x="80" y="20" width="28" height="14" rx="2"/>
+              <path class="d" d="M26 6 V2 H94 V6"/>
+              <path d="M40 27 H80"/>
             </svg>
-            <div class="mini-heap-cells"><i class="r"></i><i class="l"></i><i></i><i></i><i class="l"></i><i></i><i></i></div>
           </div>
-        </div>
-        <div class="text">
-          <h2>Introduction to Algorithms 筆記</h2>
-          <p>讀 CLRS 時，把值得動手走一遍的演算法做成互動頁。目前三篇：heap 與 heapsort、BFS/DFS 與 SCC、Kruskal 與 Prim 的最小生成樹，都照書上的虛擬碼逐步執行。</p>
-        </div>
-      </a>
-    </li>
-    <li>
-      <a class="entry" href="eng-org/">
-        <div class="glyph" aria-hidden="true">
-          <div class="mini-ladder">
-            <div class="c"><i></i><i></i><i></i><i class="r"></i><i></i><i></i><i></i></div>
-            <div class="c"><i class="gap"></i><i class="gap"></i><i></i><i class="l"></i><i></i><i></i><i></i></div>
+          <div class="text">
+            <h3>DDS 與 ROS 2 底層 <span class="badge outline">系列</span></h3>
+            <p>DDS 怎麼自動探索和配對、ROS 2 怎麼疊在 DDS 上，以及各家 DDS 實作的差異和互通的極限。</p>
           </div>
-        </div>
-        <div class="text">
-          <h2>工程組織怎麼運作</h2>
-          <p>從工程師的位置往上看軟體公司的工程組織：每一級負責什麼、組織怎麼分層、主管用哪些機制管理團隊。九篇：職級、組織規模、技術決策、團隊切法，以及交付指標、OKR、考績、事故這四套機制，最後是一份組織健康檢查清單。</p>
-        </div>
-      </a>
-    </li>
-  </ul>
+        </a>
+      </li>
+      <li>
+        <a class="entry" href="idl-protobuf/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-wire">
+              <div class="r"><i></i><i></i><i></i><i></i><i class="r"></i><i class="r"></i><i class="p"></i><i class="p"></i><i class="l"></i><i class="l"></i><i class="l"></i><i class="l"></i></div>
+              <div class="r"><i></i><i class="r"></i><i></i><i class="l"></i><i class="l"></i></div>
+            </div>
+          </div>
+          <div class="text">
+            <h3>IDL 與 protobuf：同一筆資料的兩種線上格式</h3>
+            <p>DDS 的 OMG IDL 和 Google 的 protobuf 都是「一份定義檔、產生各語言的程式」。輸入同一筆訊息，左右比較 CDR 和 protobuf 編出來的每個 byte：對齊和 padding、varint、欄位編號，以及預設值不送。</p>
+          </div>
+        </a>
+      </li>
+    </ul>
+  </section>
+  <section>
+    <h2>工程組織</h2>
+    <ul class="entries">
+      <li>
+        <a class="entry" href="eng-org/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-ladder">
+              <div class="c"><i></i><i></i><i></i><i class="r"></i><i></i><i></i><i></i></div>
+              <div class="c"><i class="gap"></i><i class="gap"></i><i></i><i class="l"></i><i></i><i></i><i></i></div>
+            </div>
+          </div>
+          <div class="text">
+            <h3>工程組織怎麼運作 <span class="badge outline">系列</span></h3>
+            <p>從工程師的位置往上看軟體公司的工程組織：每一級負責什麼、組織怎麼分層、主管用哪些機制管理團隊。</p>
+          </div>
+        </a>
+      </li>
+    </ul>
+  </section>
 </main>
 </body>
 </html>
