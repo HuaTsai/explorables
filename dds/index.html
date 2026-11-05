@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DDS 與 ROS 2 底層</title>
+<meta name="description" content="三篇系列：DDS 怎麼自動找到彼此並配對、ROS 2 怎麼疊在 DDS 上（rt/ 前綴、rmw、QoS profile）、各家 DDS 實作差在哪裡。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
+<style>
+/* 這一頁特有的：DDS 規格一覽表和系列目錄。 */
+table.cmp { min-width: 32rem; }
+.entries { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); counter-reset: n; }
+.entries li { border-bottom: 1px solid var(--line); counter-increment: n; }
+.entry { display: flex; align-items: baseline; gap: 1rem; padding: 1.1rem 0; color: inherit; text-decoration: none; }
+.entry::before { content: counter(n, decimal-leading-zero); font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); flex: 0 0 2rem; }
+.entry:focus-visible { outline-offset: 4px; }
+.entry h2 { font-size: 1.1rem; line-height: 1.35; margin: 0; }
+a.entry:hover h2 { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.entry p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.95rem; }
+.entry .text { flex: 1 1 16rem; min-width: 0; }
+</style>
+</head>
+<body>
+<main class="page index">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">DDS</span> 與 ROS 2 底層</h1>
+    <p class="lead">ROS 2 的 topic 底下跑的是 DDS。這個系列從 DDS 怎麼在網路上自動找到彼此講起，再看 ROS 2 在它上面疊了什麼，最後比較幾家 DDS 實作的差異。三篇可以分開讀。</p>
+  </header>
+  <section class="prose">
+    <h2>DDS 是一疊規格</h2>
+    <p>DDS（Data Distribution Service）是 OMG 制定的 publish／subscribe 標準。它以資料為中心：程式不直接連到某一台機器，而是宣告「我要寫這個 topic」或「我要讀這個 topic」，DDS 自己在網路上找到對方、配對、把資料送過去。DDS 不是單一份文件，而是一組規格，各家實作可以只做其中一部分：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>規格</th><th>管什麼</th></tr></thead>
+      <tbody>
+        <tr><td class="name">DDS（DCPS）</td><td>給應用程式的 API：participant、topic、publisher、subscriber、DataWriter、DataReader、QoS</td></tr>
+        <tr><td class="name">DDSI-RTPS</td><td>線上協定：封包格式、自動探索、可靠傳輸。不同家的實作能互通，靠的就是這一份</td></tr>
+        <tr><td class="name">IDL</td><td>描述資料型別的語言</td></tr>
+        <tr><td class="name">DDS-XTypes</td><td>型別系統：型別怎麼演進、怎麼在網路上交換型別資訊、XCDR2 編碼</td></tr>
+        <tr><td class="name">DDS Security</td><td>認證、存取控制、加密</td></tr>
+        <tr><td class="name">DDS-XRCE</td><td>讓資源很少的微控制器透過代理接進 DDS 網路</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="entries">
+    <li>
+      <a class="entry" href="discovery/">
+        <div class="text">
+          <h2>自動探索與配對</h2>
+          <p>設定兩個程式的 domain、topic、型別和 QoS，一步一步看 SPDP 公告、SEDP 交換、條件比對，以及配對失敗時是卡在哪一步。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="ros2/">
+        <div class="text">
+          <h2>ROS 2 疊在 DDS 上的那一層</h2>
+          <p>rclcpp、rcl、rmw 的分層，<code>rt/</code> 和 <code>dds_::</code> 這些名稱是怎麼來的，ROS 的 QoS profile 對到哪些 DDS 設定。輸入一個 ROS 名稱，看它在 DDS 上叫什麼。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="vendors/">
+        <div class="text">
+          <h2>各家 DDS 實作的差異</h2>
+          <p>Fast DDS、Cyclone DDS、RTI Connext 逐項比較：授權、程式產生器、XTypes、共享記憶體、探索、安全、認證、工具。線上協定相通，但哪些功能跨不了家。</p>
+        </div>
+      </a>
+    </li>
+  </ul>
+</main>
+</body>
+</html>

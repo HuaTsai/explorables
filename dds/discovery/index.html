@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DDS 自動探索與配對</title>
+<meta name="description" content="DDS 程式不用設定對方的 IP 就能互相找到：SPDP 用 multicast 公告自己，SEDP 交換 writer 和 reader 的資訊，再比對 topic、型別和 QoS。設定兩個 ROS 2 程式，逐步看配對成功或卡在哪一步。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Step-by-step workbench: presets, two side-by-side endpoint forms (A writes,
+   B reads) with the derived DDS names and ports, the stepper, then three panels: the rule list (highlighted
+   per step), the wire log (what was sent where), and the match checklist. */
+table.cmp { min-width: 34rem; }
+.presets button { font-size: 0.85rem; }
+
+.sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 1.5rem; }
+@media (max-width: 760px) { .sides { grid-template-columns: minmax(0, 1fr); } }
+.side { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+.side h3 { font-size: 0.85rem; }
+.form { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.35rem 0.6rem; align-items: center; }
+.form label { font-size: 0.8rem; color: var(--muted); }
+.form input, .form select { width: 100%; min-width: 0; font-size: 0.8rem; }
+.form input.bad { border-color: var(--miss); }
+.derived { font-family: var(--font-mono); font-size: 0.74rem; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; border-left: 2px solid var(--line); padding-left: 0.6rem; margin-top: 0.2rem; }
+.derived b { color: var(--ink); font-weight: 600; }
+.chk { display: flex; gap: 0.4rem; align-items: center; font-size: 0.8rem; color: var(--muted); }
+
+.work.disc { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr) minmax(0, 0.9fr); }
+.log { display: flex; flex-direction: column; }
+.msg { padding: 0.45rem 0.75rem; font-size: 0.8rem; border-bottom: 1px dashed var(--line); }
+.msg:last-child { border-bottom: 0; }
+.msg.cur { background: var(--mark); }
+.msg .route { font-family: var(--font-mono); font-size: 0.74rem; font-weight: 600; overflow-wrap: anywhere; }
+.msg .kind { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 700; padding: 0 0.3rem; border: 1px solid var(--muted); border-radius: 3px; margin-right: 0.35rem; }
+.msg .body { font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); overflow-wrap: anywhere; margin-top: 0.15rem; }
+.msg.lost .route { color: var(--miss); text-decoration: line-through; }
+.empty { padding: 0.6rem 0.75rem; font-size: 0.8rem; color: var(--muted); }
+.checks { list-style: none; margin: 0; padding: 0.4rem 0.75rem; display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.82rem; }
+.checks li { display: flex; gap: 0.5rem; align-items: baseline; }
+.checks .st { flex: 0 0 1.2rem; font-family: var(--font-mono); font-weight: 700; text-align: center; }
+.checks .pending .st { color: var(--muted); }
+.checks .ok .st { color: var(--hit); }
+.checks .fail .st, .checks .fail { color: var(--miss); }
+.checks .cur { background: var(--mark); border-radius: 3px; }
+.checks small { display: block; color: var(--muted); font-size: 0.74rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← DDS 與 ROS 2 底層</a>
+    <h1><span class="mono">DDS</span> 自動探索與配對</h1>
+    <p class="lead">開兩個 ROS 2 程式，一個 publish、一個 subscribe，不用告訴它們對方的 IP，資料就自己流過去了。這是 DDS 的自動探索在做事。設定兩邊的 domain、topic、型別和 QoS，一步一步看它們怎麼找到彼此，以及配對失敗時是卡在哪一步。</p>
+  </header>
+
+  <section class="prose">
+    <h2>沒有中央伺服器，大家自己喊</h2>
+    <p>DDS 的標準探索不需要任何中央伺服器。每個程式裡有一個 <span class="term" data-def="DomainParticipant。程式加入某個 DDS domain 的入口，底下掛著它所有的 publisher、subscriber、DataWriter、DataReader。一個程式通常一個。">participant</span>，它做兩件事：</p>
+    <ol>
+      <li><strong>SPDP</strong>（Simple Participant Discovery Protocol）：定期把「我在這裡、我的 unicast 位址是什麼」用 multicast 送到 <code>239.255.0.1</code>。同一個網段裡、同一個 domain 的 participant 都會收到，於是彼此知道對方存在。</li>
+      <li><strong>SEDP</strong>（Simple Endpoint Discovery Protocol）：知道對方之後，改用 unicast 交換更細的資訊：我有哪些 <span class="term" data-def="DataWriter。負責寫某一個 topic 的端點，ROS 2 的 publisher 底下就是一個 DataWriter。">DataWriter</span>、哪些 <span class="term" data-def="DataReader。負責讀某一個 topic 的端點，ROS 2 的 subscription 底下就是一個 DataReader。">DataReader</span>，各自的 topic 名稱、型別名稱和 QoS。</li>
+    </ol>
+    <p>兩邊都拿到對方的清單後，各自比對：topic 名稱一樣、型別名稱一樣、QoS 相容，就配對成功，之後的資料直接用 unicast 從 writer 送到 reader。</p>
+    <p><strong>domain ID</strong> 決定用哪些 port。RTPS 規格用一組常數算 port，預設值算出來是：</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>用途</th><th>公式</th><th>domain 0、participant 0</th><th>domain 0、participant 1</th></tr></thead>
+      <tbody>
+        <tr><td class="name">SPDP multicast</td><td class="num">7400 + 250 × domain</td><td class="num">7400</td><td class="num">7400</td></tr>
+        <tr><td class="name">SEDP 等探索用 unicast</td><td class="num">7400 + 250 × domain + 10 + 2 × participant</td><td class="num">7410</td><td class="num">7412</td></tr>
+        <tr><td class="name">使用者資料 multicast</td><td class="num">7400 + 250 × domain + 1</td><td class="num">7401</td><td class="num">7401</td></tr>
+        <tr><td class="name">使用者資料 unicast</td><td class="num">7400 + 250 × domain + 11 + 2 × participant</td><td class="num">7411</td><td class="num">7413</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p>所以 domain 不同的兩個程式，SPDP 送到不同的 port，從頭到尾聽不到對方。<span class="sn">這是規格的預設值，各家實作可以改。例如 Fast DDS 沒有另外設定時，只開使用者資料的 unicast port，不開 7401 這個 multicast port。規格的公告週期是 30 秒、租約 100 秒；Fast DDS 預設 3 秒公告一次、租約 20 秒，剛啟動時還會每 100 ms 連發 5 次。</span>這就是 ROS 2 的 <code>ROS_DOMAIN_ID</code> 能隔開不同機器人的原因。participant ID 只是同一台機器上用來錯開 unicast port 的編號，第一個起來的是 0，下一個是 1，以此類推。</p>
+    <p><strong>QoS 相容</strong>的規則叫 <span class="term" data-def="Request vs Offered。writer 「提供」某個等級的服務，reader 「要求」某個等級；只有提供的不低於要求的，才算相容。">RxO</span>：writer 提供的等級不能低於 reader 要求的等級。這一頁只看 ROS 2 最常碰到的兩個：</p>
+    <ul>
+      <li><strong>reliability</strong>：RELIABLE 高於 BEST_EFFORT。writer 是 BEST_EFFORT、reader 要 RELIABLE，就配不上；反過來可以。</li>
+      <li><strong>durability</strong>：TRANSIENT_LOCAL 高於 VOLATILE。reader 要求「晚加入也要拿到最後幾筆」（TRANSIENT_LOCAL），writer 卻沒保留（VOLATILE），就配不上；反過來可以。</li>
+    </ul>
+    <p>下面的 workbench 用的是 ROS 2 的名稱。ROS 2 會先把 topic <code>/turtle1/cmd_vel</code> 改成 DDS 上的 <code>rt/turtle1/cmd_vel</code>，型別 <code>geometry_msgs/msg/Twist</code> 改成 <code>geometry_msgs::msg::dds_::Twist_</code>，細節在<a href="../ros2/">下一篇</a>。比對時看的是改過之後的名字。整個流程寫成步驟就是：</p>
+<pre class="code">1  啟動：依 domain ID 和 participant ID 算出要用的 port
+2  SPDP：把「我在這裡」multicast 到 239.255.0.1:(7400 + 250 × domain)
+3  收到對方的 SPDP：記下對方的 unicast 位址
+4  SEDP：把自己的 writer／reader（topic、型別、QoS）unicast 給對方
+5  比對 topic 名稱，必須完全相同
+6  比對型別名稱，必須完全相同
+7  比對 QoS：writer 提供的 ≥ reader 要求的（reliability、durability）
+8  配對成功：資料用 unicast 從 writer 送到 reader，reader 用自己的型別定義解碼</pre>
+  </section>
+
+  <section class="bench" aria-label="逐步執行">
+    <div class="row presets" id="presets"><span class="lbl">情境</span></div>
+
+    <div class="row">
+      <div class="sides">
+        <div class="side" id="side-a"></div>
+        <div class="side" id="side-b"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
+      </div>
+    </div>
+
+    <div class="row work disc">
+      <div class="panel">
+        <div class="panel-head"><span>規則</span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>網路上送了什麼</span><span class="sub">最新的在下面</span></div>
+        <div class="log" id="log"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>配對條件</span></div>
+        <ul class="checks" id="checks"></ul>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>配對失敗的時候，誰會知道</h2>
+    <p>workbench 裡的幾種失敗，在真實系統上的「能見度」差很多：</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>卡在哪</th><th>看得到嗎</th><th>怎麼查</th></tr></thead>
+      <tbody>
+        <tr><td class="name">domain 不同</td><td>完全看不到，雙方根本不知道對方存在</td><td>兩邊的 <code>ROS_DOMAIN_ID</code>；用 Wireshark 看 7400 + 250 × domain 的 port</td></tr>
+        <tr><td class="name">網路擋了 multicast</td><td>看不到，和 domain 不同的症狀一樣</td><td>防火牆、交換器的 multicast 設定；Wi-Fi 常常是元兇</td></tr>
+        <tr><td class="name">topic 名稱不同</td><td>看得到兩個 topic，但各自只有一端</td><td><code>ros2 topic list</code>、<code>ros2 topic info -v</code></td></tr>
+        <tr><td class="name">型別名稱不同</td><td>同一個 topic 名稱掛著兩種型別</td><td><code>ros2 topic info</code> 會列出不同的型別</td></tr>
+        <tr><td class="name">QoS 不相容</td><td>DDS 會發出 incompatible QoS 的事件，ROS 2 會印警告</td><td><code>ros2 topic info -v</code> 列出每一端的 QoS</td></tr>
+        <tr><td class="name">型別名稱一樣、內容不一樣</td><td>最難發現：配對成功，資料卻解不開或解錯</td><td>確認兩邊用的是同一版定義檔產生的程式</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p>最後一種要特別小心。DDS 配對時比的是型別的<strong>名字</strong>，不是型別的內容。兩邊的定義檔只要差一個欄位，名字還是一樣，配對照樣成功；接收端照自己的定義去切 CDR 的 bytes，後面的欄位就全部錯位。DDS-XTypes 讓實作可以在探索時交換完整的型別資訊並比對結構，但要兩邊都支援、都打開才有用。以 Fast DDS 為例，兩邊都帶了型別資訊時，它改成比對型別本身而不比名字，結構不同就不配對；但它還不支援 XTypes 的「可指派性」判斷，也就是不會讓「多一個欄位但相容」的兩個版本配在一起。<span class="sn">另外，partition 也會擋配對，但它不算 QoS 不相容：分區對不上時不會觸發任何事件。Fast DDS 目前也沒有檢查 PRESENTATION、LATENCY_BUDGET、DESTINATION_ORDER 這三個 RxO 項目。</span></p>
+    <p>標準探索還有兩個實務上的限制：它依賴 multicast，而很多 Wi-Fi 和雲端網路不轉送 multicast；另外每個 participant 都要和其他所有 participant 交換資訊，節點一多，探索的流量大約跟節點數的平方成長。所以各家實作都提供了替代方案，例如集中式的 discovery server，或手動列出對方位址的 static peers，<a href="../vendors/">第三篇</a>會比較。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>DDS 不需要設定對方位址，是因為每個 participant 都會用 multicast 公告自己（SPDP），再用 unicast 交換自己有哪些 writer 和 reader（SEDP）。配對要四個條件同時成立：domain 相同、topic 名稱相同、型別名稱相同、QoS 相容。前兩個不成立時，雙方通常完全沒有訊息；QoS 不相容會有事件和警告；最危險的是型別名稱相同但內容不同，因為配對會成功，錯誤卻安靜地發生在解碼的時候。</p>
+    <p>這一頁省略了 liveliness、deadline、ownership、partition 這些也會影響配對的 QoS，以及可靠傳輸的 HEARTBEAT／ACKNACK 機制和大訊息的分片。下一篇看 ROS 2 怎麼把自己的名稱和 QoS profile 對到這些 DDS 概念上。</p>
+  </section>
+
+  <p class="foot">來源：OMG DDSI-RTPS 2.5（第 8.5 節 Discovery、第 9.6.1 節 port 對應）；OMG DDS 1.4（第 2.2.3 節 QoS 與 RxO）；ROS 2 design 文件「Topic and Service name mapping to DDS」；ROS 2 文件「Quality of Service settings」。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const RULES = [
+  '啟動：依 domain 和 participant ID 算 port',
+  'SPDP：multicast 公告「我在這裡」',
+  '收到對方的 SPDP：記下 unicast 位址',
+  'SEDP：交換 writer／reader 的資訊',
+  '比對 topic 名稱',
+  '比對型別名稱',
+  '比對 QoS（writer ≥ reader）',
+  '配對成功：資料 unicast 給 reader',
+];
+
+const BASE = { domain: 0, ros: true, topic: '/turtle1/cmd_vel', type: 'geometry_msgs/msg/Twist', rel: 'RELIABLE', dur: 'VOLATILE' };
+const PRESETS = [
+  { key: 'ok', label: '正常配對', a: {}, b: {} },
+  { key: 'domain', label: 'domain 不同', a: {}, b: { domain: 1 } },
+  { key: 'rel', label: '感測器用 best effort', a: { topic: '/scan', type: 'sensor_msgs/msg/LaserScan', rel: 'BEST_EFFORT' }, b: { topic: '/scan', type: 'sensor_msgs/msg/LaserScan' } },
+  { key: 'rel-ok', label: '反過來就可以', a: { topic: '/scan', type: 'sensor_msgs/msg/LaserScan' }, b: { topic: '/scan', type: 'sensor_msgs/msg/LaserScan', rel: 'BEST_EFFORT' } },
+  { key: 'dur', label: 'map 要求保留', a: { topic: '/map', type: 'nav_msgs/msg/OccupancyGrid' }, b: { topic: '/map', type: 'nav_msgs/msg/OccupancyGrid', dur: 'TRANSIENT_LOCAL' } },
+  { key: 'prefix', label: '少了 rt/', a: { ros: false, topic: 'turtle1/cmd_vel', type: 'geometry_msgs::msg::dds_::Twist_' }, b: {} },
+  { key: 'type', label: '型別不同', a: { type: 'std_msgs/msg/String' }, b: {} },
+  { key: 'ver', label: '定義檔版本不同', a: { ver: true }, b: {} },
+];
+
+const state = { a: null, b: null, preset: 'ok', trace: [], k: 0 };
+
+const mangleType = t => { const m = /^(\w+)\/(msg|srv|action)\/(\w+)$/.exec(t); return m ? `${m[1]}::${m[2]}::dds_::${m[3]}_` : null; };
+const ddsTopic = s => s.ros ? (s.topic.startsWith('/') ? 'rt' + s.topic : 'rt/' + s.topic) : s.topic;
+const ddsType = s => s.ros ? mangleType(s.type) : s.type;
+const ports = (d, p) => ({ spdpMc: 7400 + 250 * d, metaUc: 7400 + 250 * d + 10 + 2 * p, userUc: 7400 + 250 * d + 11 + 2 * p });
+const RANK = { BEST_EFFORT: 0, RELIABLE: 1, VOLATILE: 0, TRANSIENT_LOCAL: 1 };
+
+// ---------------- the two endpoint forms ----------------
+function sideHtml(id, title, role) {
+  return `<h3>${title}</h3>
+  <div class="form">
+    <label for="${id}-domain">domain ID</label><input id="${id}-domain" type="number" min="0" max="232" step="1">
+    <label for="${id}-ros">程式</label><select id="${id}-ros"><option value="1">ROS 2 節點</option><option value="0">直接用 DDS</option></select>
+    <label for="${id}-topic">topic</label><input id="${id}-topic" type="text" spellcheck="false">
+    <label for="${id}-type">型別</label><input id="${id}-type" type="text" spellcheck="false">
+    <label for="${id}-rel">reliability</label><select id="${id}-rel"><option>RELIABLE</option><option>BEST_EFFORT</option></select>
+    <label for="${id}-dur">durability</label><select id="${id}-dur"><option>VOLATILE</option><option>TRANSIENT_LOCAL</option></select>
+  </div>
+  ${id === 'a' ? `<label class="chk"><input id="a-ver" type="checkbox">A 用的 .msg 比 B 多一個欄位（名字一樣）</label>` : ''}
+  <div class="derived" id="${id}-derived"></div>`;
+}
+
+function fillForms() {
+  for (const id of ['a', 'b']) {
+    const s = state[id];
+    $(`${id}-domain`).value = s.domain; $(`${id}-ros`).value = s.ros ? '1' : '0';
+    $(`${id}-topic`).value = s.topic; $(`${id}-type`).value = s.type;
+    $(`${id}-rel`).value = s.rel; $(`${id}-dur`).value = s.dur;
+    if (id === 'a') $('a-ver').checked = !!s.ver;
+  }
+}
+
+function readForms() {
+  let ok = true;
+  for (const id of ['a', 'b']) {
+    const d = Number($(`${id}-domain`).value);
+    const okD = $(`${id}-domain`).value !== '' && Number.isInteger(d) && d >= 0 && d <= 232;
+    $(`${id}-domain`).classList.toggle('bad', !okD);
+    const ros = $(`${id}-ros`).value === '1';
+    const type = $(`${id}-type`).value.trim();
+    const okT = type !== '' && (!ros || mangleType(type) !== null);
+    $(`${id}-type`).classList.toggle('bad', !okT);
+    const topic = $(`${id}-topic`).value.trim();
+    $(`${id}-topic`).classList.toggle('bad', topic === '');
+    if (!okD || !okT || topic === '') { ok = false; continue; }
+    state[id] = { domain: d, ros, topic, type, rel: $(`${id}-rel`).value, dur: $(`${id}-dur`).value, ver: id === 'a' ? $('a-ver').checked : false };
+  }
+  if (!ok) return;
+  state.preset = null;
+  rebuild();
+}
+
+function renderDerived() {
+  const pid = { a: 0, b: 1 };
+  for (const id of ['a', 'b']) {
+    const s = state[id], p = ports(s.domain, pid[id]);
+    $(`${id}-derived`).innerHTML =
+      `DDS topic：<b>${esc(ddsTopic(s))}</b><br>DDS 型別：<b>${esc(ddsType(s))}</b><br>` +
+      `participant ${pid[id]}：SPDP ${p.spdpMc}、探索 unicast ${p.metaUc}、資料 unicast ${p.userUc}`;
+  }
+}
+
+// ---------------- the trace ----------------
+function buildTrace() {
+  const A = state.a, B = state.b;
+  const pa = ports(A.domain, 0), pb = ports(B.domain, 1);
+  const tA = ddsTopic(A), tB = ddsTopic(B), yA = ddsType(A), yB = ddsType(B);
+  const steps = [];
+  const log = [];
+  const checks = {
+    domain: { label: 'domain 相同', st: 'pending' },
+    topic: { label: 'topic 名稱相同', st: 'pending' },
+    type: { label: '型別名稱相同', st: 'pending' },
+    rel: { label: 'reliability 相容', st: 'pending' },
+    dur: { label: 'durability 相容', st: 'pending' },
+    data: { label: '資料內容一致', st: 'pending', note: 'DDS 不檢查這一項' },
+  };
+  const snap = (rule, say, cur, extra = {}) => steps.push({ rule, say, cur, log: log.map(x => ({ ...x })), checks: JSON.parse(JSON.stringify(checks)), ...extra });
+
+  snap(0, `A 是 participant 0、B 是 participant 1。A 在 domain ${A.domain}，SPDP 用 ${pa.spdpMc}；B 在 domain ${B.domain}，SPDP 用 ${pb.spdpMc}。每個 participant 也各自開好 unicast 的探索 port（A ${pa.metaUc}、B ${pb.metaUc}）和資料 port（A ${pa.userUc}、B ${pb.userUc}）。`);
+
+  log.push({ kind: 'SPDP', route: `A → 239.255.0.1:${pa.spdpMc}`, body: `我是 A，探索 unicast ${pa.metaUc}、資料 unicast ${pa.userUc}` });
+  if (A.domain !== B.domain) {
+    log[log.length - 1].lost = true;
+    log[log.length - 1].body += `；B 在聽的是 ${pb.spdpMc}，收不到`;
+    checks.domain.st = 'fail'; checks.domain.cur = true;
+    snap(1, `A 把公告送到 ${pa.spdpMc}，但 B 在 domain ${B.domain}，聽的是 ${pb.spdpMc}。兩邊從頭到尾不知道對方存在。<span class="warn">配對失敗：domain 不同。這種失敗沒有任何錯誤訊息，雙方都只是「沒有對象」。</span>`, log.length - 1, { end: true });
+    return steps;
+  }
+  snap(1, `A 把「我在這裡」multicast 到 239.255.0.1:${pa.spdpMc}。同一個網段、同一個 domain 的 participant 都會收到。實作會定期重送這個公告，也靠它判斷對方是不是還活著。`, log.length - 1);
+
+  log.push({ kind: 'SPDP', route: `B → 239.255.0.1:${pb.spdpMc}`, body: `我是 B，探索 unicast ${pb.metaUc}、資料 unicast ${pb.userUc}` });
+  checks.domain.st = 'ok'; checks.domain.cur = true;
+  snap(2, `B 也公告自己。現在 A 知道 B 的探索 port 是 ${pb.metaUc}，B 也知道 A 的是 ${pa.metaUc}。之後的探索改用 unicast，只送給對方。`, log.length - 1);
+  checks.domain.cur = false;
+
+  log.push({ kind: 'SEDP', route: `A → B:${pb.metaUc}`, body: `writer：topic「${tA}」、型別「${yA}」、${A.rel}、${A.dur}` });
+  snap(3, 'A 告訴 B 自己有一個 DataWriter，附上 topic 名稱、型別名稱和 QoS。SEDP 本身是可靠傳輸，送丟會重送。', log.length - 1);
+  log.push({ kind: 'SEDP', route: `B → A:${pa.metaUc}`, body: `reader：topic「${tB}」、型別「${yB}」、${B.rel}、${B.dur}` });
+  snap(3, 'B 也告訴 A 自己有一個 DataReader。兩邊各自拿著對方的清單開始比對，接下來的比對是在兩邊各做一次、結果相同。', log.length - 1);
+
+  checks.topic.cur = true;
+  if (tA !== tB) {
+    checks.topic.st = 'fail';
+    let why = `A 的 topic 是「${tA}」，B 的是「${tB}」，對不上。`;
+    if (A.ros !== B.ros) why += `<span class="note">A 是直接用 DDS 寫的程式，沒有幫 topic 加上 ROS 2 的 rt/ 前綴。ROS 2 那一端在找的是 ${tB}，所以永遠配不上；${A.ros ? '' : 'A 的 topic 也不會出現在 ros2 topic list 裡。'}</span>`;
+    snap(4, why + '<span class="warn">配對失敗：topic 名稱不同。兩個 topic 各自存在，只是各只有一端。</span>', -1, { end: true });
+    return steps;
+  }
+  checks.topic.st = 'ok';
+  snap(4, `兩邊的 topic 都是「${tA}」。比對的是 DDS 上的名字，也就是 ROS 2 加過 rt/ 之後的名字。`, -1);
+  checks.topic.cur = false;
+
+  checks.type.cur = true;
+  if (yA !== yB) {
+    checks.type.st = 'fail';
+    snap(5, `A 的型別是「${yA}」，B 的是「${yB}」。<span class="warn">配對失敗：同一個 topic 名稱，型別名稱不同。DDS 不會把不同型別的 writer 和 reader 配在一起。規格為這種情況定義了 INCONSISTENT_TOPIC 狀態，但不是每家都實作，例如 Fast DDS 就不支援，結果是兩邊都不會收到任何通知。</span>`, -1, { end: true });
+    return steps;
+  }
+  checks.type.st = 'ok';
+  snap(5, `兩邊的型別名稱都是「${yA}」。注意比的只是名字，不是型別裡有哪些欄位。`, -1);
+  checks.type.cur = false;
+
+  const relOk = RANK[A.rel] >= RANK[B.rel], durOk = RANK[A.dur] >= RANK[B.dur];
+  checks.rel.st = relOk ? 'ok' : 'fail'; checks.dur.st = durOk ? 'ok' : 'fail';
+  checks.rel.cur = checks.dur.cur = true;
+  if (!relOk || !durOk) {
+    const parts = [];
+    if (!relOk) parts.push(`reader 要求 RELIABLE，writer 只提供 BEST_EFFORT`);
+    if (!durOk) parts.push(`reader 要求 TRANSIENT_LOCAL（晚加入也要拿到之前的資料），writer 是 VOLATILE，沒有保留`);
+    snap(6, parts.join('；') + '。<span class="warn">配對失敗：QoS 不相容。DDS 會在 writer 端發出 OFFERED_INCOMPATIBLE_QOS、在 reader 端發出 REQUESTED_INCOMPATIBLE_QOS 事件，ROS 2 會把它印成警告。</span>', -1, { end: true });
+    return steps;
+  }
+  const relNote = A.rel !== B.rel ? 'writer 提供 RELIABLE，reader 只要 BEST_EFFORT：提供的比要求的高，可以配。' : `reliability 兩邊都是 ${A.rel}。`;
+  const durNote = A.dur !== B.dur ? 'writer 有保留資料（TRANSIENT_LOCAL），reader 不在意（VOLATILE），可以配。' : `durability 兩邊都是 ${A.dur}。`;
+  snap(6, relNote + durNote, -1);
+  checks.rel.cur = checks.dur.cur = false;
+
+  log.push({ kind: 'DATA', route: `A → B:${pb.userUc}`, body: A.ver ? 'CDR 的 bytes（照 A 的定義排）' : 'CDR 的 bytes' });
+  if (A.ver) {
+    checks.data.st = 'fail'; checks.data.cur = true;
+    snap(7, '配對成功，A 開始把資料 unicast 給 B。但 A 的 .msg 多了一個欄位，型別名稱卻一樣；兩邊又沒有在探索時交換完整的型別資訊（XTypes 的 TypeInformation），只比對了名字，所以前面每一關都過了。B 照自己的定義切 CDR 的 bytes，從多出來的欄位之後全部錯位。<span class="warn">結果是解碼失敗被丟掉，或者解出錯的值。整個過程沒有任何配對錯誤，這就是「安靜地收不到」。</span>', log.length - 1, { end: true });
+  } else {
+    checks.data.st = 'ok'; checks.data.cur = true;
+    snap(7, `配對成功。A 之後把資料直接 unicast 到 B 的 ${pb.userUc}，B 用自己的型別定義把 CDR 解回來。兩邊的定義來自同一份 .msg，所以解得出正確的值。`, log.length - 1, { end: true });
+  }
+  return steps;
+}
+
+// ---------------- rendering ----------------
+function renderStep() {
+  const s = state.trace[state.k];
+  if (!s) return;
+  $('pseudo').innerHTML = RULES.map((r, i) => `<span class="pl${i === s.rule ? ' on' : ''}">${i + 1}  ${esc(r)}</span>`).join('');
+  $('log').innerHTML = s.log.length
+    ? s.log.map((m, i) => `<div class="msg${i === s.cur ? ' cur' : ''}${m.lost ? ' lost' : ''}"><div class="route"><span class="kind">${m.kind}</span>${esc(m.route)}</div><div class="body">${esc(m.body)}</div></div>`).join('')
+    : '<div class="empty">還沒有送出任何東西。</div>';
+  const mark = { pending: '·', ok: '✓', fail: '✗' };
+  $('checks').innerHTML = Object.values(s.checks).map(c => `<li class="${c.st}${c.cur ? ' cur' : ''}"><span class="st">${mark[c.st]}</span><span>${c.label}${c.note ? `<small>${c.note}</small>` : ''}</span></li>`).join('');
+  $('say').innerHTML = s.say;
+}
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderStep(); } });
+
+function rebuild() {
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', b.dataset.k === state.preset));
+  renderDerived();
+  state.trace = buildTrace();
+  stepper.setTotal(state.trace.length - 1);
+  stepper.set(0);
+}
+
+function choose(pr) {
+  state.preset = pr.key;
+  state.a = { ...BASE, ver: false, ...pr.a };
+  state.b = { ...BASE, ...pr.b };
+  fillForms();
+  ['a-domain', 'b-domain', 'a-type', 'b-type', 'a-topic', 'b-topic'].forEach(id => $(id).classList.remove('bad'));
+  rebuild();
+}
+
+$('side-a').innerHTML = sideHtml('a', 'A：publisher（DataWriter）');
+$('side-b').innerHTML = sideHtml('b', 'B：subscription（DataReader）');
+PRESETS.forEach(pr => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.textContent = pr.label; b.dataset.k = pr.key;
+  b.addEventListener('click', () => choose(pr));
+  $('presets').appendChild(b);
+});
+document.querySelectorAll('.sides input, .sides select').forEach(el => el.addEventListener(el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input', readForms));
+choose(PRESETS[0]);
+</script>
+</body>
+</html>

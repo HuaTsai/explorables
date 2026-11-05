@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>各家 DDS 實作的差異</title>
+<meta name="description" content="Fast DDS、Cyclone DDS、RTI Connext 逐項比較：授權、程式產生器與 C++ API、XTypes、共享記憶體與 zero-copy、探索方案、DDS Security、功能安全認證、工具、ROS 2 支援。勾選你的需求，看哪一家符合；再看線上協定相通之後，哪些功能仍然跨不了家。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Exploratory workbench: requirement checkboxes on top, then one panel per
+   vendor listing the selected requirements with a mark and a one-line note; vendors meeting all picks get
+   a hit badge. */
+table.cmp { min-width: 40rem; }
+.reqs { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.35rem 1rem; }
+.reqs label { display: flex; gap: 0.45rem; align-items: baseline; font-size: 0.86rem; cursor: pointer; }
+.reqs .q { font-size: 0.74rem; color: var(--muted); display: block; }
+.work.vend { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.items { list-style: none; margin: 0; padding: 0.45rem 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.items li { display: grid; grid-template-columns: 1.3rem minmax(0, 1fr); gap: 0.2rem; font-size: 0.82rem; }
+.items .mk { font-family: var(--font-mono); font-weight: 700; text-align: center; }
+.items .yes .mk { color: var(--hit); }
+.items .part .mk { color: var(--ink); }
+.items .no .mk { color: var(--miss); }
+.items .t { font-weight: 700; }
+.items .n { display: block; color: var(--muted); font-size: 0.76rem; }
+.empty { padding: 0.6rem 0.75rem; font-size: 0.82rem; color: var(--muted); }
+.ver { font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); font-weight: 400; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← DDS 與 ROS 2 底層</a>
+    <h1>各家 <span class="mono">DDS</span> 實作的差異</h1>
+    <p class="lead">DDS 是規格，不是軟體。同樣叫 DDS，各家實作的授權、API、支援到哪一版的延伸規格、附了哪些工具都不一樣。這一頁逐項比較 ROS 2 最常用的三家，再看它們在線上互通之後，哪些功能仍然跨不了家。</p>
+  </header>
+
+  <section class="prose">
+    <h2>三家是誰</h2>
+    <p>以 2026 年初的版本為準：Fast DDS 3.6、Cyclone DDS 11.0、RTI Connext 7.7。</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>實作</th><th>開發者</th><th>授權</th><th>在 ROS 2 的位置</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Fast DDS</td><td>eProsima（西班牙）</td><td>Apache-2.0，開源；另有付費的 Pro 版</td><td><code>rmw_fastrtps_cpp</code>，Tier 1，Humble 以後的預設</td></tr>
+        <tr><td class="name">Cyclone DDS</td><td>Eclipse 基金會（源自 ADLINK 的 OpenSplice 團隊）</td><td>EPL-2.0 或 EDL-1.0，開源</td><td><code>rmw_cyclonedds_cpp</code>，Foxy 起 Tier 1，只有 Galactic 當過預設</td></tr>
+        <tr><td class="name">RTI Connext</td><td>Real-Time Innovations（美國）</td><td>商用，核心不開源；ROS 文件說原型、研究、非商業用途免費</td><td><code>rmw_connextdds</code>，Humble 起 Tier 1（arm64 除外），從未當過預設</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>逐項比較</h2>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>項目</th><th>Fast DDS</th><th>Cyclone DDS</th><th>RTI Connext</th></tr></thead>
+      <tbody>
+        <tr><td class="name">程式產生器</td><td>Fast DDS-Gen（Java）</td><td><code>idlc</code>（C），C++ 用 idlcxx 外掛</td><td><code>rtiddsgen</code></td></tr>
+        <tr><td class="name">C++ API</td><td>自己的 API，不是 OMG 的 ISO C++ PSM</td><td>核心是 C API；C++ 由 cyclonedds-cxx 提供，採 ISO C++ PSM</td><td>Traditional C++，以及採 ISO C++ PSM 的 Modern C++</td></tr>
+        <tr><td class="name">XTypes</td><td>3.0 起對應 XTypes 1.3，探索時交換型別資訊；XCDR2 從 2.12 起。還不會判斷「演進過的型別是否相容」</td><td>0.9 起支援 XTypes 1.3（文件註明有些例外），含 XCDR2</td><td>部分支援 XTypes 1.4（仍是 beta 規格）；新版型別資訊格式從 7.7 才有；XCDR2 從 6.0 起</td></tr>
+        <tr><td class="name">共享記憶體、zero-copy</td><td>預設開共享記憶體；zero-copy 靠 data-sharing 加 loan，只限固定大小的型別（不能有字串）</td><td>透過 iceoryx 外掛；11.0 起也有 iceoryx2 外掛</td><td>獨立的 Zero Copy 程式庫，可搭配 FlatData</td></tr>
+        <tr><td class="name">沒有 multicast 時的探索</td><td>Discovery Server（開源版就有）</td><td>手動列出 peers，沒有自己的 discovery server</td><td>Cloud Discovery Service，以及手動列 initial peers</td></tr>
+        <tr><td class="name">DDS Security</td><td>規格 1.1 的內建外掛</td><td>規格 1.1</td><td>規格 1.2</td></tr>
+        <tr><td class="name">功能安全</td><td>Fast DDS 本身沒有；另一套商用產品 Safe DDS 取得 ASIL D 認證</td><td>開源版沒有</td><td>Connext Drive 取得 TÜV SÜD 的 ASIL D 認證；Connext Cert 可認證到 DO-178C DAL A</td></tr>
+        <tr><td class="name">工具</td><td>Fast DDS Monitor（GPL-3.0）、Fast DDS Spy、DDS Router、Record &amp; Replay</td><td><code>ddsperf</code>、Python CLI、Cyclone DDS Insight</td><td>Admin Console、Monitor、Recording／Routing／Web Integration Service、<code>rtiddsspy</code></td></tr>
+        <tr><td class="name">設定檔</td><td>XML，<code>FASTDDS_DEFAULT_PROFILES_FILE</code>（2.x 叫 <code>FASTRTPS_…</code>）</td><td>XML，<code>CYCLONEDDS_URI</code></td><td>XML，<code>USER_QOS_PROFILES.xml</code>、<code>NDDS_QOS_PROFILES</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p>幾個容易誤會的地方：</p>
+    <ul>
+      <li><strong>「支援 XTypes」的程度差很多。</strong>三家引用的規格版本不同（1.3 或 1.4），交換型別資訊的格式也是近幾版才對齊。Connext 7.7 以前用的是舊版的型別資訊格式，和 Fast DDS 3.x、Cyclone 交換型別資訊時，要到 7.7 才是照同一份標準。</li>
+      <li><strong>API 寫法不能互換。</strong>Cyclone 的 C++ 和 Connext 的 Modern C++ 都照 ISO C++ PSM，兩者之間搬程式比較容易；Fast DDS 用自己的 API，換實作就要重寫 DDS 的部分。這也是 ROS 2 要自己疊一層 rmw 的原因之一。<span class="sn">Connext 7.2 起，<code>rtiddsgen</code> 產生的 C++ 型別預設改成 OMG 的 IDL4-to-C++ 對應（公開欄位的 struct），原本 PSM 風格的 getter／setter 變成選項。</span></li>
+      <li><strong>認證是給特定產品的。</strong>開源的 Fast DDS 和 Cyclone 本身都沒有功能安全認證。需要 ISO 26262 時，看的是 Connext Drive、Safe DDS 這類另外的商用產品。</li>
+    </ul>
+  </section>
+
+  <section class="bench" aria-label="勾選需求">
+    <div class="row">
+      <p class="panel-title">你需要什麼</p>
+      <div class="reqs" id="reqs"></div>
+    </div>
+    <div class="row work vend" id="vend"></div>
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>線上相通，但哪些功能跨不了家</h2>
+    <p>不同家的 DDS 能互通，靠的是 RTPS 線上協定、標準探索（SPDP／SEDP）和 CDR 編碼。這部分有公開的驗證：OMG 的 DDS SIG 在 GitHub 上維護互通性測試（<code>omg-dds/dds-rtps</code>，另有 XTypes 和 Security 兩套），定期發布各家之間的測試報告，2026 年 2 月那一版涵蓋了 Connext 7.7、Cyclone 11.0、Fast DDS 3.6、OpenDDS、CoreDX 等。但除了這些共同的部分，很多實用的功能是各家自己的：</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>功能</th><th>跨家的情況</th></tr></thead>
+      <tbody>
+        <tr><td class="name">共享記憶體、zero-copy</td><td>每家的做法不同，只在同一家的程式之間有效。不同家的兩個程式即使在同一台機器上，也會退回走 UDP</td></tr>
+        <tr><td class="name">TCP 傳輸</td><td>RTPS 規格只定義了 UDP 的對應方式，TCP 是各家自己做的，兩端要同一家</td></tr>
+        <tr><td class="name">探索的替代方案</td><td>Fast DDS 的 Discovery Server 要用 Fast DDS 當 client。RTI 的 Cloud Discovery Service 轉送的是標準的參與者公告，Cyclone 的設定裡也有一個和「Cloud discovery service」搭配的選項</td></tr>
+        <tr><td class="name">資料表示（XCDR1／XCDR2）</td><td>預設值各家不同。Cyclone 對沒有選用欄位的 final 型別預設用 XCDR1；Fast DDS 3 的 DataWriter 預設 XCDR2。資料表示的 QoS 對不上時，也會配不上</td></tr>
+        <tr><td class="name">型別資訊</td><td>要兩邊都支援同一版的 TypeObject 格式才交換得了；否則退回只比對型別名稱</td></tr>
+        <tr><td class="name">DDS Security</td><td>三家實作的規格版本不同（1.1 和 1.2），跨家使用前要實測</td></tr>
+        <tr><td class="name">設定檔、預設 QoS</td><td>XML 格式完全不同；同一份 ROS 2 程式換 rmw 之後，沒有特別指定的 QoS 可能就不一樣了</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>其他實作</h2>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>實作</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td class="name">OpenDDS</td><td>Object Computing 開發，開源（OCI 自己的寬鬆授權）。ROS 2 的 rmw 還在開發中，不在官方支援清單裡</td></tr>
+        <tr><td class="name">GurumDDS</td><td>韓國 GurumNetworks 的商用產品。<code>rmw_gurumdds_cpp</code> 從 Foxy 到 Kilted 是 Tier 3，Lyrical 的清單裡已經沒有它</td></tr>
+        <tr><td class="name">CoreDX DDS</td><td>Twin Oaks Computing 的商用產品，主打體積小：程式碼不到 5 萬行、核心靜態程式庫小於 500 KB</td></tr>
+        <tr><td class="name">OpenSplice</td><td>ADLINK 的產品，開源的社群版已停止更新，團隊轉去做 Cyclone DDS；ROS 2 只在 Crystal 到 Eloquent 支援過</td></tr>
+        <tr><td class="name">Safe DDS</td><td>eProsima 另外從頭寫的商用實作，和 Fast DDS 是不同的程式碼，取得 ASIL D 認證</td></tr>
+        <tr><td class="name">Zenoh</td><td>不是 DDS，是另一套協定；但 ROS 2 從 Kilted 起把 <code>rmw_zenoh_cpp</code> 列為 Tier 1，和三家 DDS 並列</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>各家 DDS 在線上協定上相通，這一點有 OMG 的互通性測試背書；差異集中在線上協定以外的地方：API 是自家的還是照 ISO C++ PSM、XTypes 支援到哪一版、zero-copy 和探索替代方案怎麼做、有沒有功能安全認證、附了哪些工具。用 ROS 2 時，rmw 把 API 的差異藏起來了，換實作只要改 <code>RMW_IMPLEMENTATION</code>；但共享記憶體、TCP、discovery server、設定檔這些功能仍然綁在各家身上，跨家混用時要先確認用到的功能是不是標準的一部分。</p>
+    <p>這一頁的資料以 2026 年初各家的最新版本為準，比較的是官方文件寫的功能，不是效能。延遲、吞吐量和 CPU 使用率跟訊息大小、QoS、網路、硬體都有關，要在自己的情境實際量。</p>
+  </section>
+
+  <p class="foot">來源：各家官方文件與 GitHub 專案（eProsima Fast DDS 3.x 文件、eclipse-cyclonedds/cyclonedds 與 cyclonedds-cxx、RTI Connext 7.7 Core Libraries User's Manual、Extensible Types Guide、Code Generator User's Manual）；RTI、eProsima 產品頁；REP-2000；ROS 2 文件「Working with RTI Connext DDS」；OMG DDS-XTypes、DDS Security、DDSI-RTPS 規格頁；github.com/omg-dds 互通性測試。查證日期 2026 年 11 月。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// y = 有、p = 有條件或部分、n = 沒有
+const REQS = [
+  { key: 'open', t: '開源授權', q: '核心程式碼開源' },
+  { key: 'psm', t: '標準的 C++ API', q: 'OMG 的 ISO C++ PSM，方便換實作' },
+  { key: 'xtypes', t: '探索時交換型別資訊', q: 'XTypes 的 TypeInformation' },
+  { key: 'zc', t: '同機 zero-copy', q: '大資料不經序列化' },
+  { key: 'nomc', t: '沒有 multicast 也能探索', q: '集中式的探索服務' },
+  { key: 'sec', t: 'DDS Security', q: '認證、存取控制、加密' },
+  { key: 'safety', t: '功能安全認證', q: 'ISO 26262 等（同一個產品）' },
+  { key: 'tier1', t: 'ROS 2 Tier 1', q: '官方完整支援的 rmw' },
+  { key: 'gui', t: '圖形化監控工具', q: '看得到整個 DDS 網路' },
+];
+const V = [
+  { name: 'Fast DDS', ver: '3.6', d: {
+    open: ['y', 'Apache-2.0'],
+    psm: ['n', '用自己的 C++ API'],
+    xtypes: ['y', '3.0 起；還不判斷演進型別的相容性'],
+    zc: ['p', 'data-sharing 加 loan，只限固定大小的型別'],
+    nomc: ['y', 'Discovery Server，開源版就有'],
+    sec: ['y', '規格 1.1'],
+    safety: ['n', '要另買 Safe DDS（不同的產品）'],
+    tier1: ['y', 'rmw_fastrtps_cpp，也是預設'],
+    gui: ['y', 'Fast DDS Monitor（GPL-3.0）'],
+  } },
+  { name: 'Cyclone DDS', ver: '11.0', d: {
+    open: ['y', 'EPL-2.0 或 EDL-1.0'],
+    psm: ['y', 'cyclonedds-cxx 採 ISO C++ PSM'],
+    xtypes: ['y', 'XTypes 1.3，有些例外'],
+    zc: ['p', '要搭配 iceoryx 外掛'],
+    nomc: ['p', '只能手動列 peers'],
+    sec: ['y', '規格 1.1'],
+    safety: ['n', '開源版沒有'],
+    tier1: ['y', 'rmw_cyclonedds_cpp'],
+    gui: ['y', 'Cyclone DDS Insight'],
+  } },
+  { name: 'RTI Connext', ver: '7.7', d: {
+    open: ['n', '商用；非商業用途免費'],
+    psm: ['y', 'Modern C++ 採 ISO C++ PSM'],
+    xtypes: ['y', '新版型別資訊格式從 7.7 起'],
+    zc: ['y', 'Zero Copy 程式庫，可搭配 FlatData'],
+    nomc: ['y', 'Cloud Discovery Service'],
+    sec: ['y', '規格 1.2'],
+    safety: ['y', 'Connext Drive 取得 ASIL D 認證'],
+    tier1: ['p', 'rmw_connextdds，arm64 除外'],
+    gui: ['y', 'Admin Console、Monitor'],
+  } },
+];
+const MARK = { y: '✓', p: '△', n: '✗' };
+const CLS = { y: 'yes', p: 'part', n: 'no' };
+const state = new Set(['open', 'tier1']);
+
+function render() {
+  const picks = REQS.filter(r => state.has(r.key));
+  const fits = [];
+  $('vend').innerHTML = V.map(v => {
+    const full = picks.every(r => v.d[r.key][0] === 'y');
+    const none = picks.some(r => v.d[r.key][0] === 'n');
+    if (picks.length && full) fits.push(v.name);
+    const badge = !picks.length ? '' : full ? '<span class="badge hit">全部符合</span>' : none ? '<span class="badge miss">有不符合</span>' : '<span class="badge outline">有條件</span>';
+    const items = picks.length
+      ? `<ul class="items">${picks.map(r => { const [s, n] = v.d[r.key]; return `<li class="${CLS[s]}"><span class="mk">${MARK[s]}</span><span><span class="t">${r.t}</span><span class="n">${n}</span></span></li>`; }).join('')}</ul>`
+      : '<div class="empty">勾選上面的需求，這裡會列出這一家的情況。</div>';
+    return `<div class="panel"><div class="panel-head"><span>${v.name} <span class="ver">${v.ver}</span></span>${badge}</div>${items}</div>`;
+  }).join('');
+  if (!picks.length) $('say').textContent = '還沒有勾選任何需求。';
+  else if (fits.length) $('say').textContent = `全部符合的是：${fits.join('、')}。△ 代表有條件或只做了一部分，要看條件是否適合你的情況。`;
+  else $('say').textContent = '沒有一家全部符合。看看 ✗ 和 △ 是哪幾項，判斷哪一項可以讓步，或者能不能用另外的產品補上，例如功能安全認證通常是另外買的版本。';
+}
+
+$('reqs').innerHTML = REQS.map(r => `<label><input type="checkbox" data-k="${r.key}"${state.has(r.key) ? ' checked' : ''}><span>${r.t}<span class="q">${r.q}</span></span></label>`).join('');
+document.querySelectorAll('#reqs input').forEach(el => el.addEventListener('change', () => { el.checked ? state.add(el.dataset.k) : state.delete(el.dataset.k); render(); }));
+render();
+</script>
+</body>
+</html>

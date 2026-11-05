@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IDL 與 protobuf：同一筆資料的兩種線上格式</title>
+<meta name="description" content="DDS 用的 OMG IDL 和 Google 的 protobuf 都是「寫一份定義檔、產生各語言的程式」。輸入同一筆訊息，左右比較 CDR 和 protobuf 編出來的每一個 byte，看對齊、varint、欄位編號各自換到什麼。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Exploratory workbench: presets + field inputs on top, then two panels
+   (CDR / protobuf) listing the encoded bytes grouped by field, each group with one line of explanation. */
+table.cmp { min-width: 40rem; }
+.presets button { font-size: 0.85rem; }
+
+.fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.45rem 0.8rem; align-items: center; }
+.fields label { font-family: var(--font-mono); font-size: 0.82rem; color: var(--muted); }
+.fields input[type="text"], .fields input[type="number"] { width: 100%; min-width: 0; }
+.fields input.bad { border-color: var(--miss); }
+.fields .chk { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+.sum { display: flex; flex-direction: column; gap: 0.6rem; }
+.bar { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr) 4.5rem; gap: 0.6rem; align-items: center; font-size: 0.85rem; }
+.bar .track { height: 0.9rem; background: var(--bg); border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+.bar .fill { height: 100%; background: var(--hit); opacity: 0.75; }
+.bar.pb .fill { background: var(--miss); }
+.bar .n { font-family: var(--font-mono); text-align: right; }
+.signed { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin-top: 0.4rem; font-size: 0.85rem; color: var(--muted); }
+.signed button { font-family: var(--font-mono); font-size: 0.8rem; padding: 0.15rem 0.55rem; }
+
+.work.wire { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grp { padding: 0.55rem 0.75rem; }
+.grp + .grp { border-top: 1px dashed var(--line); }
+.grp .gh { font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600; margin-bottom: 0.3rem; }
+.grp .gh .skip { font-family: var(--font-body); font-weight: 400; color: var(--muted); }
+.grp .gn { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; }
+.bytes { display: flex; flex-wrap: wrap; gap: 0.2rem; }
+.by { display: flex; flex-direction: column; align-items: center; min-width: 2.1rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+.by .h { font-family: var(--font-mono); font-size: 0.8rem; font-weight: 600; line-height: 1.5; }
+.by .l { font-family: var(--font-mono); font-size: 0.56rem; color: var(--muted); line-height: 1.3; padding: 0 0.15rem; white-space: nowrap; }
+.by.a { background: var(--hit-soft); }
+.by.b { background: var(--miss-soft); }
+.by.pad { border-style: dashed; }
+.by.pad .h { color: var(--muted); font-weight: 400; }
+.by.meta { border-color: var(--muted); }
+.total { padding: 0.5rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.85rem; font-weight: 700; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">IDL</span> 與 <span class="mono">protobuf</span> 同一筆資料的兩種線上格式</h1>
+    <p class="lead">兩個程式要交換一筆資料，可能一個是 C++、一個是 Python，一個跑在 ARM、一個跑在 x86。DDS 的 OMG IDL 和 Google 的 protobuf 用同一招解決：寫一份和語言無關的定義檔，讓工具產生兩邊的程式。差別在線上的 bytes 長什麼樣子。輸入一筆訊息，看兩種格式各編出哪些 byte。</p>
+  </header>
+
+  <section class="prose">
+    <h2>三個零件：定義檔、產生器、線上格式</h2>
+    <p>這類工具都由三個零件組成。定義檔描述資料有哪些欄位、什麼型別；產生器讀定義檔，產生各語言的 struct 和序列化程式；線上格式是序列化之後實際送出去的 bytes。兩邊只要拿同一份定義檔各自產生程式，就能互相讀懂。</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>零件</th><th>DDS</th><th>protobuf</th></tr></thead>
+      <tbody>
+        <tr><td class="name">定義檔</td><td>OMG IDL（<code>.idl</code>），源自 1991 年的 CORBA</td><td><code>.proto</code></td></tr>
+        <tr><td class="name">產生器</td><td>各家 DDS 自帶，例如 Fast DDS 的 <code>fastddsgen</code>、ROS 2 的 <code>rosidl</code></td><td><code>protoc</code> 加上各語言的 plugin</td></tr>
+        <tr><td class="name">線上格式</td><td><span class="term" data-def="Common Data Representation。OMG 定義的二進位格式，欄位照定義的順序排、不帶欄位名稱或編號，每個值對齊到自己大小的倍數。DDS 現行版本分成 XCDR1 和 XCDR2 兩種。">CDR</span></td><td>protobuf binary（也可以轉成 JSON 或文字格式）</td></tr>
+        <tr><td class="name">主要用途</td><td>DDS 的 publish／subscribe，ROS 2 的底層</td><td>gRPC、儲存、各種服務之間的 API</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p>ROS 2 是個好例子：使用者寫的是更簡單的 <code>.msg</code>，build 時 <code>rosidl_adapter</code> 先把它轉成標準的 OMG IDL，再交給底下的 DDS 工具產生程式，線上跑的就是 CDR。</p>
+  </section>
+
+  <section class="prose">
+    <h2>兩份定義檔</h2>
+    <p>下面是同一筆「感測器讀值」的兩種寫法，workbench 用的就是這兩份。</p>
+    <div class="cols">
+      <div class="col">
+        <p>OMG IDL</p>
+<pre class="code">module demo {
+  struct Reading {
+    uint16          id;
+    int32           temperature;  <span class="c">// 單位 0.01 °C</span>
+    sequence&lt;int32&gt; samples;
+    string          name;
+    boolean         valid;
+  };
+};</pre>
+      </div>
+      <div class="col">
+        <p>protobuf（proto3）</p>
+<pre class="code" id="proto-src"></pre>
+      </div>
+    </div>
+    <p>差別一眼就看得出來：<strong>protobuf 每個欄位後面有一個編號</strong>（<code>= 1</code>、<code>= 2</code>），IDL 沒有。這個編號會寫進線上的 bytes，是兩種格式所有差異的源頭。型別也不完全對得上：protobuf 沒有 16-bit 整數，<code>uint16</code> 只能寫成 <code>uint32</code>；IDL 的固定長度陣列（<code>int32 x[3]</code>）在 protobuf 只能寫成 <code>repeated</code>。有號整數 protobuf 還分 <code>int32</code> 和 <code>sint32</code> 兩種，workbench 裡可以切換。</p>
+  </section>
+
+  <section class="prose">
+    <h2>編碼規則</h2>
+    <div class="cols">
+      <div class="col">
+        <p><strong>CDR</strong>（XCDR1，little-endian）<span class="sn">Fast DDS 2.x 和 ROS 2 Humble 預設用 XCDR1。XCDR2 把最大對齊從 8 bytes 降到 4 bytes，並加上下面「版本演進」提到的長度標頭。</span></p>
+        <ol>
+          <li>開頭 4 bytes 是封裝標頭：<code>00 01</code> 代表 little-endian 的 CDR，後面 2 bytes 是 options。</li>
+          <li>照定義檔的順序寫每個欄位，不寫欄位名稱，也不寫編號。</li>
+          <li>每個值先對齊到自己大小的倍數（從標頭之後開始算），空出來的位置是 padding。</li>
+          <li>整數用固定長度：<code>uint16</code> 2 bytes、<code>int32</code> 4 bytes，負數是二補數。</li>
+          <li><code>sequence</code> 和 <code>string</code> 先寫 4 bytes 的長度；<code>string</code> 的長度包含結尾的 <code>\0</code>。</li>
+        </ol>
+      </div>
+      <div class="col">
+        <p><strong>protobuf</strong>（proto3）</p>
+        <ol>
+          <li>值等於預設值（0、空字串、<code>false</code>、空陣列）的欄位直接不寫。</li>
+          <li>每個欄位先寫一個 key：欄位編號 &lt;&lt; 3，低 3 bit 放 <span class="term" data-def="wire type。告訴接收端後面的值要怎麼讀：0 是 varint，2 是「先讀長度再讀內容」，1 和 5 是固定 8 bytes 和 4 bytes。看不懂的欄位也能靠它跳過。">wire type</span>。</li>
+          <li>整數用 <span class="term" data-def="variable-length integer。每個 byte 放 7 bit 資料，最高 bit 是 1 代表後面還有。低位的 7 bit 先送，所以 0 到 127 只要 1 byte，數字越大越長。">varint</span>：每 byte 放 7 bit，最高 bit 代表「後面還有」。<code>int32</code> 的負數會被當成 64-bit 處理，一定是 10 bytes；<code>sint32</code> 先做 <span class="term" data-def="zigzag 編碼。把有號整數對應成無號整數：0→0、−1→1、1→2、−2→3……，絕對值小的負數也會變成小數字，varint 就短。公式是 (n &lt;&lt; 1) ^ (n &gt;&gt; 31)。">zigzag</span> 再編。</li>
+          <li><code>string</code> 和 <code>repeated</code> 的數字（proto3 預設 packed）先寫長度，再寫內容。</li>
+          <li>不需要對齊，沒有 padding。</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="bench" aria-label="輸入一筆訊息">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">欄位的值</p>
+        <div class="fields">
+          <label for="f-id">id</label><input id="f-id" type="number" min="0" max="65535" step="1">
+          <label for="f-temp">temperature</label><input id="f-temp" type="number" step="1">
+          <label for="f-samples">samples</label><input id="f-samples" type="text" spellcheck="false" placeholder="用逗號分開，例如 100, 200">
+          <label for="f-name">name</label><input id="f-name" type="text" spellcheck="false">
+          <label>valid</label><span class="chk"><input id="f-valid" type="checkbox"><label for="f-valid">true</label></span>
+        </div>
+        <p class="hint" id="errs"></p>
+      </div>
+      <div>
+        <p class="panel-title">編出來有多大</p>
+        <div class="sum" id="sum"></div>
+        <div class="signed">protobuf 的有號欄位用 <button type="button" data-signed="int32">int32</button><button type="button" data-signed="sint32">sint32</button></div>
+        <p class="hint">綠色和紫色只是用來分開相鄰的欄位，沒有對錯的意思。虛線框是 CDR 的 padding；灰框是標頭、長度、key 這類「不是資料本身」的 byte。</p>
+      </div>
+    </div>
+
+    <div class="row work wire">
+      <div class="panel">
+        <div class="panel-head"><span>CDR<span class="sub">XCDR1、little-endian</span></span></div>
+        <div id="cdr"></div>
+        <div class="total" id="cdr-total"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>protobuf<span class="sub">proto3 binary</span></span></div>
+        <div id="pb"></div>
+        <div class="total" id="pb-total"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>為什麼差這麼多：設計目標不同</h2>
+    <p><strong>CDR 追求「讀起來快」。</strong>欄位照順序、每個值對齊好，接收端幾乎可以直接照固定的位置讀，整數不用解碼。代價是兩邊的定義必須<strong>完全一樣</strong>：線上沒有欄位名稱也沒有編號，接收端完全照自己手上的定義去讀。發送端多加了一個欄位、接收端還是舊版，後面的欄位就全部錯位。輕則讀到錯的數字，重則整筆解不開被丟掉，而且畫面上通常看不出原因。</p>
+    <p><strong>protobuf 追求「體積小」和「兩邊版本不同也能溝通」。</strong>每個欄位自帶編號和 wire type，所以：</p>
+    <ul>
+      <li>舊版程式收到新版多出來的欄位，看 wire type 就知道要跳過幾個 byte，直接略過；</li>
+      <li>新版程式收到舊版缺少的欄位，就當成預設值；</li>
+      <li>欄位改名字沒關係，因為名字不在線上；但<strong>編號一旦用過就不能改，也不能拿給別的欄位用</strong>。</li>
+    </ul>
+    <p>代價是接收端一定要逐個 byte 解析，varint 也要拼回整數，沒辦法直接照位置讀。另外，因為預設值不送，proto3 分不出「沒給」和「給了 0」<span class="sn">proto3 從 3.15 版起可以在欄位前加 <code>optional</code>，那個欄位就會記錄「有沒有給」，即使值是 0 也會送出。</span>。</p>
+    <p>DDS 也意識到這個問題。<span class="term" data-def="Extensible and Dynamic Topic Types for DDS。OMG 在 DDS 之上加的型別系統規格，定義了型別怎麼演進、XCDR2 怎麼編碼，以及兩邊型別不同時要不要讓它們連上。">DDS-XTypes</span> 規格讓 struct 可以加上註記：<code>@final</code> 就是上面的樣子；<code>@appendable</code> 在 struct 前面加 4 bytes 的總長度，允許在最後面加欄位；<code>@mutable</code> 讓每個欄位都帶 ID 和長度，可以任意增刪，效果就跟 protobuf 很像了。換句話說，兩邊其實是在「速度」和「可演進性」之間選了不同的預設值。</p>
+  </section>
+
+  <section class="prose">
+    <h2>其他類似的東西</h2>
+    <p>「定義檔加產生器加線上格式」這個組合很常見。差別主要在兩件事：線上帶不帶欄位編號，以及接收端能不能不解碼就直接讀。</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>名稱</th><th>定義檔</th><th>線上格式的特色</th><th>常見用途</th></tr></thead>
+      <tbody>
+        <tr><td class="name">ROS 2 .msg</td><td><code>.msg</code></td><td>自己不定義格式，先轉成 OMG IDL，線上是底層 DDS 的 CDR</td><td>機器人</td></tr>
+        <tr><td class="name">Apache Thrift</td><td><code>.thrift</code></td><td>和 protobuf 很像：欄位帶編號；另外附整套 RPC 框架</td><td>服務之間的 RPC</td></tr>
+        <tr><td class="name">Apache Avro</td><td>JSON 寫的 schema</td><td>線上什麼標記都不帶，最精簡；接收端必須拿到寫入端用的 schema 才能解</td><td>Kafka、Hadoop 的資料儲存</td></tr>
+        <tr><td class="name">FlatBuffers</td><td><code>.fbs</code></td><td>不用解碼：靠 offset 表直接在 buffer 裡找欄位，可以只讀其中一個欄位</td><td>遊戲、TensorFlow Lite 模型檔</td></tr>
+        <tr><td class="name">Cap'n Proto</td><td><code>.capnp</code></td><td>線上格式就是記憶體裡的格式，以 8 bytes 為單位排好，收到就能用</td><td>低延遲 RPC</td></tr>
+        <tr><td class="name">ASN.1</td><td>ASN.1 語法</td><td>同一份定義有多種編碼：BER、DER 帶型別和長度；PER、UPER 擠到 bit 級別</td><td>X.509 憑證、4G／5G 信令、車聯網 V2X</td></tr>
+        <tr><td class="name">SOME/IP</td><td>ARXML 或 Franca IDL</td><td>和 CDR 類似，欄位照順序、固定長度，預設 big-endian</td><td>AUTOSAR 車用服務導向通訊</td></tr>
+        <tr><td class="name">MessagePack、CBOR</td><td>不需要</td><td>二進位版的 JSON：每個值自帶型別，沒有 schema 也能解</td><td>取代 JSON 的場合</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>那要怎麼選：通常是生態系先決定</h2>
+    <p>上面列了一堆差異，但實務上很少有人單獨挑編碼格式。<strong>編碼通常是跟著通訊框架一起來的</strong>：用 DDS 就是 CDR，用 gRPC 就是 protobuf，Kafka 常搭 Avro 或 protobuf，AUTOSAR Classic 就是 SOME/IP，瀏覽器就是 JSON。真正在比較的是通訊模型（publish／subscribe 加上 QoS 和自動探索、request／reply 的 RPC，還是可以重播的資料流），以及上游已經綁定了什麼。例如用了 ROS 2，底層就是 DDS，CDR 是跟著來的，沒有選的空間。</p>
+    <p><strong>workbench 裡最顯眼的「誰比較小」，通常最不重要。</strong>一筆 DDS 資料在網路上，光 RTPS 的標頭就有 20 bytes，DATA 子訊息的標頭再 24 bytes，加上 UDP 和 IPv4 的 28 bytes 與乙太網路的標頭。小訊息省下的十幾個 byte 被這些固定開銷蓋過；大訊息（影像、點雲）則幾乎全是資料本身，這時候真正影響效能的是資料被複製了幾次（共享記憶體、zero-copy），不是編碼省了幾個 byte。gRPC 也一樣，HTTP/2 有自己的 frame 標頭。</p>
+    <p>格式本身的特色只在下面幾種情況會變成決定性的：</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>情況</th><th>為什麼格式會有差</th><th>傾向</th></tr></thead>
+      <tbody>
+        <tr><td class="name">兩邊會各自更新版本</td><td>資料存很久，或各元件分開更新、現場同時有新舊版本。欄位沒有編號的格式，一邊改了就讀錯</td><td>protobuf、Thrift，或 DDS 的 <code>@appendable</code>／<code>@mutable</code></td></tr>
+        <tr><td class="name">頻寬極小或按量計費</td><td>CAN、行動網路、衛星，每個 byte 都有成本</td><td>protobuf、ASN.1 UPER</td></tr>
+        <tr><td class="name">功能安全、要可預測</td><td>固定長度、能事先算出最大大小，記憶體可以預先配置</td><td>SOME/IP、有長度上限的 CDR</td></tr>
+        <tr><td class="name">大陣列、低延遲</td><td>不想逐個欄位解碼，希望直接在 buffer 裡讀</td><td>FlatBuffers、Cap'n Proto，或 DDS 的共享記憶體</td></tr>
+        <tr><td class="name">要給人看、好除錯</td><td>肉眼可讀，工具最多</td><td>JSON</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p>所以比較實際的順序是：先看通訊模型和上游綁定了什麼；再問兩邊會不會各自演進，這是格式特色裡影響最大的一項；效能放最後，而且要實際量過才算數。如果被綁在一個生態系裡，但又需要演進能力，也有折衷做法：在 DDS 的訊息裡放一個 <code>sequence&lt;octet&gt;</code> 欄位，裡面裝 protobuf 編好的 bytes。傳輸用 DDS 的 QoS 和自動探索，演進靠 protobuf 的欄位編號。代價是 DDS 的工具看不到裡面的欄位。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>IDL 和 protobuf 的相同之處是「一份定義檔，產生各語言的程式」；不同之處在線上格式的取捨。CDR 不帶欄位編號、固定長度、照順序對齊，讀得快，但兩邊的定義必須一模一樣；protobuf 每個欄位自帶編號，用 varint 壓縮整數、預設值不送，體積小，而且兩邊版本不同也能溝通，代價是一定要逐個 byte 解析。用 DDS 時，兩邊的定義檔要當成同一份來源來管理，改了一邊就要同時重新產生另一邊；不然就是用 XTypes 的 <code>@appendable</code>、<code>@mutable</code> 換取演進的空間。選型時，格式特色通常排在通訊模型和上游生態系之後；其中真正會左右決定的，是兩邊會不會各自演進，而不是誰少幾個 byte。</p>
+    <p>這一頁的 CDR 只示範了 XCDR1 的 <code>@final</code> struct，沒有畫 XCDR2 的長度標頭、union、巢狀 struct、key 欄位。protobuf 也只用了 proto3 最基本的型別，沒有談巢狀 message、<code>oneof</code>、<code>map</code> 和 fixed 系列的整數。</p>
+  </section>
+
+  <p class="foot">來源：OMG IDL 4.2；OMG DDS-XTypes 1.3 第 7.4 節（Data Representation）；OMG DDS-RTPS 2.5 第 10 章（SerializedPayload 標頭）；Protocol Buffers 文件 Encoding 一節（protobuf.dev）；eProsima Fast DDS、Fast CDR 文件。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const hex2 = b => b.toString(16).toUpperCase().padStart(2, '0');
+const utf8 = s => [...new TextEncoder().encode(s)];
+
+const PRESETS = [
+  { key: 'normal', label: '一般', v: { id: 42, temp: 2350, samples: [100, 200, 300], name: 'front', valid: true },
+    say: 'CDR 的 id 只佔 2 bytes，但 temperature 要對齊到 4 的倍數，所以中間補了 2 bytes padding。protobuf 每個欄位前面多一個 key，但小數字的 varint 很短，整體比 CDR 小。' },
+  { key: 'zero', label: '全部預設值', v: { id: 0, temp: 0, samples: [], name: '', valid: false },
+    say: 'protobuf 的 proto3 不送預設值，整筆訊息是 0 bytes。CDR 還是照順序寫完每個欄位：數字寫 0，sequence 寫長度 0，空字串也要寫長度 1 和一個 \\0。' },
+  { key: 'neg', label: '負的溫度', v: { id: 7, temp: -500, samples: [-1, -2], name: 'out', valid: true },
+    say: '負數是 protobuf int32 的弱點：varint 把它當成 64-bit 的大數字，每個負數都要 10 bytes。切到 sint32 試試看，zigzag 讓 −500 變成 999，只要 2 bytes。CDR 不管正負都是 4 bytes。' },
+  { key: 'big', label: '大數字', v: { id: 65535, temp: 2147483647, samples: [100000, 70000, 1], name: 'x', valid: true },
+    say: '數字大的時候 varint 反而比固定長度長：2147483647 要 5 bytes，CDR 只要 4 bytes。id 65535 在 CDR 是 2 bytes，protobuf 沒有 16-bit 型別，varint 要 3 bytes。' },
+  { key: 'utf8', label: '中文名稱', v: { id: 3, temp: 1800, samples: [5], name: '前方', valid: true },
+    say: '字串兩邊都是 UTF-8，一個中文字 3 bytes。CDR 的長度把結尾的 \\0 也算進去（6 + 1 = 7），protobuf 不需要結尾符號，長度就是 6。' },
+];
+
+const state = { v: { ...PRESETS[0].v, samples: [...PRESETS[0].v.samples] }, preset: 'normal', signed: 'int32' };
+
+// ---------------- CDR (XCDR1, little-endian, @final struct) ----------------
+function encodeCdr(v) {
+  const groups = [];
+  let off = 0, field = 0;
+  const group = (title, note, meta) => { const g = { title, note, bytes: [], cls: meta ? '' : (field++ % 2 ? 'b' : 'a') }; groups.push(g); return g; };
+  const align = (g, n) => { let k = 0; while (off % n) { g.bytes.push({ b: 0, l: 'pad', pad: true }); off++; k++; } return k; };
+  const put = (g, bytes, label, meta) => bytes.forEach(b => { g.bytes.push({ b, l: label, meta }); off++; });
+  const le = (x, n) => { const o = []; for (let i = 0; i < n; i++) o.push((x >>> (8 * i)) & 0xff); return o; };
+
+  const h = group('封裝標頭', '00 01 代表 little-endian 的 CDR，後兩個 byte 是 options。之後的對齊從這裡之後重新算起。', true);
+  h.bytes.push(...[0, 1, 0, 0].map(b => ({ b, l: 'hdr', meta: true })));
+
+  let g = group('id：uint16');
+  put(g, le(v.id, 2), 'id');
+  g.note = `2 bytes，低位 byte 在前：${v.id} = 0x${v.id.toString(16).toUpperCase().padStart(4, '0')}。`;
+
+  g = group('temperature：int32');
+  let p = align(g, 4);
+  put(g, le(v.temp >>> 0, 4), 'temp');
+  g.note = (p ? `先補 ${p} bytes padding 對齊到 4 的倍數，` : '剛好對齊，') + (v.temp < 0 ? '負數用二補數，一樣 4 bytes。' : '固定 4 bytes。');
+
+  g = group('samples：sequence<int32>');
+  p = align(g, 4);
+  put(g, le(v.samples.length, 4), 'len', true);
+  v.samples.forEach((s, i) => put(g, le(s >>> 0, 4), `samples[${i}]`));
+  g.note = (p ? `先補 ${p} bytes padding，` : '') + `4 bytes 長度 ${v.samples.length}，接著每個元素 4 bytes。`;
+
+  g = group('name：string');
+  p = align(g, 4);
+  const nb = utf8(v.name);
+  put(g, le(nb.length + 1, 4), 'len', true);
+  put(g, nb, 'name');
+  put(g, [0], '\\0', true);
+  g.note = (p ? `先補 ${p} bytes padding，` : '') + `長度 ${nb.length + 1} 包含結尾的 \\0，內容是 UTF-8。`;
+
+  g = group('valid：boolean');
+  put(g, [v.valid ? 1 : 0], 'valid');
+  g.note = '1 byte，不需要對齊。';
+
+  return { groups, total: off + 4 };
+}
+
+// ---------------- protobuf (proto3) ----------------
+function varint(n) {           // n: non-negative BigInt
+  const o = [];
+  do { let b = Number(n & 0x7fn); n >>= 7n; if (n) b |= 0x80; o.push(b); } while (n);
+  return o;
+}
+const signedVal = (x, kind) => kind === 'sint32' ? BigInt(((x << 1) ^ (x >> 31)) >>> 0) : BigInt.asUintN(64, BigInt(x));
+const WT = { 0: 'VARINT', 2: 'LEN' };
+
+function encodePb(v, kind) {
+  const groups = [];
+  let field = 0, total = 0;
+  const key = (num, wt) => varint(BigInt((num << 3) | wt));
+  const add = (title, bytes, note, skipped) => {
+    const g = { title, note, bytes, cls: field++ % 2 ? 'b' : 'a', skipped };
+    total += bytes.length; groups.push(g);
+  };
+  const keyNote = (num, wt) => `key 0x${hex2(key(num, wt)[0])} = ${num} << 3 | ${wt}（${WT[wt]}）`;
+  const intNote = (x, enc, k) => {
+    if (k === 'sint32') return `zigzag 把 ${x} 變成 ${enc}，再用 varint：${varint(enc).length} bytes`;
+    if (x < 0) return `int32 的負數先擴成 64-bit 的 ${enc}，varint 一定是 10 bytes`;
+    return `varint：${varint(enc).length} byte${varint(enc).length > 1 ? 's' : ''}`;
+  };
+
+  if (v.id === 0) add('id = 1：uint32', [], '值是 0（預設值），整個欄位不寫。', true);
+  else {
+    const k = key(1, 0), val = varint(BigInt(v.id));
+    add('id = 1：uint32', [...k.map(b => ({ b, l: 'key', meta: true })), ...val.map(b => ({ b, l: 'id' }))], `${keyNote(1, 0)}；值 ${v.id} 用 varint：${val.length} byte${val.length > 1 ? 's' : ''}。`);
+  }
+
+  if (v.temp === 0) add(`temperature = 2：${kind}`, [], '值是 0（預設值），整個欄位不寫。', true);
+  else {
+    const enc = signedVal(v.temp, kind), k = key(2, 0), val = varint(enc);
+    add(`temperature = 2：${kind}`, [...k.map(b => ({ b, l: 'key', meta: true })), ...val.map(b => ({ b, l: 'temp' }))], `${keyNote(2, 0)}；${intNote(v.temp, enc, kind)}。`);
+  }
+
+  if (!v.samples.length) add(`samples = 3：repeated ${kind}`, [], '空陣列（預設值），整個欄位不寫。', true);
+  else {
+    const body = [];
+    v.samples.forEach((s, i) => varint(signedVal(s, kind)).forEach(b => body.push({ b, l: `samples[${i}]` })));
+    const k = key(3, 2), len = varint(BigInt(body.length));
+    add(`samples = 3：repeated ${kind}`, [...k.map(b => ({ b, l: 'key', meta: true })), ...len.map(b => ({ b, l: 'len', meta: true })), ...body],
+      `${keyNote(3, 2)}；packed：先寫總長度 ${body.length}，再把每個 varint 接在一起。`);
+  }
+
+  const nb = utf8(v.name);
+  if (!nb.length) add('name = 4：string', [], '空字串（預設值），整個欄位不寫。', true);
+  else {
+    const k = key(4, 2), len = varint(BigInt(nb.length));
+    add('name = 4：string', [...k.map(b => ({ b, l: 'key', meta: true })), ...len.map(b => ({ b, l: 'len', meta: true })), ...nb.map(b => ({ b, l: 'name' }))],
+      `${keyNote(4, 2)}；長度 ${nb.length}，不需要結尾的 \\0。`);
+  }
+
+  if (!v.valid) add('valid = 5：bool', [], 'false（預設值），整個欄位不寫。', true);
+  else add('valid = 5：bool', [{ b: key(5, 0)[0], l: 'key', meta: true }, { b: 1, l: 'valid' }], `${keyNote(5, 0)}；true 是 varint 1。`);
+
+  return { groups, total };
+}
+
+// ---------------- rendering ----------------
+function byteHtml(x, cls) {
+  const c = x.pad ? 'pad' : x.meta ? 'meta' : cls;
+  return `<span class="by ${c}"><span class="h">${hex2(x.b)}</span><span class="l">${x.l}</span></span>`;
+}
+function renderGroups(host, groups) {
+  host.innerHTML = groups.map(g => `
+    <div class="grp">
+      <div class="gh">${g.title}${g.skipped ? ' <span class="skip">（省略）</span>' : ''}</div>
+      ${g.bytes.length ? `<div class="bytes">${g.bytes.map(x => byteHtml(x, g.cls)).join('')}</div>` : ''}
+      <div class="gn">${g.note}</div>
+    </div>`).join('');
+}
+
+function renderProtoSrc() {
+  const k = state.signed;
+  $('proto-src').innerHTML = `syntax = "proto3";
+package demo;
+
+message Reading {
+  uint32          id          = 1;  <span class="c">// 沒有 uint16</span>
+  ${k.padEnd(15)} temperature = 2;
+  repeated ${k.padEnd(6)} samples     = 3;
+  string          name        = 4;
+  bool            valid       = 5;
+}`;
+}
+
+function renderAll() {
+  const v = state.v;
+  const c = encodeCdr(v), p = encodePb(v, state.signed);
+  renderGroups($('cdr'), c.groups);
+  renderGroups($('pb'), p.groups);
+  $('cdr-total').textContent = `共 ${c.total} bytes（含 4 bytes 標頭）`;
+  $('pb-total').textContent = `共 ${p.total} bytes`;
+  const max = Math.max(c.total, p.total, 1);
+  $('sum').innerHTML = `
+    <div class="bar"><span>CDR</span><span class="track"><span class="fill" style="display:block;width:${c.total / max * 100}%"></span></span><span class="n">${c.total} B</span></div>
+    <div class="bar pb"><span>protobuf</span><span class="track"><span class="fill" style="display:block;width:${p.total / max * 100}%"></span></span><span class="n">${p.total} B</span></div>`;
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', b.dataset.k === state.preset));
+  document.querySelectorAll('[data-signed]').forEach(b => b.classList.toggle('chosen', b.dataset.signed === state.signed));
+  renderProtoSrc();
+  const pr = PRESETS.find(x => x.key === state.preset);
+  $('say').textContent = pr ? pr.say : `自訂的值：CDR ${c.total} bytes，protobuf ${p.total} bytes。CDR 的大小只跟欄位型別和陣列、字串長度有關；protobuf 還跟數值大小、正負、是不是預設值有關。`;
+}
+
+function fillInputs() {
+  const v = state.v;
+  $('f-id').value = v.id; $('f-temp').value = v.temp;
+  $('f-samples').value = v.samples.join(', '); $('f-name').value = v.name; $('f-valid').checked = v.valid;
+  ['f-id', 'f-temp', 'f-samples', 'f-name'].forEach(id => $(id).classList.remove('bad'));
+  $('errs').textContent = '';
+}
+
+const I32 = x => Number.isInteger(x) && x >= -2147483648 && x <= 2147483647;
+function readInputs() {
+  const errs = [];
+  const mark = (id, ok, msg) => { $(id).classList.toggle('bad', !ok); if (!ok) errs.push(msg); return ok; };
+  const id = Number($('f-id').value), temp = Number($('f-temp').value);
+  const sRaw = $('f-samples').value.trim();
+  const samples = sRaw ? sRaw.split(/[^0-9+-]+/).filter(Boolean).map(Number) : [];
+  const name = $('f-name').value;
+  const ok = [
+    mark('f-id', $('f-id').value !== '' && Number.isInteger(id) && id >= 0 && id <= 65535, 'id 要是 0 到 65535 的整數（uint16）。'),
+    mark('f-temp', $('f-temp').value !== '' && I32(temp), 'temperature 要是 int32 範圍內的整數。'),
+    mark('f-samples', samples.length <= 16 && samples.every(I32), 'samples 最多 16 個 int32 整數，用逗號分開。'),
+    mark('f-name', utf8(name).length <= 32, 'name 最多 32 bytes（UTF-8）。'),
+  ].every(Boolean);
+  $('errs').textContent = errs.join(' ');
+  if (!ok) return;
+  state.v = { id, temp, samples, name, valid: $('f-valid').checked };
+  state.preset = null;
+  renderAll();
+}
+
+PRESETS.forEach(pr => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.textContent = pr.label; b.dataset.k = pr.key;
+  b.addEventListener('click', () => { state.v = { ...pr.v, samples: [...pr.v.samples] }; state.preset = pr.key; fillInputs(); renderAll(); });
+  $('presets').appendChild(b);
+});
+['f-id', 'f-temp', 'f-samples', 'f-name'].forEach(id => $(id).addEventListener('input', readInputs));
+$('f-valid').addEventListener('change', readInputs);
+document.querySelectorAll('[data-signed]').forEach(b => b.addEventListener('click', () => { state.signed = b.dataset.signed; renderAll(); }));
+
+fillInputs();
+renderAll();
+</script>
+</body>
+</html>

@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V4L2 影像格式名稱怎麼讀</title>
+<meta name="description" content="從 V4L2 的 pipeline 講起，拆解 CSI-2 Data Type、media bus code、fourcc 三套格式名稱。選一個格式，看它在記憶體裡每個 bit 怎麼排、一行和一張 frame 要幾個 byte。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
+<style>
+/* Layout: one reading column. The workbench is exploratory: pick a format, set width / height / alignment,
+   read the three names, see the first few bytes bit by bit, and the four sizing steps filled in. */
+table.cmp { min-width: 36rem; }
+.presets button { font-family: var(--font-mono); font-size: 0.85rem; }
+
+.sizes { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
+.sizes label { font-size: 0.85rem; color: var(--muted); display: flex; gap: 0.4rem; align-items: center; }
+.sizes input[type="number"] { width: 6.5rem; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.3rem 0.9rem; margin: 0; }
+.kv dt { color: var(--muted); font-size: 0.8rem; line-height: 1.6; }
+.kv dd { margin: 0; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.6; overflow-wrap: anywhere; }
+.kv dd .why { font-family: var(--font-body); color: var(--muted); }
+
+.work.fmt { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+.pixs { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.75rem; }
+.pv { font-family: var(--font-mono); font-size: 0.72rem; padding: 0.05rem 0.4rem; border-radius: 3px; border: 1px solid var(--line); }
+.pv.a, .seg.a { background: var(--hit-soft); }
+.pv.b, .seg.b { background: var(--miss-soft); }
+.grp + .grp { margin-top: 0.85rem; }
+.grp .gt { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.3rem; }
+.bytes { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+.byte { border: 1px solid var(--line); border-radius: 3px; background: var(--bg); overflow: hidden; }
+.byte .off { font-family: var(--font-mono); font-size: 0.62rem; color: var(--muted); text-align: center; border-bottom: 1px solid var(--line); line-height: 1.6; }
+.segs { display: flex; }
+.seg { display: flex; flex-direction: column; min-width: 0; }
+.seg + .seg { border-left: 1px solid var(--line); }
+.seg .cells { display: flex; }
+.seg .cells span { width: 1.1rem; text-align: center; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; }
+.seg .lab, .seg .rng { font-family: var(--font-mono); font-size: 0.6rem; text-align: center; white-space: nowrap; line-height: 1.45; }
+.seg .rng { color: var(--muted); }
+.seg.pad { color: var(--muted); }
+.byte .hx { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; text-align: center; border-top: 1px solid var(--line); line-height: 1.6; }
+.more { font-size: 0.8rem; color: var(--muted); align-self: center; }
+.steps { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.55rem; font-size: 0.88rem; }
+.steps .ans { display: block; font-family: var(--font-mono); font-size: 0.8rem; color: var(--hit); overflow-wrap: anywhere; }
+.steps .ans.warn { color: var(--miss); }
+.read-title { font-size: 0.78rem; font-weight: 700; color: var(--muted); margin: 0.9rem 0 0.4rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">V4L2</span> 影像格式名稱怎麼讀</h1>
+    <p class="lead">接一顆相機到 Linux 板子上，會同時碰到 <code>RAW10</code>、<code>0x2B</code>、<code>SRGGB10_1X10</code>、<code>pRAA</code>、<code>RG10</code> 這一串名字。它們講的是同一份影像，只是分別描述它在線上、在元件之間、在記憶體裡的樣子。選一個格式，看每個 bit 落在哪裡。</p>
+  </header>
+
+  <section class="prose">
+    <h2>同一份影像，三個地方三套名字</h2>
+    <p>Linux 的相機 driver 都掛在 <span class="term" data-def="Video for Linux 2。Linux kernel 處理相機、影像擷取卡、影像編解碼器的框架，提供 /dev/videoN 這類裝置和一組 ioctl。">V4L2</span> 底下。以 Raspberry Pi 4 接 Camera Module v2 為例：sensor 把影像沿著 <span class="term" data-def="MIPI CSI-2。手機和嵌入式相機最常用的序列介面，資料切成一個個封包，在 1 到 4 條差動訊號線上傳。">CSI-2</span> 的線送出來，Pi 的接收端 unicam 收下，再用 <span class="term" data-def="Direct Memory Access。硬體自己把資料搬進記憶體，不經過 CPU。DMA 引擎通常要求每一段資料從對齊的位址開始。">DMA</span> 寫進記憶體，應用程式從 <code>/dev/video0</code> 拿到 buffer。V4L2 把這條路拆成幾種元件：</p>
+    <ul>
+      <li><strong>video device</strong>：最後的 <code>/dev/videoN</code>。應用程式在這裡設定記憶體格式、要 buffer、開始串流。</li>
+      <li><strong><span class="term" data-def="sub-device。pipeline 中間的元件，例如 sensor、CSI-2 接收器、ISP。每個 subdev 可以有自己的 /dev/v4l-subdevN。">subdev</span></strong>：sensor、接收端這種中間元件。每個 subdev 有幾個 <span class="term" data-def="subdev 的接口。sink pad 收資料，source pad 送資料；兩個 pad 之間用 link 連起來，每個 pad 都有自己的格式設定。">pad</span>，pad 和 pad 用 link 接起來。</li>
+      <li><strong><span class="term" data-def="把整條 pipeline 的元件和連線畫成一張圖，讓使用者查詢、設定的 kernel 框架，裝置是 /dev/mediaN，工具是 media-ctl。">media controller</span></strong>：<code>/dev/mediaN</code>，把整張圖串起來，讓你查每個 pad 的格式。</li>
+    </ul>
+    <p>每一段都要知道資料長什麼樣子，但三個地方在意的事不一樣，所以各有一套名字：</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>位置</th><th>名字</th><th>定義在哪</th><th>誰設定</th><th>Camera Module v2 的例子</th></tr></thead>
+      <tbody>
+        <tr><td class="name">CSI-2 的線上</td><td>Data Type（DT），6-bit 數字</td><td>MIPI CSI-2 規格；Linux 抄在 <code>include/media/mipi-csi2.h</code></td><td>sensor driver 寫進暫存器的設定</td><td class="num">0x2B（RAW10）</td></tr>
+        <tr><td class="name">subdev 的 pad 之間</td><td>media bus code，<code>MEDIA_BUS_FMT_*</code></td><td><code>include/uapi/linux/media-bus-format.h</code></td><td><code>media-ctl --set-v4l2</code></td><td class="num">SRGGB10_1X10</td></tr>
+        <tr><td class="name">記憶體（/dev/videoN）</td><td>pixel format，4 個字元的 fourcc</td><td><code>include/uapi/linux/videodev2.h</code></td><td><code>v4l2-ctl --set-fmt-video</code></td><td class="num">pRAA 或 RG10</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p>接收端的 driver 裡有一張表把三套名字對起來。upstream 的 unicam driver 裡，RAW10 彩色那一筆是這樣：</p>
+<pre class="code">{
+    .fourcc          = V4L2_PIX_FMT_SRGGB10P,   <span class="c">/* 記憶體：照線上的打包原樣 */</span>
+    .unpacked_fourcc = V4L2_PIX_FMT_SRGGB10,    <span class="c">/* 記憶體：解開成 16-bit */</span>
+    .code            = MEDIA_BUS_FMT_SRGGB10_1X10,
+    .depth           = 10,
+    .csi_dt          = MIPI_CSI2_DT_RAW10,
+    .unpack          = UNICAM_PUM_UNPACK10,
+},</pre>
+    <p>一個 media bus code 對一個 DT，卻可以對兩個 fourcc：硬體可以把線上收到的位元原封不動寫進記憶體（<code>SRGGB10P</code>），也可以順手解開成每個 pixel 16 bit（<code>SRGGB10</code>）。下面三節各講一套名字。</p>
+  </section>
+
+  <section class="prose">
+    <h2>線上：CSI-2 的 Data Type</h2>
+    <p>CSI-2 把影像一行一行切成封包，封包標頭裡有一個 6-bit 的 Data Type，告訴接收端這個封包裝的是什麼。常見的值：</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>DT</th><th>名稱</th><th>意思</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0x1E</td><td class="name">YUV422 8-bit</td><td>YUV 4:2:2，每個分量 8 bit</td></tr>
+        <tr><td class="num">0x22</td><td class="name">RGB565</td><td>每個 pixel 5 + 6 + 5 bit 的 RGB</td></tr>
+        <tr><td class="num">0x24</td><td class="name">RGB888</td><td>每個 pixel 8 + 8 + 8 bit 的 RGB</td></tr>
+        <tr><td class="num">0x2A</td><td class="name">RAW8</td><td>每個樣本 8 bit</td></tr>
+        <tr><td class="num">0x2B</td><td class="name">RAW10</td><td>每個樣本 10 bit，4 個樣本打包成 5 bytes</td></tr>
+        <tr><td class="num">0x2C</td><td class="name">RAW12</td><td>每個樣本 12 bit，2 個樣本打包成 3 bytes</td></tr>
+        <tr><td class="num">0x2D</td><td class="name">RAW14</td><td>每個樣本 14 bit，4 個樣本打包成 7 bytes</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p><strong>RAW 只說「每個樣本幾 bit、怎麼打包」，不說樣本是什麼顏色。</strong>彩色 sensor 的 <span class="term" data-def="Bayer pattern。彩色 sensor 每個 pixel 上只蓋一種顏色的濾光片，紅綠藍以 2×2 為單位重複排列，其中綠色佔兩格。完整的彩色影像要靠 demosaic 從鄰近 pixel 補出來。">Bayer</span> 資料和黑白 sensor 的灰階，線上都是 RAW10。顏色怎麼排，線上沒有，接收端要從 sensor driver 回報的 media bus code 知道。sensor 送哪一種 DT，是 driver 寫進 sensor 暫存器的設定決定的；Linux 這一側的格式設定只是告訴接收端「準備收這種」，不會反過來改 sensor 的輸出。<span class="sn">CSI-2 也能在同一條線上傳非影像的資料，用的是另外的 DT 和 virtual channel，這頁不談。</span></p>
+    <p>RAW10 打包的規則是：每 4 個 pixel 一組，前 4 個 byte 各放一個 pixel 的高 8 bit，第 5 個 byte 收集 4 個 pixel 剩下的低 2 bit，第一個 pixel 放在最低的兩個 bit。RAW12 同理，每 2 個 pixel 一組，第 3 個 byte 的低 4 bit 屬於第一個 pixel、高 4 bit 屬於第二個。這樣排的好處是：只看前面的 byte 就能拿到一張 8-bit 的預覽。</p>
+  </section>
+
+  <section class="prose">
+    <h2>Pad 之間：media bus code</h2>
+    <p>media bus code 描述資料在兩個 pad 之間的匯流排上長什麼樣子，名字照固定的規則組成。kernel 文件把它拆成幾段：分量的順序、每個分量幾 bit、每個 pixel 要在匯流排上傳幾次、匯流排多寬，必要時再加上 padding 位置和 byte 順序。</p>
+<pre class="code">MEDIA_BUS_FMT_  SRGGB  10  _  1X10
+                │      │      │└── 匯流排一次傳 10 bit
+                │      │      └─── 每個 pixel 傳 1 次
+                │      └────────── 每個分量 10 bit
+                └───────────────── 分量順序：Bayer，左上 2×2 是 R G / G B</pre>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>media bus code</th><th>拆開來讀</th><th>會在哪裡看到</th></tr></thead>
+      <tbody>
+        <tr><td class="num">SRGGB10_1X10</td><td>Bayer RGGB、10 bit、每個 pixel 一次 10 bit</td><td>Camera Module v2 的 10-bit 模式</td></tr>
+        <tr><td class="num">Y10_1X10</td><td>只有亮度 Y、10 bit</td><td>OV9281 黑白 global shutter 模組</td></tr>
+        <tr><td class="num">UYVY8_2X8</td><td>YUV 4:2:2，順序 U Y V Y，每個分量 8 bit；每個 pixel 傳 2 次、每次 8 bit</td><td>8-bit 平行匯流排的 YUV sensor</td></tr>
+        <tr><td class="num">UYVY8_1X16</td><td>同樣的資料，每個 pixel 一次 16 bit</td><td>OV5640 模組走 CSI-2 時</td></tr>
+        <tr><td class="num">RGB565_2X8_LE</td><td>5 + 6 + 5 bit 的 RGB，傳 2 次 8 bit，低位 byte 先送</td><td>小型 LCD 和平行匯流排 sensor</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p>「2X8」「1X16」原本描述平行匯流排有幾條線、要幾個 clock。CSI-2 是序列匯流排，kernel 文件規定序列匯流排一律用「一次傳一個樣本」的那個名字，因為序列匯流排上這種格式只有一種傳法。所以 CSI-2 sensor 的 driver 寫 <code>UYVY8_1X16</code>，並不代表真的有 16 條線。</p>
+    <p>Bayer 的四個字母是左上角 2×2 的顏色排列，四種排法都有自己的 code：</p>
+<pre class="code">RGGB      GRBG      GBRG      BGGR
+R G       G R       G B       B G
+G B       B G       R G       G R</pre>
+    <p>排列會跟著翻轉改變。水平翻轉把左右對調，RGGB 變 GRBG；垂直翻轉把上下對調，變 GBRG；兩個都翻變 BGGR。Camera Module v2 的 driver（<code>imx219.c</code>）每種 bit 深度都列了四個 code，開了 hflip 或 vflip 就回報對應的那一個。應用程式的 fourcc 要跟著換（例如 <code>pRAA</code> 換成 <code>pgAA</code>），否則 demosaic 出來的顏色會錯。</p>
+  </section>
+
+  <section class="prose">
+    <h2>記憶體：fourcc</h2>
+    <p><span class="term" data-def="four character code。用 4 個 ASCII 字元當名字的格式代碼，以 little-endian 存成一個 32-bit 整數。">fourcc</span> 是 4 個 ASCII 字元，以 little-endian 存成一個 32-bit 數字：<code>'Y12 '</code> 是 <code>0x59 0x31 0x32 0x20</code>，當成整數讀是 <code>0x20323159</code>。不滿 4 個字元就補空白，所以 <code>'Y12 '</code> 最後有一個空格，在指令列要加引號。fourcc 的字母沒有統一的文法，但常見的幾族有規律可循：</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>族</th><th>fourcc</th><th>怎麼讀</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Bayer，解開</td><td class="num">RGGB、RG10、RG12</td><td>8-bit 直接一個 byte；10、12-bit 放進 16-bit 的低位，高位補 0，little-endian</td></tr>
+        <tr><td class="name">Bayer，打包</td><td class="num">pRAA、pgAA、pRCC</td><td>小寫 <code>p</code> 開頭，第二個字是排列（R、g、G、B 對 RGGB、GRBG、GBRG、BGGR），排法和 CSI-2 線上一模一樣<span class="sn">AA 對 10 bit、CC 對 12 bit 是從現有名字看出來的規律，kernel 文件沒有寫成規則。</span></td></tr>
+        <tr><td class="name">灰階</td><td class="num">GREY、Y10、Y12、Y16</td><td>Y 加 bit 數，超過 8 bit 的放進 16-bit 的低位</td></tr>
+        <tr><td class="name">灰階，打包</td><td class="num">Y10P、Y12P</td><td>P 結尾，照 CSI-2 的 RAW10、RAW12 打包</td></tr>
+        <tr><td class="name">灰階，高位對齊</td><td class="num">Y012</td><td>12 bit 放在 16-bit 的高位，低 4 bit 補 0</td></tr>
+        <tr><td class="name">YUV packed</td><td class="num">YUYV、UYVY</td><td>字母就是 byte 的順序，兩個 pixel 共用一組 U、V</td></tr>
+        <tr><td class="name">YUV semi-planar</td><td class="num">NV12</td><td>先放整張 Y，再放一張 U、V 交錯的半解析度 plane；12 是平均每個 pixel 的 bit 數</td></tr>
+        <tr><td class="name">深度</td><td class="num">Z16</td><td>每個 pixel 一個 16-bit 距離值，單位另外和裝置協商</td></tr>
+        <tr><td class="name">壓縮</td><td class="num">MJPG</td><td>每張 frame 是一張 JPEG，長度不固定</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>從 fourcc 算出一張 frame 要幾個 byte</h2>
+    <p>拿到 fourcc 和寬高，buffer 大小照下面四步算。driver 在 <code>VIDIOC_S_FMT</code> 和 <code>VIDIOC_G_FMT</code> 回報的 <code>bytesperline</code> 和 <code>sizeimage</code> 就是這樣來的。應用程式讀 pixel 時要用 <code>bytesperline</code> 跳到下一行，不能拿寬度自己乘。</p>
+    <ol>
+      <li>查這個 fourcc 每個 pixel 在記憶體裡佔幾個 bit。這是容器的大小，不是 sensor 的有效 bit 數。</li>
+      <li>一行至少要 ⌈width × bit ÷ 8⌉ 個 byte。</li>
+      <li>接收端的 DMA 要求每一行從對齊的位址開始，所以往上取到對齊值的倍數，得到 <span class="term" data-def="也叫 stride 或 pitch：一行開頭到下一行開頭隔幾個 byte。可能比一行實際的資料多，多出來的是 padding。"><code>bytesperline</code></span>，多出來的是 padding。upstream 的 unicam 對齊到 32 bytes。</li>
+      <li><code>sizeimage</code> = <code>bytesperline</code> × height。NV12 這種有兩個 plane 的格式，每個 plane 各算一次再相加。壓縮格式沒有固定的行，V4L2 規定 <code>bytesperline</code> 填 0，<code>sizeimage</code> 是 driver 給的最壞情況上限。</li>
+    </ol>
+  </section>
+
+  <section class="bench" aria-label="選一個格式">
+    <div class="row presets" id="presets"><span class="lbl">fourcc</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">尺寸和接收端的對齊</p>
+        <div class="sizes">
+          <label>width <input id="w" type="number" min="1" max="16384" step="1"></label>
+          <label>height <input id="h" type="number" min="1" max="16384" step="1"></label>
+          <label>對齊 <select id="align"><option value="1">不對齊</option><option value="16">16 bytes</option><option value="32">32 bytes</option><option value="64">64 bytes</option><option value="128">128 bytes</option></select></label>
+        </div>
+        <p class="hint">選格式時會帶入那個裝置常見的尺寸。Raspberry Pi 的例子預設對齊 32 bytes（upstream unicam 的值），USB 攝影機的 bytesperline 由 driver 直接算，預設不對齊。</p>
+      </div>
+      <div>
+        <p class="panel-title">三套名字</p>
+        <dl class="kv" id="names"></dl>
+      </div>
+    </div>
+
+    <div class="row work fmt">
+      <div class="panel">
+        <div class="panel-head"><span>記憶體裡的前幾個 byte<span class="sub">每格一個 bit，左邊是 bit 7</span></span></div>
+        <div class="panel-body">
+          <div class="pixs" id="pixs"></div>
+          <div id="groups"></div>
+          <p class="hint">綠色和紫色只用來分開相鄰的 pixel（YUV 格式則是分開 Y 和 U、V），沒有對錯的意思。灰色的 0 是 padding。每格底下是「哪個 pixel」和「那個 pixel 的第幾個 bit」。</p>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>照四個步驟算大小</span></div>
+        <div class="panel-body">
+          <ol class="steps" id="steps"></ol>
+          <p class="read-title">在 C 裡讀第 i 個 pixel</p>
+          <pre class="code" id="read"></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>同一個字，不同意思</h2>
+    <p><strong>packed 有兩種意思。</strong>在 YUV 的脈絡裡，packed 是「所有分量交錯放在同一個 plane」，對比的是 planar（Y、U、V 各一個 plane）和 semi-planar（NV12：Y 一個 plane，U、V 交錯成另一個）。在 RAW 的脈絡裡，packed 是「bit 緊緊擠在一起，不補 0」，對比的是 unpacked（每個 pixel 放進 16-bit）。<code>YUYV</code> 是前一種 packed，<code>pRAA</code> 是後一種。</p>
+    <p><strong>名字裡的數字各算各的。</strong><code>SRGGB10</code> 的 10 是每個 pixel 的 bit 數；<code>UYVY8</code> 的 8 是每個分量的 bit 數，換算下來每個 pixel 是 16 bit；<code>NV12</code> 的 12 是平均每個 pixel 的 bit 數；<code>Y16</code>、<code>Z16</code> 的 16 是容器大小，裡面有效的是幾 bit、數字代表什麼單位，要另外查裝置。</p>
+    <p><strong>同一份線上資料，記憶體可以差 60%。</strong>Camera Module v2 送出 RAW10，unicam 可以寫成 <code>pRAA</code>（每個 pixel 10 bit），也可以解開成 <code>RG10</code>（16 bit）。後者好讀，但 3280 × 2464 一張從約 9.7 MiB 變成約 15.4 MiB。解開是接收端硬體在做，sensor 和線上完全不知道。</p>
+    <p><strong>對齊方向會讓數值差 16 倍。</strong><code>Y12</code> 把 12 bit 放在低位，讀出來是 0 到 4095；<code>Y012</code> 放在高位，讀出來是 Y12 的 16 倍。用錯其中一種去讀，整張圖的亮度就差 16 倍，或者高位的雜訊被當成資料。</p>
+    <p><strong>bytesperline 不等於寬度乘 bytes。</strong>3280 寬的 <code>pRAA</code>，一行資料 4100 bytes，對齊 32 後 <code>bytesperline</code> 是 4128，每行尾巴有 28 bytes padding。拿 4100 算下一行的位置，每往下一行就多歪 28 bytes，整張圖會斜掉。</p>
+  </section>
+
+  <section class="prose">
+    <h2>在 Raspberry Pi 上看這三套名字</h2>
+    <p>Raspberry Pi OS 平常由 libcamera 自動做完這些設定。想自己看的話，先確定沒有別的程式佔著相機，再用這幾個指令（<code>/dev/media0</code>、<code>/dev/video0</code> 的編號依系統而定）：</p>
+<pre class="code"><span class="c"># 整張 media graph：每個 pad 目前的 media bus code 和尺寸</span>
+media-ctl -d /dev/media0 -p
+
+<span class="c"># video node 支援哪些 fourcc、各種尺寸</span>
+v4l2-ctl -d /dev/video0 --list-formats-ext
+
+<span class="c"># 設定記憶體格式再讀回來，看 bytesperline 和 sizeimage</span>
+v4l2-ctl -d /dev/video0 --set-fmt-video=width=3280,height=2464,pixelformat=pRAA
+v4l2-ctl -d /dev/video0 --get-fmt-video
+
+<span class="c"># 抓一張存檔，用 hexdump 對照上面 workbench 的排法</span>
+v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=1 --stream-to=frame.raw
+hexdump -C frame.raw | head</pre>
+    <p>sensor 輸出 pad 的 media bus code、接收端 pad 的 media bus code、video node 的 fourcc，三者要互相對得上。對不上時，設定指令本身多半照樣成功，要到開始串流時才失敗（<code>VIDIOC_STREAMON</code> 回 <code>EPIPE</code>），因為 kernel 是在那個時候才沿著 link 檢查兩端格式。</p>
+  </section>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>一份影像在 Linux 上有三套名字：CSI-2 線上的 DT 只講位元數和打包方式；pad 之間的 media bus code 加上了顏色排列和匯流排形狀；記憶體裡的 fourcc 決定 DMA 怎麼把位元放進 byte。接收端 driver 的格式表把三者對起來，而且同一個 DT 可以對到 packed 和 unpacked 兩種 fourcc。讀資料時永遠用 <code>bytesperline</code> 跳行，用 fourcc 的定義拆 bit。</p>
+    <p>這一頁只用單一 plane 的 API 舉例。V4L2 另外有 <code>_MPLANE</code> 系列，讓 NV12M 這種格式的每個 plane 放在不同的 buffer。這裡也沒有談 Bayer 的 DPCM、A-law 壓縮格式、色彩空間和量化範圍（<code>colorspace</code>、<code>quantization</code> 欄位），以及平行匯流排的同步訊號。</p>
+  </section>
+
+  <p class="foot">來源：Linux kernel 文件 Media Subsystem 的 Image Formats（pixfmt-v4l2、pixfmt-srggb10p、pixfmt-srggb12p、pixfmt-yuv-luma、pixfmt-packed-yuv、pixfmt-yuv-planar、pixfmt-z16）與 Media Bus Formats（subdev-formats）；<code>include/media/mipi-csi2.h</code>、<code>include/uapi/linux/videodev2.h</code>、<code>include/uapi/linux/media-bus-format.h</code>；<code>drivers/media/platform/broadcom/bcm2835-unicam.c</code>、<code>drivers/media/i2c/imx219.c</code>、<code>ov9282.c</code>、<code>ov5640.c</code>、<code>drivers/media/common/uvc.c</code>。以 Linux 6.12 為準。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Sample pixel values: 16-bit seeds, an n-bit sample is the top n bits (so 10-bit pixel 0 is 0x3A5).
+const BASE = [0xE94C, 0x7C21, 0xB0F7, 0x1F86, 0x5566, 0xAA99, 0xC3C3, 0x3CF0];
+const sample = (i, n) => BASE[i % 8] >> (16 - n);
+const bayer = i => (i % 2 ? 'G' : 'R') + i;
+const lum = p => i => p + i;
+const hx = (v, d) => '0x' + v.toString(16).toUpperCase().padStart(d, '0');
+const bin = (v, n) => v.toString(2).padStart(n, '0').replace(/\B(?=(\d{4})+$)/g, ' ');
+const num = v => v.toLocaleString('en-US');
+const fcc = s => [...s].reduce((a, ch, k) => a + ch.charCodeAt(0) * 256 ** k, 0);
+
+const PI2 = 'Raspberry Pi Camera Module v2';
+const HQ = 'Raspberry Pi High Quality Camera';
+const OV = 'OV9281 黑白 global shutter 模組';
+const UVC = { dt: 'USB 攝影機不經過 CSI-2', bus: 'UVC driver 沒有 pad 格式；fourcc 是從裝置描述子裡的 GUID 對出來的' };
+
+const READ16 = 'uint16_t p = row[2 * i] | row[2 * i + 1] << 8;';
+const FORMATS = [
+  { id: 'RGGB', pix: 'V4L2_PIX_FMT_SRGGB8', bus: 'MEDIA_BUS_FMT_SRGGB8_1X8', dt: [0x2a, 'RAW8'], dev: `${PI2}，8-bit 模式`, w: 3280, h: 2464, align: 32, kind: 'unp', n: 8, c: 8, name: bayer,
+    read: 'uint8_t p = row[i];',
+    say: 'RAW8 不需要打包：一個 pixel 剛好一個 byte。名字裡的 RGGB 是左上角 2×2 的顏色排列，第一行是 R G R G，第二行是 G B G B，所以這裡看到的是第一行的 R0、G1、R2、G3。' },
+  { id: 'RG10', pix: 'V4L2_PIX_FMT_SRGGB10', bus: 'MEDIA_BUS_FMT_SRGGB10_1X10', dt: [0x2b, 'RAW10'], dev: `${PI2}，接收端解開`, w: 3280, h: 2464, align: 32, kind: 'unp', n: 10, c: 16, name: bayer,
+    read: READ16 + '   // 高 6 bit 是 0',
+    say: '線上是 RAW10，接收端把每個 pixel 解開放進一個 16-bit 位置：低 10 bit 是資料，高 6 bit 補 0，低位 byte 在前（little-endian）。讀起來最簡單，但比 pRAA 多用 60% 記憶體。' },
+  { id: 'pRAA', pix: 'V4L2_PIX_FMT_SRGGB10P', bus: 'MEDIA_BUS_FMT_SRGGB10_1X10', dt: [0x2b, 'RAW10'], dev: `${PI2}，保留線上的打包`, w: 3280, h: 2464, align: 32, kind: 'p10', name: bayer,
+    read: 'const uint8_t *g = row + (i / 4) * 5;\nuint16_t p = g[i % 4] << 2 | (g[4] >> (2 * (i % 4)) & 0x3);',
+    say: '和 RG10 是同一份線上資料，只是接收端不解開，照 CSI-2 的打包原樣寫進記憶體：每 4 個 pixel 5 個 byte。前 4 個 byte 是各 pixel 的高 8 bit，第 5 個 byte 收集 4 個 pixel 的低 2 bit，R0 在最低的兩個 bit。' },
+  { id: 'RG12', pix: 'V4L2_PIX_FMT_SRGGB12', bus: 'MEDIA_BUS_FMT_SRGGB12_1X12', dt: [0x2c, 'RAW12'], dev: `${HQ}，接收端解開`, w: 4056, h: 3040, align: 32, kind: 'unp', n: 12, c: 16, name: bayer,
+    read: READ16 + '   // 高 4 bit 是 0',
+    say: '12-bit 解開放進 16-bit：低 12 bit 是資料，高 4 bit 補 0。和 RG10 一樣是 little-endian，只是 padding 少了 2 bit。' },
+  { id: 'pRCC', pix: 'V4L2_PIX_FMT_SRGGB12P', bus: 'MEDIA_BUS_FMT_SRGGB12_1X12', dt: [0x2c, 'RAW12'], dev: `${HQ}，保留線上的打包`, w: 4056, h: 3040, align: 32, kind: 'p12', name: bayer,
+    read: 'const uint8_t *g = row + (i / 2) * 3;\nuint16_t p = (i % 2 == 0) ? (g[0] << 4 | (g[2] & 0xf))\n                          : (g[1] << 4 | g[2] >> 4);',
+    say: 'RAW12 的打包：每 2 個 pixel 3 個 byte。前 2 個 byte 是兩個 pixel 的高 8 bit，第 3 個 byte 的低 4 bit 屬於第一個 pixel、高 4 bit 屬於第二個。' },
+  { id: 'GREY', pix: 'V4L2_PIX_FMT_GREY', bus: 'MEDIA_BUS_FMT_Y8_1X8', dt: [0x2a, 'RAW8'], dev: `${OV}，8-bit 模式`, w: 1280, h: 800, align: 32, kind: 'unp', n: 8, c: 8, name: lum('Y'),
+    read: 'uint8_t p = row[i];',
+    say: '黑白 sensor 沒有 Bayer 排列，media bus code 從 SRGGB8 換成 Y8，但線上一樣是 RAW8。CSI-2 的 RAW 只說每個樣本幾 bit，不說它是什麼顏色。' },
+  { id: 'Y10 ', pix: 'V4L2_PIX_FMT_Y10', bus: 'MEDIA_BUS_FMT_Y10_1X10', dt: [0x2b, 'RAW10'], dev: `${OV}，接收端解開`, w: 1280, h: 800, align: 32, kind: 'unp', n: 10, c: 16, name: lum('Y'),
+    read: READ16 + '   // 高 6 bit 是 0',
+    say: '黑白 10-bit 的解開版，bit 的排法和 RG10 完全一樣，差別只在每個 pixel 都是同一種東西：亮度。' },
+  { id: 'Y10P', pix: 'V4L2_PIX_FMT_Y10P', bus: 'MEDIA_BUS_FMT_Y10_1X10', dt: [0x2b, 'RAW10'], dev: `${OV}，保留線上的打包`, w: 1280, h: 800, align: 32, kind: 'p10', name: lum('Y'),
+    read: 'const uint8_t *g = row + (i / 4) * 5;\nuint16_t p = g[i % 4] << 2 | (g[4] >> (2 * (i % 4)) & 0x3);',
+    say: '黑白 10-bit 的打包版，排法和 pRAA 一模一樣。fourcc 用 P 結尾表示「照 CSI-2 打包」。' },
+  { id: 'Y12 ', pix: 'V4L2_PIX_FMT_Y12', bus: 'MEDIA_BUS_FMT_Y12_1X12', dt: [0x2c, 'RAW12'], dev: null, w: 1280, h: 800, align: 1, kind: 'unp', n: 12, c: 16, name: lum('Y'),
+    read: READ16 + '   // 0 到 4095',
+    say: '低位對齊：12 bit 資料放在 16-bit 的低位，高 4 bit 是 0，讀出來的值是 0 到 4095。和下一個 Y012 對照著看。' },
+  { id: 'Y012', pix: 'V4L2_PIX_FMT_Y012', bus: 'MEDIA_BUS_FMT_Y12_1X12', dt: [0x2c, 'RAW12'], dev: null, w: 1280, h: 800, align: 1, kind: 'unp', n: 12, c: 16, hi: true, name: lum('Y'),
+    read: 'uint16_t p = (row[2 * i] | row[2 * i + 1] << 8) >> 4;',
+    say: '高位對齊：同樣是 12 bit，這次放在 16-bit 的高位，低 4 bit 是 0。不右移 4 bit 直接讀，值會是 Y12 的 16 倍。' },
+  { id: 'UYVY', pix: 'V4L2_PIX_FMT_UYVY', bus: 'MEDIA_BUS_FMT_UYVY8_1X16', dt: [0x1e, 'YUV422 8-bit'], dev: 'OV5640 相機模組，CSI-2 直接輸出 YUV', w: 1920, h: 1080, align: 1, kind: 'yuv', order: 'UYVY',
+    read: 'const uint8_t *q = row + (i / 2) * 4;   // 兩個 pixel 共用一組 U、V\nuint8_t y = q[(i % 2) * 2 + 1], u = q[0], v = q[2];',
+    say: 'YUV 4:2:2：每個 pixel 有自己的 Y，但兩個相鄰的 pixel 共用一組 U、V，平均每個 pixel 16 bit。UYVY 是傳送的順序 U Y V Y。bus code 寫 1X16，是因為 CSI-2 這種序列匯流排規定用「一次一個樣本」的寫法。' },
+  { id: 'YUYV', pix: 'V4L2_PIX_FMT_YUYV', bus: null, dt: null, uvc: true, dev: 'Logitech C920 等 USB 攝影機（UVC）', w: 1920, h: 1080, align: 1, kind: 'yuv', order: 'YUYV',
+    read: 'const uint8_t *q = row + (i / 2) * 4;   // 兩個 pixel 共用一組 U、V\nuint8_t y = q[(i % 2) * 2], u = q[1], v = q[3];',
+    say: '和 UYVY 一樣是 4:2:2，只是 byte 順序換成 Y U Y V。USB 攝影機不經過 CSI-2，沒有 DT 也沒有 media bus code，fourcc 是 uvcvideo 從裝置描述子的 GUID 對出來的。' },
+  { id: 'NV12', pix: 'V4L2_PIX_FMT_NV12', bus: null, dt: null, isp: true, dev: 'ISP 和硬體影像編碼器常用，sensor 不會直接送', w: 1920, h: 1080, align: 1, kind: 'nv12',
+    read: 'uint8_t y = base[yy * bpl + x];\nconst uint8_t *uv = base + bpl * height + (yy / 2) * bpl;\nuint8_t u = uv[x & ~1], v = uv[(x & ~1) + 1];',
+    say: 'YUV 4:2:0 semi-planar：先放整張 Y，每個 pixel 1 byte；接著放半高的 UV plane，U、V 交錯，每 2×2 個 pixel 共用一組。平均每個 pixel 12 bit，名字裡的 12 就是這個。UV plane 的每一行和 Y plane 一樣長，因為它裝的是半個寬度的 U、V 對。' },
+  { id: 'Y16 ', pix: 'V4L2_PIX_FMT_Y16', bus: null, dt: null, uvc: true, dev: 'FLIR Lepton 熱像模組接 PureThermal 板（UVC）', w: 160, h: 120, align: 1, kind: 'unp', n: 16, c: 16, name: lum('Y'),
+    read: READ16,
+    say: '16-bit 灰階，little-endian，沒有 padding。fourcc 只保證容器是 16 bit；熱像儀送的是原始讀值還是換算過的溫度，要看裝置的設定。' },
+  { id: 'Z16 ', pix: 'V4L2_PIX_FMT_Z16', bus: null, dt: null, uvc: true, dev: 'Intel RealSense D435 的深度串流（UVC）', w: 848, h: 480, align: 1, kind: 'unp', n: 16, c: 16, name: lum('Z'),
+    read: READ16.replace('uint16_t p', 'uint16_t z') + '   // 單位要另外問裝置',
+    say: '16-bit 深度值，little-endian。kernel 文件只說單位「要另外和裝置協商」；D435 預設是 1 mm，讀到 1234 就是 1.234 公尺。' },
+  { id: 'MJPG', pix: 'V4L2_PIX_FMT_MJPEG', bus: null, dt: null, uvc: true, dev: 'Logitech C920 等 USB 攝影機（UVC）', w: 1920, h: 1080, align: 1, kind: 'mjpg',
+    read: '// 沒有固定的 pixel 位置：\n// 整個 buffer 交給 JPEG decoder（例如 libjpeg-turbo）解碼',
+    say: '壓縮格式：每張 frame 長度不固定，沒有「第幾個 byte 是第幾個 pixel」這回事。V4L2 規定壓縮格式的 bytesperline 填 0，sizeimage 是最壞情況的上限。開頭的 FF D8 是 JPEG 的起始標記。' },
+];
+
+// ---- bit layout: fill mem[] with one entry per memory bit (LSB-first within each byte) ----
+function own(who, v, b, n, cls) { return { who, b, v: (v >> b) & 1, n, cls }; }
+const PADBIT = { pad: true, v: 0 };
+
+function build(f) {
+  const pix = [], groups = [];
+  if (f.kind === 'unp') {
+    const mem = [], P = f.c === 8 ? 8 : 4, sh = f.hi ? f.c - f.n : 0;
+    for (let i = 0; i < P; i++) {
+      const v = sample(i, f.n), who = f.name(i), cls = i % 2 ? 'b' : 'a';
+      pix.push({ who, v, n: f.n, cls });
+      for (let k = 0; k < f.c; k++) mem[i * f.c + k] = (k >= sh && k < sh + f.n) ? own(who, v, k - sh, f.n, cls) : PADBIT;
+    }
+    groups.push({ title: null, mem, more: true });
+  } else if (f.kind === 'p10' || f.kind === 'p12') {
+    const n = f.kind === 'p10' ? 10 : 12, per = n === 10 ? 4 : 2, gb = n === 10 ? 5 : 3, lo = n - 8, mem = [];
+    for (let i = 0; i < 4; i++) {
+      const v = sample(i, n), who = f.name(i), cls = i % 2 ? 'b' : 'a';
+      pix.push({ who, v, n, cls });
+      const g = Math.floor(i / per), j = i % per;
+      for (let b = 0; b < 8; b++) mem[(g * gb + j) * 8 + b] = own(who, v, lo + b, n, cls);
+      for (let b = 0; b < lo; b++) mem[(g * gb + per) * 8 + j * lo + b] = own(who, v, b, n, cls);
+    }
+    groups.push({ title: null, mem, more: true });
+  } else if (f.kind === 'yuv' || f.kind === 'nv12') {
+    const Y = [0, 1, 2, 3].map(i => sample(i, 8)), U = [sample(4, 8), sample(6, 8)], V = [sample(5, 8), sample(7, 8)];
+    Y.forEach((v, i) => pix.push({ who: 'Y' + i, v, n: 8, cls: 'a' }));
+    [0, 1].forEach(p => { pix.push({ who: 'U' + 2 * p, v: U[p], n: 8, cls: 'b' }); pix.push({ who: 'V' + 2 * p, v: V[p], n: 8, cls: 'b' }); });
+    const byteOf = (mem, idx, who, v, cls) => { for (let b = 0; b < 8; b++) mem[idx * 8 + b] = own(who, v, b, 8, cls); };
+    if (f.kind === 'yuv') {
+      const mem = [], firstY = f.order.indexOf('Y');
+      for (let p = 0; p < 2; p++) for (let k = 0; k < 4; k++) {
+        const ch = f.order[k];
+        if (ch === 'Y') { const yi = 2 * p + (k === firstY ? 0 : 1); byteOf(mem, 4 * p + k, 'Y' + yi, Y[yi], 'a'); }
+        else byteOf(mem, 4 * p + k, ch + 2 * p, (ch === 'U' ? U : V)[p], 'b');
+      }
+      groups.push({ title: null, mem, more: true });
+    } else {
+      const ym = [], uvm = [];
+      Y.forEach((v, i) => byteOf(ym, i, 'Y' + i, v, 'a'));
+      [0, 1].forEach(p => { byteOf(uvm, 2 * p, 'U' + 2 * p, U[p], 'b'); byteOf(uvm, 2 * p + 1, 'V' + 2 * p, V[p], 'b'); });
+      groups.push({ title: 'Y plane：從 buffer 開頭', mem: ym, more: true });
+      groups.push({ title: 'UV plane：從 bytesperline × height 開始', mem: uvm, more: true, base: 'UV' });
+    }
+  } else if (f.kind === 'mjpg') {
+    const mem = [];
+    for (let b = 0; b < 8; b++) { mem[b] = own('SOI', 0xFF, b, 8, 'a'); mem[8 + b] = own('SOI', 0xD8, b, 8, 'a'); }
+    groups.push({ title: null, mem, more: '後面是壓縮資料，長度每張不同', jpeg: true });
+  }
+  return { pix, groups };
+}
+
+function byteHtml(bits, off, jpeg) {
+  const segs = [];
+  for (let b = 7; b >= 0; b--) {
+    const o = bits[b], last = segs[segs.length - 1];
+    if (last && o.pad && last.pad) { last.cells.push(0); continue; }
+    if (last && !o.pad && !last.pad && last.who === o.who && last.lo === o.b + 1 && !jpeg) { last.cells.push(o.v); last.lo = o.b; continue; }
+    segs.push(o.pad ? { pad: true, cells: [0] } : { who: o.who, hi: o.b, lo: o.b, n: o.n, cls: o.cls, cells: [o.v] });
+  }
+  if (jpeg) segs.splice(0, segs.length, { who: 'SOI', hi: 7, lo: 0, n: 8, cls: 'a', cells: [7, 6, 5, 4, 3, 2, 1, 0].map(b => bits[b].v), whole: true });
+  let val = 0;
+  for (let b = 0; b < 8; b++) val |= bits[b].v << b;
+  const segHtml = segs.map(s => {
+    const cells = s.cells.map(c => `<span>${c}</span>`).join('');
+    if (s.pad) return `<div class="seg pad"><div class="cells">${cells}</div><div class="lab">補 0</div><div class="rng">&nbsp;</div></div>`;
+    const rng = s.whole || (s.n === 8 && s.hi === 7 && s.lo === 0) ? '&nbsp;' : (s.hi === s.lo ? `${s.hi}` : `${s.hi}:${s.lo}`);
+    return `<div class="seg ${s.cls}"><div class="cells">${cells}</div><div class="lab">${s.who}</div><div class="rng">${rng}</div></div>`;
+  }).join('');
+  return `<div class="byte"><div class="off">${off}</div><div class="segs">${segHtml}</div><div class="hx">${val.toString(16).toUpperCase().padStart(2, '0')}</div></div>`;
+}
+
+function renderLayout(f) {
+  const { pix, groups } = build(f);
+  $('pixs').innerHTML = f.kind === 'mjpg' ? '' : pix.map(p => `<span class="pv ${p.cls}">${p.who} = ${hx(p.v, Math.ceil(p.n / 4))} = ${bin(p.v, p.n)}</span>`).join('');
+  $('groups').innerHTML = groups.map(g => {
+    const nb = g.mem.length / 8, bytes = [];
+    for (let k = 0; k < nb; k++) bytes.push(byteHtml(g.mem.slice(k * 8, k * 8 + 8), (g.base ? g.base + ' ' : '') + '+' + k, g.jpeg));
+    const more = g.more ? `<span class="more">${g.more === true ? '…' : '… ' + g.more}</span>` : '';
+    return `<div class="grp">${g.title ? `<div class="gt">${g.title}</div>` : ''}<div class="bytes">${bytes.join('')}${more}</div></div>`;
+  }).join('');
+}
+
+// ---- names panel ----
+function renderNames(f) {
+  const v = fcc(f.id);
+  const dev = f.dev ?? '<span class="why">沒有指定裝置，放在這裡和隔壁的格式對照</span>';
+  let dt, bus;
+  if (f.dt) { dt = `${hx(f.dt[0], 2)}（${f.dt[1]}）`; bus = f.bus; }
+  else if (f.uvc) { dt = `—<span class="why">，${UVC.dt}</span>`; bus = `—<span class="why">，${UVC.bus}</span>`; }
+  else { dt = '—<span class="why">，這不是線上格式</span>'; bus = '—<span class="why">，ISP 或編碼器在記憶體裡用的格式</span>'; }
+  const bits = { unp: f.c, p10: 10, p12: 12, yuv: 16, nv12: 12, mjpg: null }[f.kind];
+  const bitsTxt = bits === null ? '不固定' : (f.kind === 'unp' && f.n < f.c ? `${bits} bit（有效 ${f.n} bit）` : f.kind === 'nv12' ? '平均 12 bit' : `${bits} bit`);
+  $('names').innerHTML = `
+    <dt>裝置例子</dt><dd style="font-family: var(--font-body)">${dev}</dd>
+    <dt>CSI-2 DT</dt><dd>${dt}</dd>
+    <dt>media bus code</dt><dd>${bus}</dd>
+    <dt>fourcc</dt><dd>'${f.id}' = ${hx(v, 8)}<br>${f.pix}</dd>
+    <dt>每個 pixel</dt><dd style="font-family: var(--font-body)">${bitsTxt}</dd>`;
+}
+
+// ---- the four sizing steps ----
+const alignUp = (x, a) => Math.ceil(x / a) * a;
+function renderSteps(f, w, h, a) {
+  const li = [];
+  const ans = (t, warn) => `<span class="ans${warn ? ' warn' : ''}">${t}</span>`;
+  if (f.kind === 'mjpg') {
+    li.push(`查 fourcc 每個 pixel 佔幾個 bit。${ans('壓縮格式：不固定')}`);
+    li.push(`一行至少幾個 byte。${ans('沒有固定的行')}`);
+    li.push(`對齊後的 bytesperline。${ans('V4L2 規定壓縮格式填 0：bytesperline = 0')}`);
+    li.push(`sizeimage。${ans('driver 給的最壞情況上限（UVC 來自裝置回報的最大 frame 大小）')}`);
+    $('steps').innerHTML = li.map(t => `<li>${t}</li>`).join('');
+    return;
+  }
+  const bits = { unp: f.c, p10: 10, p12: 12, yuv: 16, nv12: 8 }[f.kind];
+  let s1 = `${bits} bit`;
+  if (f.kind === 'unp' && f.n < f.c) s1 += `（有效 ${f.n} bit，其餘補 0）`;
+  if (f.kind === 'p10') s1 += '（每 4 個 pixel 5 bytes）';
+  if (f.kind === 'p12') s1 += '（每 2 個 pixel 3 bytes）';
+  if (f.kind === 'yuv') s1 += '（Y 8 bit，加上和隔壁共用的 U 或 V 8 bit）';
+  if (f.kind === 'nv12') s1 = 'Y plane 每個 pixel 8 bit；UV plane 平均每個 pixel 4 bit';
+  li.push(`查 fourcc 每個 pixel 在記憶體裡佔幾個 bit。${ans(s1)}`);
+  const raw = Math.ceil(w * bits / 8);
+  let s2 = `⌈${num(w)} × ${bits} ÷ 8⌉ = ${num(raw)} bytes`;
+  li.push(`一行至少要 ⌈width × bit ÷ 8⌉ 個 byte。${ans(s2)}`);
+  const warns = [];
+  if (f.kind === 'p10' && w % 4) warns.push('寬度不是 4 的倍數：最後一組湊不滿 4 個 pixel。這裡照公式無條件進位，實際硬體可能另有限制。');
+  if (f.kind === 'p12' && w % 2) warns.push('寬度不是偶數：最後一組湊不滿 2 個 pixel。');
+  if ((f.kind === 'yuv' || f.kind === 'nv12') && w % 2) warns.push('寬度要是偶數：兩個相鄰的 pixel 共用一組 U、V。');
+  if (f.kind === 'nv12' && h % 2) warns.push('高度要是偶數：上下兩行共用 UV plane 的同一行。');
+  const bpl = alignUp(raw, a);
+  const s3 = a === 1 ? `不對齊：bytesperline = ${num(bpl)}` : `取到 ${a} 的倍數：bytesperline = ${num(bpl)}（padding ${num(bpl - raw)} bytes）`;
+  li.push(`往上取到對齊值的倍數。${ans(s3)}`);
+  let size, s4;
+  if (f.kind === 'nv12') {
+    const uvh = Math.ceil(h / 2);
+    size = bpl * h + bpl * uvh;
+    s4 = `Y ${num(bpl)} × ${num(h)} + UV ${num(bpl)} × ${num(uvh)} = ${num(size)} bytes`;
+  } else {
+    size = bpl * h;
+    s4 = `${num(bpl)} × ${num(h)} = ${num(size)} bytes`;
+  }
+  s4 += `（約 ${(size / 1048576).toFixed(2)} MiB）`;
+  li.push(`sizeimage = bytesperline × height。${ans(s4)}`);
+  $('steps').innerHTML = li.map(t => `<li>${t}</li>`).join('') + warns.map(t => `<li style="list-style: none">${ans(t, true)}</li>`).join('');
+}
+
+function renderRead(f) {
+  const pre = f.kind === 'nv12' || f.kind === 'mjpg' ? '' : 'const uint8_t *row = base + y * bytesperline;\n';
+  $('read').textContent = pre + f.read;
+}
+
+// ---- state and wiring ----
+const state = { f: FORMATS[2], w: 3280, h: 2464, a: 32 };
+
+function renderAll() {
+  const f = state.f;
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', b.dataset.id === f.id));
+  renderNames(f);
+  renderLayout(f);
+  renderSteps(f, state.w, state.h, state.a);
+  renderRead(f);
+  $('say').textContent = f.say;
+}
+
+function choose(f) {
+  state.f = f; state.w = f.w; state.h = f.h; state.a = f.align;
+  $('w').value = f.w; $('h').value = f.h; $('align').value = String(f.align);
+  renderAll();
+}
+
+FORMATS.forEach(f => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.textContent = f.id.trimEnd(); b.dataset.id = f.id;
+  b.title = f.pix;
+  b.addEventListener('click', () => choose(f));
+  $('presets').appendChild(b);
+});
+
+const clampInt = (s, lo, hi) => { const v = Math.floor(Number(s)); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null; };
+['w', 'h'].forEach(id => $(id).addEventListener('input', e => {
+  const v = clampInt(e.target.value, 1, 16384);
+  if (v === null) return;
+  state[id] = v; renderAll();
+}));
+$('align').addEventListener('change', e => { state.a = Number(e.target.value); renderAll(); });
+
+choose(FORMATS[2]);
+</script>
+</body>
+</html>

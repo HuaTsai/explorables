@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROS 2 疊在 DDS 上的那一層</title>
+<meta name="description" content="ROS 2 的 topic 在 DDS 上叫 rt/ 開頭的名字，型別叫 pkg::msg::dds_::Type_。看 rclcpp、rcl、rmw 怎麼分層、名稱怎麼對應、QoS profile 對到哪些 DDS 設定。輸入一個 ROS 名稱，看它在 DDS 上的樣子。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. A static layer diagram, then an exploratory workbench: presets + inputs
+   (kind, name, type, QoS profile, rmw) on top, then two panels (what DDS sees / what ROS tools show). */
+table.cmp { min-width: 34rem; }
+.presets button { font-size: 0.85rem; }
+
+.stack { display: flex; flex-direction: column; gap: 0.3rem; max-width: 36rem; }
+.layer { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 0.75rem; align-items: baseline; padding: 0.45rem 0.75rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+.layer .n { font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; }
+.layer .d { font-size: 0.85rem; color: var(--muted); }
+.layer.rmw { border-color: var(--hit); }
+.layer.impl { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.layer.impl span { font-family: var(--font-mono); font-size: 0.78rem; padding: 0.05rem 0.45rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+
+.form { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.45rem 0.8rem; align-items: center; }
+.form label { font-size: 0.82rem; color: var(--muted); }
+.form input, .form select { width: 100%; min-width: 0; }
+.form input.bad { border-color: var(--miss); }
+.work.names { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.35rem 0.8rem; margin: 0; padding: 0.6rem 0.75rem; }
+.kv dt { color: var(--muted); font-size: 0.8rem; line-height: 1.6; }
+.kv dd { margin: 0; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; overflow-wrap: anywhere; }
+.kv dd .why { font-family: var(--font-body); color: var(--muted); }
+.kv dd b { color: var(--hit); font-weight: 600; }
+.sub-h { padding: 0.4rem 0.75rem 0; font-size: 0.75rem; font-weight: 700; color: var(--muted); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← DDS 與 ROS 2 底層</a>
+    <h1><span class="mono">ROS 2</span> 疊在 DDS 上的那一層</h1>
+    <p class="lead">在 ROS 2 裡發一個 <code>/turtle1/cmd_vel</code>，DDS 上看到的 topic 叫 <code>rt/turtle1/cmd_vel</code>，型別叫 <code>geometry_msgs::msg::dds_::Twist_</code>。這一頁看 ROS 2 在 DDS 上面疊了什麼、名稱和 QoS 怎麼對應，最後輸入一個 ROS 名稱，看它到了 DDS 長什麼樣子。</p>
+  </header>
+
+  <section class="prose">
+    <h2>為什麼不直接用 DDS</h2>
+    <p>ROS 2 選 DDS 當底層，是看上它現成的自動探索、QoS 和可靠傳輸。但它沒有讓使用者直接寫 DDS，而是自己疊了一層，原因有四個：</p>
+    <ul>
+      <li><strong>可以換實作。</strong>各家 DDS 的 API、程式產生器、設定檔都不一樣。ROS 2 在中間放了一層統一的介面，換實作只要改一個環境變數，程式不用動。</li>
+      <li><strong>DDS 的 API 太大。</strong>ROS 只留下使用者需要的概念：node、publisher、subscription，以及幾組現成的 QoS 組合。</li>
+      <li><strong>機器人需要、DDS 沒有的東西。</strong>service、action、parameter、模擬時間、executor、launch，都是 ROS 自己做的。</li>
+      <li><strong>甚至可以不用 DDS。</strong>介面是抽象的，所以底層也能換成別的協定，例如 Zenoh。</li>
+    </ul>
+  </section>
+
+  <section class="prose">
+    <h2>分層</h2>
+    <div class="stack" aria-label="ROS 2 分層">
+      <div class="layer"><span class="n">你的程式</span><span class="d">建立 node、publisher、subscription</span></div>
+      <div class="layer"><span class="n">rclcpp ／ rclpy</span><span class="d">各語言的 client library</span></div>
+      <div class="layer"><span class="n">rcl</span><span class="d">共用的 C 核心：名稱解析、參數、時間</span></div>
+      <div class="layer rmw"><span class="n">rmw</span><span class="d">middleware 介面，只有宣告，沒有實作</span></div>
+      <div class="layer impl"><span>rmw_fastrtps_cpp</span><span>rmw_cyclonedds_cpp</span><span>rmw_connextdds</span><span>rmw_zenoh_cpp</span><span>……</span></div>
+      <div class="layer"><span class="n">DDS 或其他協定</span><span class="d">Fast DDS、Cyclone DDS、RTI Connext、Zenoh</span></div>
+    </div>
+    <p>用哪一個實作，執行時用環境變數 <code>RMW_IMPLEMENTATION</code> 決定，例如 <code>RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ros2 run demo_nodes_cpp talker</code>。沒設定就用該版本的預設值：</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>ROS 2 版本</th><th>預設 rmw</th><th>備註</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Galactic</td><td><code>rmw_cyclonedds_cpp</code></td><td>唯一一個預設用 Cyclone DDS 的版本</td></tr>
+        <tr><td class="name">Humble、Iron、Jazzy</td><td><code>rmw_fastrtps_cpp</code></td><td>Fast DDS</td></tr>
+        <tr><td class="name">Kilted</td><td><code>rmw_fastrtps_cpp</code></td><td><code>rmw_zenoh_cpp</code> 升為 Tier 1，並隨二進位版本一起發布</td></tr>
+        <tr><td class="name">Lyrical</td><td><code>rmw_fastrtps_cpp</code></td><td>Tier 1 有 Fast DDS、Cyclone DDS、Connext、Zenoh 四種</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p>訊息的程式也分兩種做法。<span class="term" data-def="static type support。build 時就為每個訊息產生專用的序列化程式，執行時直接呼叫，速度快。">靜態</span>的做法是在 build 時替每個訊息產生專用的序列化程式，例如 Fast DDS 用的 <code>rosidl_typesupport_fastrtps_cpp</code>。<span class="term" data-def="dynamic type support，也叫 introspection。build 時只產生「這個訊息有哪些欄位、各在哪個位移」的描述，執行時照描述逐欄位處理；和實作無關，但比較慢。">動態</span>的做法是只產生一份「有哪些欄位」的描述（<code>rosidl_typesupport_introspection_cpp</code>），執行時照著描述處理。動態的和實作無關，但比較慢。Cyclone 的 rmw 用的是動態的；Fast DDS 兩種都有，<code>rmw_fastrtps_cpp</code> 是靜態的，<code>rmw_fastrtps_dynamic_cpp</code> 是動態的。不管哪一種，使用者寫的程式都只看得到 ROS 的訊息 class。</p>
+  </section>
+
+  <section class="prose">
+    <h2>名稱怎麼對應</h2>
+    <p>ROS 的名稱有 namespace、有斜線，DDS 的 topic 名稱只是一個字串。ROS 2 在 rmw 這一層把兩者對起來，規則是：</p>
+    <ol>
+      <li>topic：在完整名稱前面加 <code>rt</code>。<code>/turtle1/cmd_vel</code> 變成 <code>rt/turtle1/cmd_vel</code>。</li>
+      <li>service：拆成兩個 DDS topic。request 是 <code>rq</code> + 名稱 + <code>Request</code>，reply 是 <code>rr</code> + 名稱 + <code>Reply</code>，中間不加分隔符號。</li>
+      <li>型別：<code>pkg/msg/Type</code> 變成 <code>pkg::msg::dds_::Type_</code>。service 的型別拆成 <code>Type_Request</code> 和 <code>Type_Response</code> 兩個，各自照同樣的規則轉換。</li>
+      <li>反方向：工具列出 topic 時，把有 <code>rt/</code> 的名字還原回 ROS 名稱，<strong>沒有前綴的直接略過</strong>。</li>
+    </ol>
+    <p>設計文件還保留了 <code>rs</code>、<code>rp</code>、<code>ra</code>（service、parameter、action），但現在的實作只用到 <code>rt</code>、<code>rq</code>、<code>rr</code>。parameter 和 action 是用 service 和 topic 組出來的，所以線上也只會看到這三種前綴。publisher 的 QoS 裡有一個 <code>avoid_ros_namespace_conventions</code>，設成 true 就不加前綴，用來和非 ROS 的 DDS 程式溝通。</p>
+  </section>
+
+  <section class="bench" aria-label="輸入 ROS 名稱">
+    <div class="row presets" id="presets"><span class="lbl">範例</span></div>
+
+    <div class="row top">
+      <div>
+        <p class="panel-title">ROS 這一側</p>
+        <div class="form">
+          <label for="kind">種類</label><select id="kind"><option value="topic">topic</option><option value="service">service</option></select>
+          <label for="name">名稱</label><input id="name" type="text" spellcheck="false">
+          <label for="type">型別</label><input id="type" type="text" spellcheck="false">
+          <label for="qos">QoS profile</label><select id="qos"><option value="default">default</option><option value="sensor">sensor data</option></select>
+          <label for="rmw">rmw</label><select id="rmw"><option value="fastrtps">rmw_fastrtps_cpp</option><option value="fastrtps_dyn">rmw_fastrtps_dynamic_cpp</option><option value="cyclone">rmw_cyclonedds_cpp</option></select>
+        </div>
+        <p class="hint" id="errs"></p>
+      </div>
+      <div>
+        <p class="panel-title">規則</p>
+        <p class="hint" style="margin-top:0">名稱沒有以 / 開頭時，當成在根 namespace 底下。service 一律用 services default 這組 QoS。換 rmw 只會改變型別程式的產生方式，DDS 上的名稱完全一樣，所以不同 DDS 實作的 ROS 2 程式才能互通。</p>
+      </div>
+    </div>
+
+    <div class="row work names">
+      <div class="panel">
+        <div class="panel-head"><span>DDS 看到的</span></div>
+        <div id="dds"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>ROS 工具看到的</span></div>
+        <div id="ros"></div>
+      </div>
+    </div>
+
+    <div class="row"><p class="say" id="say"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>QoS profile</h2>
+    <p>ROS 2 預先定義了幾組 QoS 組合，最常用的三組（來自 <code>rmw/qos_profiles.h</code>）：</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>profile</th><th>history</th><th>reliability</th><th>durability</th><th>典型用途</th></tr></thead>
+      <tbody>
+        <tr><td class="name">default</td><td class="num">KEEP_LAST 10</td><td class="num">RELIABLE</td><td class="num">VOLATILE</td><td>一般 topic</td></tr>
+        <tr><td class="name">sensor data</td><td class="num">KEEP_LAST 5</td><td class="num">BEST_EFFORT</td><td class="num">VOLATILE</td><td>雷射、相機這種高頻資料，掉幾筆沒關係、要最新的</td></tr>
+        <tr><td class="name">services default</td><td class="num">KEEP_LAST 10</td><td class="num">RELIABLE</td><td class="num">VOLATILE</td><td>service 的 request 和 reply</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p>相容規則就是 DDS 的 RxO：subscription 要求的不能比 publisher 提供的嚴格。ROS 2 文件列出的不相容組合有：reliability 是 best effort 的 publisher 配 reliable 的 subscription；durability 是 volatile 的 publisher 配 transient local 的 subscription；以及 deadline、liveliness、lease duration 的對應組合。最常見的狀況是驅動程式用 sensor data 發 <code>/scan</code>，訂閱的一方卻用 default。這時 publisher 端會印出：</p>
+<pre class="code">New subscription discovered on topic '/scan', requesting incompatible QoS.
+No messages will be sent to it. Last incompatible policy: RELIABILITY</pre>
+    <p>反過來，subscription 用 sensor data 去收 default 的 publisher 是可以的：提供 RELIABLE、只要求 BEST_EFFORT，提供的比要求的高。<a href="../discovery/">第一篇</a>的 workbench 可以直接跑這兩種情況。</p>
+  </section>
+
+  <section class="prose">
+    <h2>看不見的部分</h2>
+    <p><strong>一個程式一個 participant。</strong>早期的 ROS 2 是一個 node 一個 DDS participant；後來改成一個 context（通常就是一個程式）只有一個 participant，因為 participant 是探索流量的主要來源。但這樣一來，DDS 只知道「這個 participant 有哪些 writer、reader」，不知道它們屬於哪個 node。ROS 2 的解法是再開一個 topic，叫 <code>ros_discovery_info</code>：每個 participant 在上面公告「我底下有哪些 node，每個 node 有哪些 reader、writer」，用 transient local，晚加入的程式也拿得到。它是用 <code>avoid_ros_namespace_conventions</code> 建的，沒有 <code>rt/</code> 前綴，所以 <code>ros2 topic list</code> 看不到它。</p>
+    <p><strong>型別雜湊。</strong>從 Iron 開始，每個訊息型別在 build 時會算出一個雜湊（RIHS），探索時放在 DDS 的 USER_DATA 裡傳出去，格式是 <code>typehash=RIHS01_…;</code>，<code>ros2 topic info -v</code> 看得到。<span class="sn">這部分的規格寫在 REP-2016，目前仍是草稿，還沒有正式發布。</span>不過目前看到的實作只是把它帶上、顯示出來，並沒有因為雜湊不同就拒絕配對。rclcpp 有一個「incompatible type」事件，但它是由 DDS 的 INCONSISTENT_TOPIC 狀態觸發的，底下的 DDS 不支援這個狀態時就不會發生。所以「型別名稱一樣、內容不一樣」這個坑，在 ROS 2 裡還是要靠自己管理。</p>
+    <p><strong>探索範圍。</strong>相關的環境變數：</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>環境變數</th><th>作用</th><th>版本</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><code>ROS_DOMAIN_ID</code></td><td>選 DDS domain，預設 0。文件建議用 0 到 101；Linux 上 0–101 和 215–232 都安全</td><td>一直都有</td></tr>
+        <tr><td class="name"><code>ROS_LOCALHOST_ONLY</code></td><td>只在本機通訊</td><td>Iron 起標為 deprecated，仍然有效</td></tr>
+        <tr><td class="name"><code>ROS_AUTOMATIC_DISCOVERY_RANGE</code></td><td>自動探索的範圍：<code>SUBNET</code>（預設）、<code>LOCALHOST</code>、<code>OFF</code>、<code>SYSTEM_DEFAULT</code></td><td>Iron 起</td></tr>
+        <tr><td class="name"><code>ROS_STATIC_PEERS</code></td><td>手動列出要連的位址，用分號隔開；適合不支援 multicast 的網路</td><td>Iron 起</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>ROS 2 在 DDS 上疊的那一層，核心是 rmw：上面的 rcl、rclcpp 只認得 rmw 的介面，下面每一種 DDS 各有一個 rmw 實作，用 <code>RMW_IMPLEMENTATION</code> 切換。名稱的對應是固定規則：topic 加 <code>rt</code>，service 拆成 <code>rq…Request</code> 和 <code>rr…Reply</code>，型別變成 <code>pkg::msg::dds_::Type_</code>。不管換哪一家 DDS，這些名字都一樣，所以不同實作的 ROS 2 程式可以互通，非 ROS 的 DDS 程式只要照同樣的規則取名，也能被 ROS 2 看到。</p>
+    <p>下一篇比較各家 DDS 實作的差異，以及哪些功能雖然名字一樣，卻只能在同一家之間使用。</p>
+  </section>
+
+  <p class="foot">來源：ROS 2 design 文件「Topic and Service name mapping to DDS」、「Node to Participant mapping」；ROS 2 文件「About internal ROS 2 interfaces」、「Working with multiple RMW implementations」、「Quality of Service settings」、「The ROS_DOMAIN_ID」、Iron 與 Kilted 的 release notes；REP-2000；ros2/rmw、ros2/rmw_fastrtps、ros2/rmw_cyclonedds、ros2/rmw_dds_common、ros2/rclcpp 的原始碼（rolling 分支）。</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const PRESETS = [
+  { key: 'cmd', label: 'turtlesim 的 cmd_vel', v: { kind: 'topic', name: '/turtle1/cmd_vel', type: 'geometry_msgs/msg/Twist', qos: 'default' },
+    say: '最典型的 topic。DDS 上的名字前面多了 rt；型別在最後一段前面多了一層 dds_ 命名空間，結尾多了底線。其他都照抄。' },
+  { key: 'scan', label: '雷射的 /scan', v: { kind: 'topic', name: '/scan', type: 'sensor_msgs/msg/LaserScan', qos: 'sensor' },
+    say: '驅動程式通常用 sensor data 發雷射資料：BEST_EFFORT、只留最新 5 筆。訂閱的一方如果用 default（RELIABLE），會配不上。' },
+  { key: 'ns', label: '有 namespace', v: { kind: 'topic', name: '/robot1/odom', type: 'nav_msgs/msg/Odometry', qos: 'default' },
+    say: 'namespace 只是名稱的一部分，原封不動接在 rt 後面。兩台機器人用不同的 namespace，在 DDS 上就是不同的 topic。' },
+  { key: 'srv', label: 'service', v: { kind: 'service', name: '/add_two_ints', type: 'example_interfaces/srv/AddTwoInts', qos: 'default' },
+    say: '一個 service 在 DDS 上是兩個 topic：request 和 reply 各一個，型別也拆成 _Request 和 _Response。這兩個 topic 不會出現在 ros2 topic list，只會出現在 ros2 service list。' },
+  { key: 'rel', label: '相對名稱', v: { kind: 'topic', name: 'chatter', type: 'std_msgs/msg/String', qos: 'default' },
+    say: '沒有以 / 開頭的是相對名稱，實際名稱要看 node 所在的 namespace。這裡當成在根 namespace，所以是 /chatter。' },
+];
+
+const QOS = { default: ['KEEP_LAST 10', 'RELIABLE', 'VOLATILE'], sensor: ['KEEP_LAST 5', 'BEST_EFFORT', 'VOLATILE'], services: ['KEEP_LAST 10', 'RELIABLE', 'VOLATILE'] };
+const RMW = {
+  fastrtps: { ts: 'rosidl_typesupport_fastrtps_cpp', how: '靜態：build 時產生每個訊息專用的序列化程式', dds: 'Fast DDS' },
+  fastrtps_dyn: { ts: 'rosidl_typesupport_introspection_cpp', how: '動態：執行時照欄位描述逐欄處理', dds: 'Fast DDS' },
+  cyclone: { ts: 'rosidl_typesupport_introspection_c／_cpp', how: '動態：執行時照欄位描述逐欄處理', dds: 'Cyclone DDS' },
+};
+const state = { v: { ...PRESETS[0].v }, rmw: 'fastrtps', preset: 'cmd' };
+
+const typeRe = /^(\w+)\/(msg|srv)\/(\w+)$/;
+const normName = n => n.startsWith('/') ? n.replace(/\/+$/, '') : '/' + n.replace(/\/+$/, '');
+
+function render() {
+  const v = state.v, r = RMW[state.rmw];
+  const m = typeRe.exec(v.type);
+  const name = normName(v.name);
+  const row = (k, val, why) => `<dt>${k}</dt><dd>${val}${why ? `<span class="why">　${why}</span>` : ''}</dd>`;
+  let dds = '', ros = '';
+  if (v.kind === 'topic') {
+    const q = QOS[v.qos];
+    dds = `<dl class="kv">
+      ${row('topic', `<b>rt</b>${esc(name)}`)}
+      ${row('型別', `${esc(m[1])}::${m[2]}::<b>dds_::</b>${esc(m[3])}<b>_</b>`)}
+      ${row('history', q[0])}${row('reliability', q[1])}${row('durability', q[2])}
+      ${row('USER_DATA', 'typehash=RIHS01_…;', 'Iron 起才有')}
+    </dl>`;
+    ros = `<dl class="kv">
+      ${row('ros2 topic list', esc(name))}
+      ${row('ros2 topic info', `Type: ${esc(v.type)}`)}
+      ${row('型別程式', r.ts, r.how)}
+      ${row('底下的 DDS', r.dds)}
+    </dl>`;
+  } else {
+    const q = QOS.services;
+    dds = `<div class="sub-h">request</div><dl class="kv">
+      ${row('topic', `<b>rq</b>${esc(name)}<b>Request</b>`)}
+      ${row('型別', `${esc(m[1])}::srv::<b>dds_::</b>${esc(m[3])}_Request<b>_</b>`)}
+    </dl><div class="sub-h">reply</div><dl class="kv">
+      ${row('topic', `<b>rr</b>${esc(name)}<b>Reply</b>`)}
+      ${row('型別', `${esc(m[1])}::srv::<b>dds_::</b>${esc(m[3])}_Response<b>_</b>`)}
+      ${row('QoS', q.join('、'), 'services default')}
+    </dl>`;
+    ros = `<dl class="kv">
+      ${row('ros2 service list', esc(name))}
+      ${row('ros2 topic list', '（不會出現）', 'rq／rr 開頭的不算 topic')}
+      ${row('型別程式', r.ts, r.how)}
+      ${row('底下的 DDS', r.dds)}
+    </dl>`;
+  }
+  $('dds').innerHTML = dds;
+  $('ros').innerHTML = ros;
+  $('qos').disabled = v.kind === 'service';
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('chosen', b.dataset.k === state.preset));
+  const pr = PRESETS.find(p => p.key === state.preset);
+  $('say').textContent = pr ? pr.say : (v.kind === 'topic' ? `${name} 在 DDS 上叫 rt${name}。` : `${name} 在 DDS 上是 rq${name}Request 和 rr${name}Reply 兩個 topic。`);
+}
+
+function fill() {
+  const v = state.v;
+  $('kind').value = v.kind; $('name').value = v.name; $('type').value = v.type; $('qos').value = v.qos; $('rmw').value = state.rmw;
+  $('name').classList.remove('bad'); $('type').classList.remove('bad'); $('errs').textContent = '';
+}
+
+function read() {
+  const kind = $('kind').value, name = $('name').value.trim(), type = $('type').value.trim();
+  const m = typeRe.exec(type);
+  const okName = /^\/?[A-Za-z_~][\w/]*$/.test(name) && !name.includes('//');
+  const okType = !!m && m[2] === (kind === 'topic' ? 'msg' : 'srv');
+  $('name').classList.toggle('bad', !okName);
+  $('type').classList.toggle('bad', !okType);
+  const errs = [];
+  if (!okName) errs.push('名稱只能用英數字、底線和斜線，開頭不能是數字。');
+  if (!okType) errs.push(kind === 'topic' ? 'topic 的型別要寫成 pkg/msg/Type。' : 'service 的型別要寫成 pkg/srv/Type。');
+  $('errs').textContent = errs.join(' ');
+  state.rmw = $('rmw').value;
+  if (errs.length) return;
+  state.v = { kind, name, type, qos: $('qos').value };
+  state.preset = null;
+  render();
+}
+
+PRESETS.forEach(pr => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.textContent = pr.label; b.dataset.k = pr.key;
+  b.addEventListener('click', () => { state.v = { ...pr.v }; state.preset = pr.key; fill(); render(); });
+  $('presets').appendChild(b);
+});
+['name', 'type'].forEach(id => $(id).addEventListener('input', read));
+['kind', 'qos', 'rmw'].forEach(id => $(id).addEventListener('change', read));
+fill();
+render();
+</script>
+</body>
+</html>
