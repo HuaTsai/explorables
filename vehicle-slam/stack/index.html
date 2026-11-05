@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>量產堆疊與 IMU：地圖定位加濾波器</title>
+<meta name="description" content="Autoware 用 NDT 加 EKF，Apollo MSF 用 SINS 當主幹，兩者都是地圖匹配加內部感測器的濾波器。怎麼讀 IMU 規格表，以及感知全部失效時，加速度計和陀螺儀的偏差、雜訊在幾秒到幾分鐘內會讓位置漂多遠。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Exploratory workbench: IMU grade presets, a velocity-source switch and four
+   sliders, then the five drift rules filled in for the current inputs next to a log-scale plot of position
+   error against outage time with the 10 cm map-matching line. */
+.sliders { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.6rem 1.25rem; }
+@media (max-width: 760px) { .sliders { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.sliders label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; }
+.sliders .v { font-family: var(--font-mono); font-weight: 600; }
+.sliders input { width: 100%; }
+.work.im { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+.steps { list-style: none; margin: 0; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.55rem; counter-reset: s; }
+.steps li { counter-increment: s; font-size: 0.84rem; }
+.steps .q { display: block; font-size: 0.76rem; color: var(--muted); font-weight: 700; }
+.steps .q::before { content: counter(s) ". "; font-family: var(--font-mono); }
+.steps .a { font-family: var(--font-mono); font-size: 0.8rem; }
+.steps .a.off { color: var(--muted); }
+.steps .a.hit { color: var(--hit); font-weight: 700; }
+.steps .a.bad { color: var(--miss); font-weight: 700; }
+.plot svg { width: 100%; height: auto; display: block; }
+.plot text { font-family: var(--font-body); font-size: 10.5px; fill: var(--muted); }
+.plot .grid { stroke: var(--line); stroke-width: 0.8; }
+.plot .now { fill: var(--mark); }
+.plot .ref { stroke: var(--hit); stroke-width: 1.3; stroke-dasharray: 5 3; }
+.plot .ref-lab { fill: var(--hit); }
+.plot .lat { stroke: var(--ink); stroke-width: 2; fill: none; }
+.plot .alg { stroke: var(--ink); stroke-width: 2; fill: none; stroke-dasharray: 6 4; }
+.plot .dot.ok { fill: var(--hit); }
+.plot .dot.bad { fill: var(--miss); }
+.plot .lab { fill: var(--ink); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 車輛定位與 SLAM</a>
+    <h1>量產堆疊與 IMU：地圖定位加濾波器</h1>
+    <p class="lead">量產的定位堆疊長得很像：一個把點雲對到地圖的 pose estimator、一個從內部感測器算速度的 twist estimator，再用濾波器把它們和 IMU、GNSS 融在一起。這一頁看 Autoware 和 Apollo 怎麼搭這條管線、IMU 在裡面扛什麼，以及怎麼從規格表讀出一顆 IMU 在感知失效時撐得了多久。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、官方文件和程式庫後撰寫。</p>
+      <p>管線的分工、IMU 誤差怎麼隨時間累積，這些不會過期；套件名稱、維護狀態、預設參數和 datasheet 數字會隨版本改變。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>Autoware：NDT 加 EKF</h2>
+    <p><a href="https://github.com/autowarefoundation/autoware_core/tree/main/localization">Autoware</a>（Apache-2.0，每天都有 commit）的定位分成四塊：</p>
+    <ul>
+      <li><strong>Pose estimator</strong>：<code>autoware_ndt_scan_matcher</code>（已移到 autoware_core）把感測點雲對點雲地圖做 <span class="term" data-def="Normal distributions transform。把地圖切成格子，每格用一個常態分佈描述點的分佈，再找讓這一幀的點在這些分佈下機率最大的 pose。">NDT</span> 匹配。它另外提供：以 Monte Carlo 估計初始位姿的服務；2D 的即時共變異數估計（Laplace 近似或 multi-NDT）；去掉地面點的匹配分數；動態地圖載入（PCD 建議切成 20 m × 20 m 的格）；以及可選的 GNSS 正則化，在橋、高速公路、農路這類沒有特徵的道路上，沿車輛縱向把解拉向 GNSS 位置。官方明白警告它在隧道、室內、高樓旁會有反效果，所以預設關閉。</li>
+      <li><strong>Twist estimator</strong>：<code>autoware_gyro_odometer</code> 把車速的 twist 和 IMU 陀螺儀合成一個 twist。Doppler 自車速度最自然的接入點就在這裡：發成 <code>vehicle/twist_with_covariance</code>，放在輪速的位置。</li>
+      <li><strong>融合</strong>：<code>autoware_ekf_localizer</code> 是 2D 車輛模型（x、y、yaw）的 EKF，有時間延遲補償（augmented state）、自動估計 yaw bias（也就是安裝角誤差）、Mahalanobis 閘門和平滑更新；z 由 pitch 推算。</li>
+      <li><strong>初始化</strong>：<code>pose_initializer</code> 拿 GNSS 或人工給的粗位姿，交給 NDT 對齊後再送進 EKF。</li>
+    </ul>
+    <p>另外，<a href="https://github.com/autowarefoundation/autoware_universe/tree/main/localization/autoware_pose_estimator_arbiter">pose_estimator_arbiter</a> 支援 NDT、YabLoc（相機加向量地圖）、Eagleye（GNSS/IMU）、landmark 幾種 pose estimator，但文件明說目前只實作了「全部開啟」這一條規則。地圖格式是 <code>pointcloud_map.pcd</code>（單檔，或分塊目錄加 metadata）、<code>lanelet2_map.osm</code> 和 <code>map_projector_info.yaml</code>（Local、MGRS、LocalCartesianUTM、LocalCartesian、TransverseMercator）。</p>
+    <p>建圖方面，<a href="https://github.com/autowarefoundation/autoware-documentation/tree/main/docs/tutorials/integrating-autoware/creating-maps">Autoware 的文件</a>建議用開源 SLAM 產生 PCD，列出 LIO-SAM、FAST_LIO_SLAM、DLIO、KISS-ICP、Kinematic-ICP 等選項，並寫明「SLAM 應有回環、圖優化並使用 GPS」，ROS 2 版「可能不如 ROS 1 版成熟」。它自己做的比較（VLP-16、不用 IMU）裡，hdl_graph_slam 和 lidarslam_ros2 的平均位置誤差都在公尺級：x 方向 8.9–11.9 m，z 方向 13.9–16.5 m<span class="term" data-def="其他團隊拿公開的 checkpoint 或程式重新跑的評測。">【第三方評測】</span>，並註明只有單一資料集、不能當排名。這是「沒有 IMU、沒有 GNSS 的 LiDAR-only 建圖」品質的一個獨立參考點。</p>
+
+    <h2>Apollo MSF：SINS 當主幹</h2>
+    <ul>
+      <li><a href="https://arxiv.org/abs/1711.05805">Apollo MSF</a> 用<span class="term" data-def="Error-state Kalman filter。主幹用 IMU 積分出名目狀態，濾波器只估計名目狀態和真實狀態之間的小誤差，再把誤差補回去。">誤差狀態 Kalman 濾波器</span>融合 GNSS（RTK）、LiDAR（強度和高度兩種匹配模式）和 IMU（<span class="term" data-def="Strapdown inertial navigation system，捷聯慣導：把固定在車上的 IMU 量到的角速度和加速度積分成姿態、速度和位置。">SINS</span>）。超過 60 km 的城市道路上，RMS 誤差 5–10 cm（Wan et al., ICRA 2018）<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>，用的是 Baidu 自家的資料。</li>
+      <li>它有四種模式，例如 3-Systems 全程使用 GNSS，2-Systems 只拿 GNSS 做 SINS 的初始對準（MSF README）。</li>
+      <li>實務限制：README 寫「目前只支援 x86_64」。核心的 <code>localization_msf</code> 是從 Baidu 伺服器下載的預建封包（<code>workspace.bzl</code>），沒有確認它是原始碼還是二進位檔，可修改性存疑。整套設計假設有高階 GNSS/INS，範例參數是 NovAtel。</li>
+      <li>值得學的是架構：SINS 做高頻主幹，LiDAR 定位和 GNSS 做量測更新。這是「IMU 很關鍵」的量產證據。</li>
+    </ul>
+
+    <h2>怎麼讀 IMU 規格</h2>
+    <p>IMU 在這兩條管線裡負責高頻的狀態傳播：Apollo 用它當主幹，Autoware 用陀螺儀補 twist，LIO 用它在每一幀之間預測狀態、替每個點去畸變。規格表上要看的項目依重要性排：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>規格</th><th>常見的要求</th><th>依據</th></tr></thead>
+      <tbody>
+        <tr><td class="name">輸出率</td><td>≥200 Hz，100 Hz 是底線</td><td>LIO-SAM 建議 ≥200 Hz、作者用 500 Hz；FAST-LIO 系以 IMU 頻率做前向傳播</td></tr>
+        <tr><td class="name">時間戳</td><td>硬體時間戳加 PTP 或 PPS，或和光達同一個時鐘</td><td>FAST-LIO、Point-LIO 的 README</td></tr>
+        <tr><td class="name">陀螺儀雜訊和偏差</td><td>消費級 MEMS 已可用於 LIO；要撐長時間 dead-reckoning 才需要工業級</td><td>見下面的等級和 workbench</td></tr>
+        <tr><td class="name">量程</td><td>gyro ≥±250 dps、accel ≥±4 g 對車輛已足夠；Point-LIO 要填 <code>satu_acc</code>、<code>satu_gyro</code></td><td><a href="https://github.com/hku-mars/Point-LIO">Point-LIO README</a></td></tr>
+        <tr><td class="name">軸數</td><td>6 軸就夠（FAST-LIO2、Point-LIO、GLIM、FMCW-LIO），只有 LIO-SAM 需要 9 軸</td><td><a href="https://github.com/hku-mars/FAST_LIO">FAST-LIO README</a>：6 軸或 9 軸都可以</td></tr>
+        <tr><td class="name">溫度補償</td><td>出廠做過溫度校正為佳</td><td>Autoware 提到 IMU 偏差隨溫度變化</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>等級的參考值，都是 datasheet 的典型值：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>型號</th><th>等級</th><th>陀螺儀</th><th>加速度計雜訊密度</th><th>備註</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Bosch BMI088</td><td>消費級 MEMS</td><td>雜訊密度 0.014 °/s/√Hz（＝ 0.84 °/√h）</td><td>175 µg/√Hz</td><td>常見於光達內建；FAST-LIO2 的實驗用的就是它</td></tr>
+        <tr><td class="name">TDK ICM-40609-D</td><td>消費級 MEMS</td><td>雜訊密度 4.5 mdps/√Hz（＝ 0.27 °/√h）</td><td>100 µg/√Hz</td><td>Livox Mid-360 內建</td></tr>
+        <tr><td class="name">Epson M-G370PDS0</td><td>工業級 MEMS</td><td>bias instability 0.8 °/h、ARW 0.03 °/√h</td><td>—</td><td></td></tr>
+        <tr><td class="name">MicroStrain 3DM-GX5-25</td><td>工業級</td><td>—</td><td>—</td><td>LIO-SAM 作者用的型號</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>陀螺儀的<span class="term" data-def="Angle random walk。陀螺儀白雜訊積分成角度後的隨機漫步，1σ 隨 √t 成長。">雜訊密度</span>和 ARW 是同一個量的兩種單位：°/s/√Hz 乘以 60 就是 °/√h，括號裡是換算後的值。<span class="term" data-def="陀螺儀靜置時，偏差在最佳平均時間下還會飄動的幅度，是偏差能估到多準的下限。">Bias instability</span> 只有 Epson 有列；消費級的偏差，這份資料裡只有「數十 °/h」這個量級，而且來自撰寫者的推論，不是 datasheet。</p>
+    <p>感知全部失效時（例如長隧道又沒有 Doppler），位置只剩 IMU 積分。誤差怎麼長，可以用幾條標準的誤差傳播估出量級：</p>
+    <ol>
+      <li>加速度計偏差 b<sub>a</sub> 積分一次是速度誤差 b<sub>a</sub>·t，再積一次是位置誤差 ½·b<sub>a</sub>·t²，沿行進方向累積。</li>
+      <li>陀螺儀偏差 b<sub>g</sub> 積分成航向誤差 b<sub>g</sub>·t。</li>
+      <li>陀螺儀的白雜訊積分成航向的隨機漫步，1σ 是 ARW·√t。</li>
+      <li>以車速 v 前進時，航向誤差 ψ 讓位置以 v·ψ 的速度往側向偏；把 2、3 積分起來，側向誤差約是 ½·v·b<sub>g</sub>·t² 加上 v·ARW·t<sup>1.5</sup>／√3。</li>
+      <li>有速度量測（Doppler 或輪速）時，第 1 條不再累積，沿行進方向的誤差改由速度量測本身的偏差決定；剩下的是第 2 到 4 條的航向漂移。</li>
+    </ol>
+  </section>
+
+  <section class="bench" aria-label="IMU dead-reckoning 漂移">
+    <div class="row presets" id="grades"><span class="lbl">等級</span></div>
+    <div class="row">
+      <div class="modes" id="modes"><span class="lbl">速度來源</span></div>
+      <div class="sliders">
+        <label>失效時間 <span class="v" id="v-t"></span><input type="range" id="in-t" min="1" max="120" step="1" aria-label="失效時間"></label>
+        <label>車速 <span class="v" id="v-v"></span><input type="range" id="in-v" min="0" max="40" step="1" aria-label="車速"></label>
+        <label>陀螺儀偏差 <span class="v" id="v-bg"></span><input type="range" id="in-bg" min="0.1" max="100" step="0.1" aria-label="陀螺儀偏差"></label>
+        <label>加速度計偏差 <span class="v" id="v-ba"></span><input type="range" id="in-ba" min="0" max="10" step="0.1" aria-label="加速度計偏差"></label>
+      </div>
+      <p class="hint">等級按鈕設定陀螺儀的 ARW（datasheet 值）和偏差。偏差只有工業級有資料：Epson 的 0.8 °/h 是 bias instability，這裡當成常數偏差，是最樂觀的情況；消費級的 30 °/h 取「數十 °/h」的量級，是示意值。加速度計偏差 1 mg、車速、失效時間也都是示意值。實際的 LIO 或 EKF 會線上估計偏差，失效前估得越準，剩下的偏差越小。綠色虛線是 Autoware 文件裡地圖匹配的預期誤差約 10 cm；曲線上的點超過它時變成紫色。</p>
+    </div>
+    <div class="row work im">
+      <div class="panel">
+        <div class="panel-head"><span>五條規則</span><span class="sub" id="steps-sub"></span></div>
+        <ol class="steps" id="steps"></ol>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>位置誤差對時間</span><span class="sub">對數刻度</span></div>
+        <div class="panel-body plot"><svg id="plot" viewBox="0 0 320 220" role="img" aria-label="位置誤差隨失效時間成長的曲線"></svg></div>
+        <div class="vars" id="vars"></div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <p>workbench 裡最明顯的是第 1 條：t² 的成長讓只靠加速度計的平移撐不了多久，這正是 Doppler 或輪速補上的那一塊。有了速度量測，剩下的瓶頸是航向；而在真實的隧道裡，牆面仍然約束側向和 yaw（見<a href="../methods/">選型頁的退化分析</a>），會被地圖匹配修正的正是側向誤差。對「LIO 加地圖匹配」來說，消費級和工業級的差別主要出現在感知全失效時能 dead-reckoning 多久；有速度量測撐住平移時，0.8 °/h 和數十 °/h 在一分鐘內的差別，在有地圖匹配修正的系統裡通常不是瓶頸，工業級 IMU 的價值在長時間沒有地圖修正的情況<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。</p>
+
+    <h2>安裝</h2>
+    <ul>
+      <li>剛性固定、靠近光達：外參越短越好，車子旋轉時 IMU 感受到的槓桿加速度也越小。</li>
+      <li>不要自己加軟性減震墊：它會引入沒有建模的相對運動，等於外參在動；只用原廠設計的隔振<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。</li>
+      <li>避開發熱源和排氣管附近。</li>
+      <li>軸向依 REP-103、REP-145 確認：靜止時 z 軸向上，加速度約為 +9.81（<a href="https://github.com/koide3/glim">GLIM 的參數文件</a>）。</li>
+    </ul>
+
+    <h2>通用融合工具</h2>
+    <ul>
+      <li><a href="https://github.com/cra-ros-pkg/robot_localization">robot_localization</a>：EKF、UKF 加 navsat_transform，ROS 2 仍在維護（最後 commit 2026-11-02）。適合快速把 GNSS、IMU、Doppler twist 和 LO 鬆耦合地融在一起，但它是通用的 3D 模型，沒有 Autoware EKF 那些車輛專用的功能（時間延遲補償、yaw bias）。</li>
+      <li><a href="https://github.com/borglab/gtsam">GTSAM</a>（BSD）：離線建圖的位姿圖、GNSS 因子、回環都用它，LIO-SAM、GLIM、FAST_LIO_SLAM 都建立在它之上。自己加一個 Doppler 速度因子是很小的工作量<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。</li>
+    </ul>
+
+    <h2>地圖維護</h2>
+    <p>Autoware 把建圖之後的環境變化（積雪、施工）列為 NDT 不穩定的原因。GLIM 提供人工回環、物件移除和多 session 合併；<a href="https://arxiv.org/abs/2404.09765">Hilti 2023</a> 則指出多 session SLAM 的參與者相對少，也就是說，開源的地圖增量更新和多 session 合併還不成熟。實務上要預留重建地圖和人工 QA 的流程，並用 NDT 的匹配分數（Autoware 的 no-ground score）監控地圖的新鮮度。</p>
+
+    <h2>結語</h2>
+    <p>量產堆疊在執行期做的是地圖匹配加濾波：Autoware 用 NDT 給 pose、用陀螺儀加車速給 twist，再用 EKF 融合；Apollo MSF 讓 SINS 當高頻主幹，LiDAR 和 GNSS 做量測更新。GNSS 在這些堆疊裡同時出現在初始化、NDT 正則化和建圖約束三個地方。讀 IMU 規格時，6 軸、100–200 Hz 以上的輸出率、硬體時間戳或和光達同一個時鐘，比陀螺儀的等級更先決定 LIO 能不能用；等級決定的是感知全失效時能撐多久，而只靠加速度計的平移誤差以 t² 成長，所以撐住平移要靠 Doppler 或輪速。</p>
+    <p>退化方向從哪裡來，見<a href="../methods/">選型</a>；Doppler 怎麼量出速度、為什麼補不了陀螺儀，見 <a href="../doppler/">FMCW Doppler</a>。</p>
+    <p>workbench 只算偏差和白雜訊，省略了比例誤差、溫漂，以及姿態誤差讓重力漏進水平加速度這個在真實 INS 裡很重要的項目，所以只用來看量級和成長的形狀。Apollo 的 <code>localization_msf</code> 是原始碼還是二進位檔沒有確認；開源的多 session 地圖更新目前也還不成熟。</p>
+  </section>
+</main>
+
+<script>
+// ---- Dead-reckoning drift from bias and white noise. Units: s, m, m/s, deg/h, deg/sqrt(h), mg. ----
+const G = 9.80665, D2R = Math.PI / 180;
+const GRADES = [
+  { k: 'bmi', name: 'BMI088（消費級）', arw: 0.014 * 60, bg: 30 },
+  { k: 'icm', name: 'ICM-40609-D（消費級）', arw: 0.0045 * 60, bg: 30 },
+  { k: 'eps', name: 'M-G370PDS0（工業級）', arw: 0.03, bg: 0.8 },
+];
+const REF = 0.1;     // ~10 cm expected error of 3D LiDAR + point-cloud map matching (Autoware docs)
+const TMAX = 120;
+
+function drift(S, t) {
+  const bg = S.bg / 3600 * D2R;                 // rad/s
+  const arw = S.arw / 60 * D2R;                  // rad/sqrt(s)
+  const ba = S.ba * 1e-3 * G;                    // m/s^2
+  const headB = bg * t, headN = arw * Math.sqrt(t);
+  const latB = 0.5 * S.v * bg * t * t, latN = S.v * arw * Math.pow(t, 1.5) / Math.sqrt(3);
+  const along = S.mode === 'imu' ? 0.5 * ba * t * t : null;
+  return { vel: ba * t, headB, headN, latB, latN, lat: latB + latN, along };
+}
+// First time (s) a quantity crosses REF, scanning up to an hour; null if it never does.
+function cross(S, key) {
+  for (let t = 0.1; t <= 3600; t += 0.1) { const v = drift(S, t)[key]; if (v !== null && v > REF) return t; }
+  return null;
+}
+
+// ---- DOM ----
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const fx = (v, n = 2) => (Math.round(v * 10 ** n) / 10 ** n).toFixed(n);
+const len = m => m >= 1000 ? `${fx(m / 1000, 1)} km` : m >= 1 ? `${fx(m, 2)} m` : `${fx(m * 100, 1)} cm`;
+const secs = t => t === null ? '一小時內不會' : t >= 60 ? `${fx(t / 60, 1)} 分` : `${fx(t, 1)} 秒`;
+const state = { g: 'bmi', arw: GRADES[0].arw, bg: 30, ba: 1, v: 20, t: 10, mode: 'imu' };
+
+function drawPlot() {
+  const svg = $('#plot'); svg.replaceChildren();
+  const L = 44, Rt = 312, T = 10, B = 190, lo = -2, hi = 3;
+  const X = t => L + t / TMAX * (Rt - L), Y = m => B - (Math.log10(Math.max(m, 10 ** lo)) - lo) / (hi - lo) * (B - T);
+  el('rect', { class: 'now', x: X(state.t) - 2, y: T, width: 4, height: B - T }, svg);
+  for (let e = lo; e <= hi; e++) {
+    el('line', { class: 'grid', x1: L, y1: Y(10 ** e), x2: Rt, y2: Y(10 ** e) }, svg);
+    el('text', { x: L - 4, y: Y(10 ** e) + 3.5, 'text-anchor': 'end' }, svg).textContent = len(10 ** e).replace('.0 ', ' ').replace('.00 ', ' ');
+  }
+  for (let t = 0; t <= TMAX; t += 30) el('text', { x: X(t), y: B + 13, 'text-anchor': 'middle' }, svg).textContent = `${t} s`;
+  el('line', { class: 'ref', x1: L, y1: Y(REF), x2: Rt, y2: Y(REF) }, svg);
+  el('text', { class: 'ref-lab', x: Rt, y: Y(REF) - 4, 'text-anchor': 'end' }, svg).textContent = '地圖匹配約 10 cm';
+  const path = key => {
+    let d = '';
+    for (let t = 0.5; t <= TMAX; t += 0.5) { const v = drift(state, t)[key]; if (v === null) return ''; d += (d ? 'L' : 'M') + fx(X(t), 1) + ' ' + fx(Y(v), 1); }
+    return d;
+  };
+  el('path', { class: 'lat', d: path('lat') }, svg);
+  if (state.mode === 'imu') el('path', { class: 'alg', d: path('along') }, svg);
+  const now = drift(state, state.t);
+  const dots = [['lat', '側向']];
+  if (state.mode === 'imu') dots.push(['along', '沿行進方向']);
+  dots.forEach(([key, name]) => {
+    const v = now[key];
+    el('circle', { class: 'dot ' + (v > REF ? 'bad' : 'ok'), cx: X(state.t), cy: Y(v), r: 3.6 }, svg);
+  });
+  el('text', { class: 'lab', x: L + 4, y: T + 10 }, svg).textContent = state.mode === 'imu' ? '實線：側向　虛線：沿行進方向' : '實線：側向（沿行進方向看速度量測）';
+}
+
+function render() {
+  const S = state, d = drift(S, S.t), grade = GRADES.find(g => g.k === S.g);
+  const gr = $('#grades');
+  gr.replaceChildren(gr.firstElementChild, ...GRADES.map(g => {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = g.name;
+    b.classList.toggle('chosen', g.k === S.g);
+    b.addEventListener('click', () => { Object.assign(state, { g: g.k, arw: g.arw, bg: g.bg }); render(); });
+    return b;
+  }));
+  const md = $('#modes');
+  md.replaceChildren(md.firstElementChild, ...[['imu', '只有 IMU'], ['vel', 'IMU 加速度量測（Doppler 或輪速）']].map(([k, label]) => {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+    b.classList.toggle('chosen', k === S.mode);
+    b.addEventListener('click', () => { state.mode = k; render(); });
+    return b;
+  }));
+  $('#in-t').value = S.t; $('#v-t').textContent = `${S.t} s`;
+  $('#in-v').value = S.v; $('#v-v').textContent = `${S.v} m/s（${Math.round(S.v * 3.6)} km/h）`;
+  $('#in-bg').value = S.bg; $('#v-bg').textContent = `${fx(S.bg, 1)} °/h`;
+  $('#in-ba').value = S.ba; $('#v-ba').textContent = `${fx(S.ba, 1)} mg`;
+  $('#steps-sub').textContent = `ARW ${fx(S.arw, 2)} °/√h`;
+
+  const steps = [
+    ['加速度計偏差 → ½·bₐ·t²', S.mode === 'imu' ? `${fx(S.ba, 1)} mg：速度誤差 ${fx(d.vel, 2)} m/s，位置誤差 ${len(d.along)}` : '有速度量測，這一條不累積', S.mode === 'imu' ? (d.along > REF ? 'bad' : 'hit') : 'off'],
+    ['陀螺儀偏差 → 航向 b_g·t', `${fx(S.bg, 1)} °/h × ${S.t} s = ${fx(d.headB / D2R, 3)}°`, ''],
+    ['陀螺儀白雜訊 → 航向 1σ ARW·√t', `${fx(S.arw, 2)} °/√h × √${S.t} s = ${fx(d.headN / D2R, 3)}°`, ''],
+    ['航向誤差 × 車速 → 側向', `偏差項 ${len(d.latB)} ＋ 雜訊項 ${len(d.latN)} ＝ ${len(d.lat)}`, d.lat > REF ? 'bad' : 'hit'],
+    ['有速度量測時只剩 2 到 4', S.mode === 'imu' ? `只有 IMU：沿行進方向 ${len(d.along)}，側向 ${len(d.lat)}` : `側向 ${len(d.lat)}；沿行進方向看速度量測的偏差`, ''],
+  ];
+  $('#steps').replaceChildren(...steps.map(([q, a, cls]) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="q">${q}</span><span class="a ${cls}">${a}</span>`;
+    return li;
+  }));
+  const tLat = cross(S, 'lat'), tAl = S.mode === 'imu' ? cross(S, 'along') : null;
+  const vars = [['側向超過 10 cm', secs(tLat)]];
+  if (S.mode === 'imu') vars.push(['沿行進方向超過 10 cm', secs(tAl)]);
+  $('#vars').innerHTML = vars.map(([k, v]) => `<span class="var"><span class="k">${k}</span><span class="v">${v}</span></span>`).join('');
+  drawPlot();
+
+  let say;
+  if (S.mode === 'imu') {
+    say = `只靠 IMU 積分 ${S.t} 秒：加速度計偏差讓沿行進方向漂了 ${len(d.along)}` + (tAl === null ? '' : `，${secs(tAl)}就超過地圖匹配的 10 cm`) + `；側向是 ${len(d.lat)}。沿行進方向是 t² 的成長，偏差小一半，撐的時間也只多四成左右。`;
+    if (d.along > d.lat) say += '<span class="note">換成「IMU 加速度量測」，看拿掉第 1 條之後剩下多少。</span>';
+  } else {
+    say = `有速度量測時，平移速度不再靠加速度計積分，剩下的是航向漂移：${grade.name}在 ${S.v} m/s、${S.t} 秒後側向偏 ${len(d.lat)}（偏差項 ${len(d.latB)}，雜訊項 ${len(d.latN)}），` + (tLat === null ? '一小時內都不會超過 10 cm。' : `${secs(tLat)}超過 10 cm。`);
+    if (S.v > 0) say += d.latB > d.latN ? '偏差項比雜訊項大，偏差估得準不準決定了能撐多久。' : '雜訊項比偏差項大，這時 ARW 比偏差更重要。';
+    say += '<span class="note">真實的隧道裡，牆面仍然約束側向和 yaw，地圖匹配會修正的正是這個側向誤差；只有完全沒有外部修正時，它才會照這條曲線一直長。</span>';
+  }
+  if (S.v === 0) say += '<span class="note">車速是 0 時航向誤差不會變成位置誤差。</span>';
+  $('#say').innerHTML = say;
+}
+
+$('#in-t').addEventListener('input', e => { state.t = +e.target.value; render(); });
+$('#in-v').addEventListener('input', e => { state.v = +e.target.value; render(); });
+$('#in-bg').addEventListener('input', e => { state.bg = +e.target.value; render(); });
+$('#in-ba').addEventListener('input', e => { state.ba = +e.target.value; render(); });
+render();
+</script>
+</body>
+</html>

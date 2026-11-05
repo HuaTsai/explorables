@@ -88,12 +88,23 @@ section { display: flex; flex-direction: column; gap: 0.75rem; }
 .mini-wire i.r { background: var(--right); opacity: 0.75; }
 .mini-wire i.l { background: var(--left); opacity: 0.75; }
 .mini-wire i.p { background: transparent; border: 1px dashed var(--muted); }
+.mini-arch { width: 100%; height: 3.4rem; }
+.mini-arch rect { fill: var(--bg); stroke: var(--line); }
+.mini-arch rect.r { fill: var(--right); fill-opacity: 0.25; stroke: var(--right); }
+.mini-arch rect.l { stroke: var(--left); }
+.mini-arch path { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+.mini-arch path.d { stroke: var(--left); stroke-width: 1.5; }
 .mini-fuse { width: 100%; height: 3.4rem; }
 .mini-fuse rect { fill: var(--bg); stroke: var(--line); }
 .mini-fuse rect.l { stroke: var(--left); }
 .mini-fuse rect.r { stroke: var(--right); }
 .mini-fuse path { fill: none; stroke: var(--right); stroke-width: 1.5; }
 .mini-fuse path.d { stroke: var(--left); }
+.mini-slam { width: 100%; height: 3.4rem; }
+.mini-slam .wall { fill: none; stroke: var(--muted); stroke-width: 2; }
+.mini-slam circle { fill: var(--ink); }
+.mini-slam .ray { fill: none; stroke: var(--right); stroke-width: 1; }
+.mini-slam .deg { fill: none; stroke: var(--left); stroke-width: 1.6; }
 .mini-dds { width: 100%; height: 3.4rem; }
 .mini-dds rect { fill: var(--bg); stroke: var(--line); }
 .mini-dds rect.w { stroke: var(--right); }
@@ -308,6 +319,24 @@ section { display: flex; flex-direction: column; gap: 0.75rem; }
     <h2>自駕車與機器人</h2>
     <ul class="entries">
       <li>
+        <a class="entry" href="av-architecture/">
+          <div class="glyph" aria-hidden="true">
+            <svg class="mini-arch" viewBox="0 0 120 54">
+              <rect x="4" y="6" width="18" height="16" rx="2"/>
+              <rect class="r" x="30" y="6" width="62" height="16" rx="2"/>
+              <rect x="100" y="6" width="16" height="16" rx="2"/>
+              <rect class="l" x="30" y="34" width="62" height="14" rx="2"/>
+              <path d="M22 14 H30 M92 14 H100 M61 22 V34"/>
+              <path class="d" d="M92 41 H108 V22"/>
+            </svg>
+          </div>
+          <div class="text">
+            <h3>量產自駕的架構走向 <span class="badge outline">系列</span> <span class="badge outline">調研</span></h3>
+            <p>端到端、模組化，還是混合：誰在車上跑哪一種架構、open-loop 分數為什麼證明不了會開車、為什麼大家都外掛一個獨立的安全層。</p>
+          </div>
+        </a>
+      </li>
+      <li>
         <a class="entry" href="lidar-camera-fusion/">
           <div class="glyph" aria-hidden="true">
             <svg class="mini-fuse" viewBox="0 0 120 54">
@@ -320,6 +349,22 @@ section { display: flex; flex-direction: column; gap: 0.75rem; }
           <div class="text">
             <h3>LiDAR 與相機融合 3D 偵測 <span class="badge outline">系列</span> <span class="badge outline">調研</span></h3>
             <p>相機資訊可以從 LiDAR 管線的哪一段接進來、外參不準或某個感測器壞掉時會怎樣、換一台車或搬上 Orin 時會遇到什麼。整理公開論文和評測的證據。</p>
+          </div>
+        </a>
+      </li>
+      <li>
+        <a class="entry" href="vehicle-slam/">
+          <div class="glyph" aria-hidden="true">
+            <svg class="mini-slam" viewBox="0 0 120 54">
+              <path class="wall" d="M4 12 H116 M4 42 H116"/>
+              <circle cx="22" cy="27" r="3"/>
+              <path class="ray" d="M22 27 L52 12 M22 27 L70 12 M22 27 L52 42 M22 27 L70 42"/>
+              <path class="deg" d="M80 27 H112 M80 27 l5 -3 M80 27 l5 3 M112 27 l-5 -3 M112 27 l-5 3"/>
+            </svg>
+          </div>
+          <div class="text">
+            <h3>車輛定位與 SLAM <span class="badge outline">系列</span> <span class="badge outline">調研</span></h3>
+            <p>車上跑的其實是地圖定位加濾波器，不是 SLAM。長隧道裡哪個方向量不到、FMCW 光達的 Doppler 怎麼直接量出自車速度、IMU 的規格怎麼換算成漂移。</p>
           </div>
         </a>
       </li>

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>車輛定位與 SLAM</title>
+<meta name="description" content="調研系列：車上執行期需要的定位不是即時 SLAM，而是地圖定位加里程計。方法怎麼選、點雲匹配為什麼在隧道裡失效、FMCW 光達的 Doppler 能補什麼、量產堆疊和 IMU 怎麼搭。資料截至 2026 年 11 月。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
+<style>
+/* 這一頁特有的：證據等級表和系列目錄。 */
+table.cmp { min-width: 28rem; }
+.entries { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); counter-reset: n; }
+.entries li { border-bottom: 1px solid var(--line); counter-increment: n; }
+.entry { display: flex; align-items: baseline; gap: 1rem; padding: 1.1rem 0; color: inherit; text-decoration: none; }
+.entry::before { content: counter(n, decimal-leading-zero); font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); flex: 0 0 2rem; }
+.entry:focus-visible { outline-offset: 4px; }
+.entry h2 { font-size: 1.1rem; line-height: 1.35; margin: 0; }
+.entry h2 .badge { margin-left: 0.3rem; vertical-align: 0.15em; }
+a.entry:hover h2 { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.entry p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.95rem; }
+.entry .text { flex: 1 1 16rem; min-width: 0; }
+</style>
+</head>
+<body>
+<main class="page index">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1>車輛定位與 <span class="mono">SLAM</span></h1>
+    <p class="lead">「車上該跑哪個 SLAM」通常問錯了問題。量產的定位堆疊在執行期做的是「在預建地圖上定位」加「高頻里程計」，完整的 SLAM 主要用在離線建圖。這個系列找的是「無聊但可部署」的方案，照三個問題整理公開的證據：方法怎麼選、FMCW 光達的 Doppler 速度能補什麼、量產堆疊和 IMU 怎麼搭。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、官方文件和程式庫後撰寫。</p>
+      <p>退化的幾何、Doppler 量測的可觀性、IMU 誤差怎麼累積這些機制不會過期；方法排名、論文數字、授權和 repo 的維護狀態會改變，引用前請對照原始資料。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>數字從哪裡來</h2>
+    <p>作者自己報告的數字和別人重跑的數字，可信度不一樣。系列裡的數字後面標了來源類型：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>標記</th><th>意思</th></tr></thead>
+      <tbody>
+        <tr><td class="name">【論文自報】</td><td>作者在自己的論文裡報告的數字。這個系列裡 Doppler 輔助里程計的量化證據全部屬於這一類</td></tr>
+        <tr><td class="name">【第三方評測】</td><td>其他團隊拿公開的 checkpoint 或程式重新跑的評測，例如 Autoware 自己跑的開源 SLAM 比較</td></tr>
+        <tr><td class="name">【工程判斷】</td><td>撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>KITTI odometry 官方排行和 Hilti 挑戰賽是隱藏測試集、由主辦方評分，但結果由各團隊自己提交，不屬於上面任何一類，正文裡直接寫明。GitHub repo 的授權和最後 commit 日期是 2026 年 11 月 5 日用 GitHub API 查的；論文數字取自原始論文或官方頁面，出處都在行內連結。</p>
+  </section>
+
+  <ul class="entries">
+    <li>
+      <a class="entry" href="methods/">
+        <div class="text">
+          <h2>選型：車上跑的其實不是 SLAM <span class="badge outline">調研</span></h2>
+          <p>車上要解的是四個不同的問題，SLAM 只負責離線建圖。點雲匹配最常見的失效是退化：長隧道裡沿行進方向沒有任何約束。換一個場景，看資訊矩陣哪個特徵值掉到零；再比較 LiDAR、視覺和 LiDAR-視覺-慣性方法。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="doppler/">
+        <div class="text">
+          <h2>FMCW Doppler：直接量出自車速度 <span class="badge outline">調研</span></h2>
+          <p>每個靜止點的徑向速度都是一條關於自車速度的方程式，用 RANSAC 剔除移動物體後解最小二乘。一步一步看 RANSAC 怎麼挑出靜止點、前車擋住大半視野時怎麼選錯，以及為什麼 Doppler 量不到角速度。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="stack/">
+        <div class="text">
+          <h2>量產堆疊與 IMU：地圖定位加濾波器 <span class="badge outline">調研</span></h2>
+          <p>Autoware 用 NDT 加 EKF，Apollo 用 SINS 當主幹。怎麼讀 IMU 規格表，以及感知全部失效時，加速度計和陀螺儀的偏差在幾秒、幾分鐘內會漂多遠。</p>
+        </div>
+      </a>
+    </li>
+  </ul>
+</main>
+</body>
+</html>

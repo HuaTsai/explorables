@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>選型：車上跑的其實不是 SLAM</title>
+<meta name="description" content="車上要解的定位問題有四個，量產堆疊在執行期跑的是地圖定位加里程計，SLAM 用在離線建圖。換一個玩具場景，看點雲匹配的資訊矩陣哪個特徵值掉到零、為什麼長隧道裡沿行進方向沒有約束；再比較 LiDAR、視覺和 LiDAR-視覺-慣性方法和基準證據。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Exploratory workbench: scene presets, scene / FOV / measurement switches and a
+   range slider, then a top-down view of the toy scene (hit points, the weakest direction at the sensor) next
+   to the five degeneracy steps filled in for the current scene. */
+.sliders { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.6rem 1.25rem; max-width: 24rem; }
+.sliders label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; }
+.sliders .v { font-family: var(--font-mono); font-weight: 600; }
+.sliders input { width: 100%; }
+.work.dg { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
+.view { overflow-x: auto; }
+.view svg { width: 100%; min-width: 420px; height: auto; display: block; }
+.view text { font-family: var(--font-body); font-size: 11px; fill: var(--muted); }
+.view .wall { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+.view .fov { fill: var(--line); opacity: 0.35; }
+.view .rng { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 4 4; }
+.view .pt { fill: var(--muted); }
+.view .pt.key { fill: var(--hit); }
+.view .car { fill: var(--ink); }
+.view .weak { stroke: var(--ink); stroke-width: 2.2; }
+.view .weak.bad { stroke: var(--miss); }
+.view .weak-lab { font-size: 12px; font-weight: 700; fill: var(--ink); }
+.view .weak-lab.bad { fill: var(--miss); }
+.steps { list-style: none; margin: 0; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.55rem; counter-reset: s; }
+.steps li { counter-increment: s; font-size: 0.84rem; }
+.steps .q { display: block; font-size: 0.76rem; color: var(--muted); font-weight: 700; }
+.steps .q::before { content: counter(s) ". "; font-family: var(--font-mono); }
+.steps .a { font-family: var(--font-mono); font-size: 0.78rem; white-space: pre-wrap; }
+.steps .a.hit { color: var(--hit); font-weight: 700; }
+.steps .a.bad { color: var(--miss); font-weight: 700; }
+table.cmp.wide { min-width: 60rem; font-size: 0.84rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 車輛定位與 SLAM</a>
+    <h1>選型：車上跑的其實不是 SLAM</h1>
+    <p class="lead">「該用哪個 SLAM」通常問錯了問題。車上執行期真正需要的，是高頻的自車運動估測，以及在預建地圖上的全域定位；完整的 SLAM 主要用在離線建圖。這一頁先把問題拆開，再看點雲匹配最常見的失效方式：幾何不夠時，某個方向完全沒有約束。最後整理各類方法和基準證據。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、官方文件和程式庫後撰寫。</p>
+      <p>退化的幾何（資訊矩陣、特徵值、哪個方向沒有約束）不會過期；方法的授權、維護狀態和 benchmark 排名會改變，維護狀態是查詢當天的快照。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>車上要解的四個問題</h2>
+    <p>「SLAM」常被當成一個問題，但車上實際要解的是四個，需求很不一樣：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>子問題</th><th>做什麼</th><th>執行期需要？</th><th>典型方案</th></tr></thead>
+      <tbody>
+        <tr><td class="name">（a）線上里程計</td><td>高頻、平滑、局部一致的 pose 和 twist，控制和感知的自車運動補償都要用</td><td>要</td><td>LIO（FAST-LIO2、Point-LIO）、LO（KISS-ICP）、IMU 加車速（Autoware gyro_odometer）、Doppler 速度</td></tr>
+        <tr><td class="name">（b）離線建圖</td><td>全域一致、重力對齊、最好也有地理參考的點雲地圖</td><td>不用（離線批次）</td><td>LIO 加位姿圖（GTSAM）、回環、GNSS 因子；GLIM；人工修正</td></tr>
+        <tr><td class="name">（c）預建地圖定位</td><td>在既有地圖上估全域 pose，誤差約 10 cm</td><td>要（量產主力）</td><td>Autoware ndt_scan_matcher 加 ekf_localizer、Apollo MSF、hdl_localization</td></tr>
+        <tr><td class="name">（d）回環、地點辨識</td><td>建圖時偵測回到同一處；執行期做全域重定位</td><td>建圖時要，執行期只在迷路時要</td><td>Scan Context（非商用授權）、半徑搜尋回環、GNSS 先驗</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p><a href="https://github.com/autowarefoundation/autoware-documentation/blob/main/docs/design/autoware-architecture-v1/components/localization/index.md">Autoware 的定位設計文件</a>寫得很明白：<span class="term" data-def="把外部感測（LiDAR、相機、GNSS）的觀測和地圖匹配，輸出全域 pose 的模組。">pose estimator</span> 負責把外部感測的觀測和地圖匹配，<span class="term" data-def="從內部感測器（IMU、車速）產生速度和角速度的模組。">twist estimator</span> 從內部感測器產生速度，最後由 EKF 融合，輸出 map → base_link 的 TF，頻率至少 50 Hz。執行期不跑 SLAM。文件裡 3D LiDAR 加點雲地圖的預期誤差約 10 cm，晚上也能用；容易不穩定的是無結構環境（鄉間、高速公路、隧道）、地圖過時（積雪、施工）、遮蔽，以及玻璃或黑色物體。</p>
+    <p>所以 SLAM 選型的主戰場是兩件事：（b）離線建圖的品質，以及（a）在地圖外或地圖失效時的里程計。兩者都會撞上同一個問題：環境的幾何不夠時，點雲匹配在某個方向上量不到東西。</p>
+
+    <h2>退化：幾何不夠時，哪個方向量不到</h2>
+    <p>點雲匹配（ICP、NDT 都是）把這一幀的點對齊到地圖或上一幀。以點到平面的 ICP 為例，每個點 p 對應到地圖上一個法向量為 n 的平面，殘差是點到平面的距離。把 pose 微調一點，殘差變多少，就是這個點對那個方向的約束。一個點只約束沿著它法向量的平移：牆上的點說得出離牆多遠，卻說不出沿著牆走了多遠。</p>
+    <p>把所有點的約束疊起來，就是<span class="term" data-def="最小二乘問題的 Hessian 近似 JᵀJ。它在某個方向上的大小，代表資料在那個方向上提供了多少資訊；反矩陣乘上雜訊變異數就是估計的共變異數。">資訊矩陣</span> H。<a href="https://doi.org/10.1109/ICRA.2016.7487211">Zhang、Kaess、Singh（ICRA 2016）</a>用 H 的最小特徵值定義退化：特徵值小的方向，資料幾乎沒有提供資訊，最佳化在這個方向上的解只是雜訊或初值。<a href="https://arxiv.org/abs/2211.16335">X-ICP</a> 再往前一步，逐方向分析可定位性，只約束可靠的方向。兩者是「偵測到退化 → 降權，或改用 Doppler、輪速」這類實作的理論基礎。</p>
+    <p>在平面上（x 前進、y 側向、yaw）走一遍偵測退化的步驟：</p>
+    <ol>
+      <li>每條射線打到一個表面，得到點 p 和表面的法向量 n。</li>
+      <li>每個點寫成一列 J = [n<sub>x</sub>, n<sub>y</sub>, p<sub>x</sub>n<sub>y</sub> − p<sub>y</sub>n<sub>x</sub>]：前兩項是平移 x、y 對殘差的影響，第三項是 yaw，等於點到感測器的力臂乘上法向量。</li>
+      <li>疊成資訊矩陣 H = Σ JᵀJ，一個 3 × 3 的對稱矩陣。</li>
+      <li>對 H 做特徵分解，最小特徵值的特徵向量就是最弱的方向。</li>
+      <li>最小特徵值低於門檻就判為退化：這個方向不採用匹配結果，改用其他感測器或先驗。</li>
+    </ol>
+    <p>長隧道是最典型的例子：兩面牆都平行於行進方向，所有法向量都是 ±y，每一列 J 的第一項都是 0，H 在 x 方向的特徵值就是 0。yaw 卻約束得住，因為牆上的點離感測器有遠有近，力臂各不相同。</p>
+  </section>
+
+  <section class="bench" aria-label="點雲匹配的退化">
+    <div class="row presets" id="presets"><span class="lbl">情境</span></div>
+    <div class="row">
+      <div class="modes" id="scenes"><span class="lbl">場景</span></div>
+      <div class="modes" id="fovs"><span class="lbl">視野</span></div>
+      <div class="modes" id="meas"><span class="lbl">量測</span></div>
+      <div class="sliders">
+        <label>量程 <span class="v" id="v-r"></span><input type="range" id="in-r" min="10" max="120" step="1" aria-label="量程"></label>
+      </div>
+      <p class="hint">玩具場景：2D 俯視，感測器在原點朝右（+x），角解析度 0.5°，表面是理想平面，每點雜訊 2 cm；門檻 λ／N &lt; 0.01，Doppler 列和幾何列等權重。yaw 那一欄的單位是力臂的公尺數，它的特徵值不能和平移的直接比大小。這些都是示意值，只用來看哪個方向有沒有資訊。綠色的點是撐住最弱方向的點；箭頭是最弱的方向，紫色表示它已經退化。</p>
+    </div>
+    <div class="row work dg">
+      <div class="panel">
+        <div class="panel-head"><span>俯視圖</span><span class="sub" id="view-sub"></span></div>
+        <div class="panel-body view"><svg id="view" viewBox="0 0 680 300" role="img" aria-label="玩具場景的俯視圖，標出打到的點和最弱的方向"></svg></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>五個步驟</span></div>
+        <ol class="steps" id="steps"></ol>
+        <div class="vars" id="vars"></div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>退化的方向會怎樣漂</h2>
+    <p>退化方向上沒有量測，最佳化的解就落回初值：等速模型的預測、上一幀的速度，或者乾脆不動。每一幀都少算一點，累積起來就是低估的軌跡長度。<a href="https://arxiv.org/abs/2209.03304">Picking Up Speed</a> 的 Fig. 7 觀察到的正是這件事：沒有 Doppler 的方法在隧道裡低估軌跡長度。數字和 Doppler 怎麼補上這個方向，在 <a href="../doppler/">Doppler 那一頁</a>。</p>
+    <p>上面的 workbench 也看得出另外兩件事。第一，360° 的光達在隧道裡一樣退化，因為牆還是平行的；它在一般街道上比較穩，是因為多看到後方和側面的結構。第二，量程縮短時，原本在遠處提供縱向約束的少數結構（路牌、橋墩）會先消失；雨霧、近距離被前車擋住，效果都等於量程變短。</p>
+
+    <h2>LiDAR 為主的方法</h2>
+    <p>「最後 commit」指預設分支的最後一筆 commit，2026 年 11 月 5 日查詢。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp wide">
+      <thead><tr><th>方法</th><th>需要的感測器</th><th>有限 FOV（Livox、前向固態）</th><th>退化場景韌性</th><th>運算量</th><th>授權</th><th>維護狀態</th></tr></thead>
+      <tbody>
+        <tr><td class="name">LOAM（原版）</td><td>光達，IMU 可選</td><td>原版針對機械式</td><td>中</td><td>中</td><td>原碼已不公開</td><td>KITTI 排行第 3（0.55%），但那是原作者提交的結果，常用的開源複刻不是同一份實作</td></tr>
+        <tr><td class="name">LeGO-LOAM</td><td>機械式光達（要 ring）加地面</td><td>不適合：依賴 range image 和地面分割</td><td>低</td><td>很低</td><td>BSD-3</td><td>2020-07，停止維護</td></tr>
+        <tr><td class="name"><a href="https://github.com/TixiaoShan/LIO-SAM">LIO-SAM</a></td><td>機械式光達、9 軸 IMU（建議 ≥200 Hz），GPS 可選</td><td>README 寫目前只支援機械式；Livox Horizon 只有最小改動支援，「其他方案可能更好」</td><td>中（因子圖、GPS、回環）</td><td>中</td><td>BSD-3</td><td>master 2023-04，ros2 分支 2025-02，維護緩慢</td></tr>
+        <tr><td class="name"><a href="https://github.com/hku-mars/FAST_LIO">FAST-LIO2</a></td><td>光達加 6 或 9 軸 IMU，內建或外接皆可</td><td>原生支援：點直接對地圖、不抽特徵，原本就是為 Livox Avia 設計</td><td>中到高（IEKF 加 IMU 撐過短暫退化）</td><td>很低：每幀 1.82 ms（Intel）、5.23 ms（ARM），論文條件是每幀 756 點</td><td>GPL-2.0</td><td>main 2024-07；ROS 2 分支 2026-10-25 仍活躍</td></tr>
+        <tr><td class="name"><a href="https://github.com/gaoxiang12/faster-lio">Faster-LIO</a></td><td>同 FAST-LIO2</td><td>是</td><td>同上</td><td>更低（iVox）</td><td>GPL-2.0</td><td>2026-09</td></tr>
+        <tr><td class="name"><a href="https://github.com/hku-mars/Point-LIO">Point-LIO</a></td><td>光達加 IMU，IMU 可關</td><td>是（以 Livox 為主）</td><td>高頻寬，IMU 飽和（75 rad/s）時仍能運作</td><td>低，輸出 4–8 kHz</td><td>LOAM／Livox 衍生的 BSD 式條款，GitHub 判為 NOASSERTION</td><td>2026-06</td></tr>
+        <tr><td class="name"><a href="https://github.com/PRBonn/kiss-icp">KISS-ICP</a></td><td>只要光達</td><td>論文含手持 Livox 序列</td><td>低：純幾何、等速模型，無法對抗沿軸退化</td><td>很低（KITTI-raw 38–51 Hz）</td><td>MIT</td><td>2026-05</td></tr>
+        <tr><td class="name"><a href="https://github.com/PRBonn/kinematic-icp">Kinematic-ICP</a></td><td>光達加輪速計（要有 odom → base_link TF）</td><td>沒有特別針對</td><td>中（運動學約束）</td><td>低</td><td>MIT</td><td>2025-07</td></tr>
+        <tr><td class="name"><a href="https://github.com/PRBonn/kiss-slam">KISS-SLAM</a></td><td>只要光達</td><td>—</td><td>同 KISS-ICP，加回環</td><td>低</td><td>MIT</td><td>2025-12</td></tr>
+        <tr><td class="name"><a href="https://github.com/koide3/glim">GLIM</a></td><td>光達加 IMU（也有 LiDAR-only 的連續時間里程計模式），相機可選</td><td>支援 Avia、MID360</td><td>高（fixed-lag smoothing，可撐過數秒完全退化）</td><td>GPU 版較重，另有 CPU 版</td><td>MIT</td><td>2026-10，活躍；附人工修正和多 session 合併工具</td></tr>
+        <tr><td class="name"><a href="https://github.com/vectr-ucla/direct_lidar_inertial_odometry">DLIO</a></td><td>光達加 IMU</td><td>—</td><td>中</td><td>低</td><td>MIT</td><td>2024-11</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <ul>
+      <li><strong>FAST-LIO2 是有限 FOV 光達加 IMU 的事實標準。</strong>它把原始點直接配準到 ikd-Tree 地圖、不抽特徵，<a href="https://arxiv.org/abs/2107.06829">論文</a>說這「自然適用於」Avia 的非重複掃描；650 m 手持繞回原點，終點漂移 0.14 m<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>。README 明確要求 IMU 和光達同步、點雲要有逐點時間戳，軟體時間同步只在外部同步真的不可能時才開。</li>
+      <li><strong>LIO-SAM 對前向固態光達不友善。</strong>它需要 ring 欄位和機械式掃描，Livox 只做了最小支援；它要 9 軸 IMU，用磁力計給 yaw 初值，README 說 Ouster 內建的 6 軸 IMU 不能用。車上的磁力計受車體鐵件和電流干擾，而 FAST-LIO2、Point-LIO、GLIM 都只需要 6 軸，沒有理由為了 LIO-SAM 改用 9 軸 IMU<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。</li>
+      <li><strong>KISS-ICP 是不用 IMU 時最好的基線</strong>，但它是純點對點 ICP 加等速模型，沒有任何機制處理沿軸退化，換資料集後誤差會明顯變大（見下面的基準證據）。</li>
+      <li><strong>Point-LIO 可以關掉 IMU</strong>（<code>imu_en: false</code>，要自己給重力初值），但這不是它的設計重點；README 強調的是 IMU 飽和時仍能運作。它的 LICENSE 是 LOAM／Livox 衍生的 BSD 式條款，和 HKU-MARS 其他 repo 的 GPL 不一致，商用前要請法務確認。</li>
+    </ul>
+
+    <h2>視覺為主：為什麼不當主定位</h2>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>方法</th><th>感測器</th><th>授權</th><th>最後 commit</th><th>備註</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><a href="https://github.com/UZ-SLAMLab/ORB_SLAM3">ORB-SLAM3</a></td><td>單目、雙目、RGB-D，可加 IMU</td><td>GPL-3.0</td><td class="num">2022-02</td><td>停滯；EuRoC 雙目加 IMU 3.6 cm，但那是室內無人機資料集</td></tr>
+        <tr><td class="name">VINS-Mono、VINS-Fusion</td><td>單目加 IMU；雙目可加 IMU，可融 GPS</td><td>GPL-3.0</td><td class="num">2021-07</td><td>停滯</td></tr>
+        <tr><td class="name"><a href="https://github.com/rpng/open_vins">OpenVINS</a></td><td>單目或多目加 IMU（MSCKF）</td><td>GPL-3.0</td><td class="num">2025-11</td><td>研究平台，文件完整</td></tr>
+        <tr><td class="name"><a href="https://github.com/VladyslavUsenko/basalt">Basalt</a></td><td>雙目加 IMU</td><td>BSD-3</td><td class="num">2026-03</td><td>授權友善，但同樣不解決車輛場景的根本問題</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <ul>
+      <li><strong>尺度不可觀。</strong>單目先天沒有尺度。單目加 IMU 在車輛常見的直線等速或固定曲率圓弧運動下，尺度等方向也會變得不可觀，要加輪速計才可觀（<a href="https://doi.org/10.1109/ICRA.2017.7989603">Wu et al., VINS on Wheels, ICRA 2017</a>）。高速公路巡航正好就是這種運動。</li>
+      <li><strong>光照。</strong>Autoware 把日照、對向車頭燈、隧道出口造成的劇烈光照變化，列為相機 VO 和 SLAM 不穩定的情境。</li>
+      <li><strong>基準。</strong><a href="https://www.cvlibs.net/datasets/kitti/eval_odometry.php">KITTI odometry</a> 上排名最好的開源視覺系統 ORB-SLAM2（雙目）是 1.15%，排第 60；LOAM、CT-ICP、KISS-ICP 在 0.55–0.61%。單目沒有公制尺度，連公平比較都很難。</li>
+      <li><strong>維護。</strong>ORB-SLAM3 從 2022-02、VINS-Fusion 從 2021-07 就沒有新 commit，而且都是 GPL-3.0。</li>
+    </ul>
+    <p>相機在車輛定位裡比較適合做感知和地圖上色，不適合當主定位源。</p>
+
+    <h2>LiDAR-視覺-慣性：多加相機值不值得</h2>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>方法</th><th>授權</th><th>最後 commit</th><th>硬體要求</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><a href="https://github.com/TixiaoShan/LVI-SAM">LVI-SAM</a></td><td>BSD-3</td><td class="num">2022-12（停滯）</td><td>承襲 LIO-SAM：機械式光達加 9 軸 IMU</td></tr>
+        <tr><td class="name"><a href="https://github.com/hku-mars/r3live">R3LIVE</a></td><td>GPL-2.0，只限個人和學術免費</td><td class="num">2022-08（停滯）</td><td>Livox 加 IMU 加相機</td></tr>
+        <tr><td class="name"><a href="https://github.com/hku-mars/FAST-LIVO2">FAST-LIVO2</a></td><td>GPL-2.0（商用需另洽）</td><td class="num">2026-03</td><td>作者提供硬體同步的手持裝置設計（STM32 觸發）；LiDAR-相機外參建議用 FAST-Calib</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>LVI-SAM 的賣點是其中一個子系統失效時仍能運作，代價是要硬體同步三種感測器、多維護 LiDAR-相機和相機-IMU 兩組外參，光照的失效模式也跟著進來。FAST-LIVO2 的作者自己做了 STM32 硬體同步的手持裝置，可見這不是隨插即用。</p>
+    <p>相機真正有用的場景是幾何退化但紋理豐富的地方，例如有車道線和招牌的長直路。而在有 FMCW 光達的配置裡，Doppler 用更簡單的方式解決了同類場景的沿軸退化，投資報酬率高於 LIVO<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。所以對車輛定位，加相機通常不值得當第一步：先把 LIO 做穩，再評估要不要 LIVO。LiDAR-相機外參還是要校正，因為感知融合本來就需要，見 <a href="../../lidar-camera-fusion/">LiDAR 與相機融合 3D 偵測</a>。</p>
+
+    <h2>基準證據：看韌性和泛化，不是比排名</h2>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>證據</th><th>結論</th><th>來源類型和限制</th></tr></thead>
+      <tbody>
+        <tr><td class="name">KITTI odometry 官方排行</td><td>LOAM 0.55%、CT-ICP 0.59%、KISS-ICP 0.61%、ORB-SLAM2（雙目）1.15%、學習式 EfficientLO-Net 1.92%</td><td>隱藏測試集由官方評分，結果由各團隊自己提交；只有 64 線 360° 光達、郊區、沒有 IMU，所以 LIO 方法不在榜上</td></tr>
+        <tr><td class="name"><a href="https://arxiv.org/abs/2209.15397">KISS-ICP</a> 跨資料集</td><td>KITTI 訓練集平均 0.50%，MulRan 2.28–4.69%（Sejong 4.69%），Newer College 0.51%／0.96%</td><td><span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>；同一個方法換資料集，誤差差了 5–9 倍</td></tr>
+        <tr><td class="name"><a href="https://github.com/autowarefoundation/autoware-documentation/tree/main/docs/tutorials/integrating-autoware/creating-maps">Autoware 的 SLAM 比較</a></td><td>沒有 IMU、沒有 GNSS 的 LiDAR SLAM（VLP-16），平均位置誤差在公尺級：x 方向 8.9–11.9 m、z 方向 13.9–16.5 m</td><td><span class="term" data-def="其他團隊拿公開的 checkpoint 或程式重新跑的評測。">【第三方評測】</span>，但只有單一資料集，文件註明不能當排名</td></tr>
+        <tr><td class="name">FAST-LIO2</td><td>19 個公開序列上準確度最好或接近最好；650 m 迴圈漂移 0.14 m；ARM 上可即時</td><td><span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>；不同團隊的 Faster-LIO 沿用並加速了它的架構，Autoware 也列為建圖選項，實質上被廣泛採用</td></tr>
+        <tr><td class="name"><a href="https://arxiv.org/abs/2208.09825">Hilti-Oxford 2022</a></td><td>前三名在部分序列達到 ≤2 cm，困難序列明顯變差</td><td>挑戰賽，由主辦方評分；場景是營建工地和手持，不是車輛</td></tr>
+        <tr><td class="name"><a href="https://arxiv.org/abs/2404.09765">Hilti 2023</a></td><td>單 session 越來越準、能跨感測器配置；多 session 很少人能做</td><td>挑戰賽，由主辦方評分</td></tr>
+        <tr><td class="name"><a href="https://arxiv.org/abs/1711.05805">Apollo MSF</a></td><td>GNSS 加 LiDAR 加 IMU，60 km 上 5–10 cm RMS</td><td><span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>，Baidu 自家資料</td></tr>
+        <tr><td class="name">Picking Up Speed、Need-for-Speed</td><td>有 Doppler 時退化場景誤差降一個數量級；只靠 Doppler 加陀螺儀約 1% 漂移</td><td><span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>，細節見 <a href="../doppler/">Doppler 那一頁</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>KISS-ICP 那一列最值得記住：同一個方法，KITTI 上 0.5%，換到 MulRan 變成 2.3–4.7%。「KITTI 0.5%」不能直接套到別的車和別的路線。要驗證候選方法，<a href="https://arxiv.org/abs/2003.05691">Newer College</a>、<a href="https://arxiv.org/abs/2309.14590">HeLiPR</a>（含 FMCW 和非重複掃描光達）、MulRan、<a href="https://arxiv.org/abs/2409.04961">GEODE</a>（64 km 的退化場景）都是可以自己跑的公開資料，比引用排名更有說服力。</p>
+    <p>NeRF、3DGS 這類較新的方法目前不適合當定位。<a href="https://arxiv.org/abs/2402.13255">Tosi et al. 的綜述</a>涵蓋的 NeRF／3DGS SLAM 幾乎都是室內、離線或需要 GPU 的稠密重建；<a href="https://arxiv.org/abs/2412.12392">MASt3R-SLAM</a> 是單目稠密 SLAM，依賴 GPU 上的 3D 重建先驗；學習式 LO 在 KITTI 上仍落後傳統方法（EfficientLO-Net 1.92% 對 LOAM 0.55%）。沒有找到任何一個在車規、長距離、有獨立重現的部署證據，它們目前比較適合拿來做地圖視覺化。</p>
+
+    <h2>結語</h2>
+    <p>車上執行期跑的是地圖定位加里程計，SLAM 主要用在離線建圖，所以選型要看建圖品質和地圖外里程計的韌性，不是 KITTI 排名；同一個方法換一個資料集，誤差可以差好幾倍。點雲匹配的根本弱點是退化：每個點只約束沿法向量的方向，長隧道、看不遠的高速公路在行進方向上沒有資訊。這是資訊不夠，花時間調 KISS-ICP 或純 LO 的參數救不回來，要靠別的感測器補<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。環周配置（360° 機械光達加 IMU 加 GNSS）已經有業界標準做法：離線用 LIO-SAM、GLIM 或 FAST-LIO2 加位姿圖建圖，執行期用 Autoware 的 NDT 加 EKF，或 Apollo MSF 風格的 GNSS／IMU／LiDAR 誤差狀態濾波器。</p>
+    <p>授權要和精度一起看：FAST-LIO2、Faster-LIO、FAST-LIVO2、R3LIVE 是 GPLv2（R3LIVE 只限個人和學術免費），ORB-SLAM3、VINS、OpenVINS 是 GPLv3，Scan Context 是 CC BY-NC-SA 4.0、禁止商用；寬鬆授權的有 KISS-ICP、KISS-SLAM、Kinematic-ICP、GLIM、DLIO、steam_icp、Open3D（MIT）、LIO-SAM（BSD-3）、Autoware（Apache-2.0）、GTSAM（BSD）。補上退化方向的感測器之一是 FMCW 光達的 Doppler，見 <a href="../doppler/">Doppler 那一頁</a>；量產堆疊怎麼把匹配結果和 IMU、車速融在一起，見 <a href="../stack/">量產堆疊與 IMU</a>。</p>
+    <p>這一頁的退化分析只看幾何，沒有考慮雜訊模型、動態物體和地圖本身的誤差。LIO-SAM 在 KITTI 或其他車輛資料上的獨立重現數字沒有逐一核對。「GPL 工具只用在離線建圖、不散佈」能不能避開 copyleft，要看實際的散佈方式，這裡不是法律意見。</p>
+  </section>
+</main>
+
+<script>
+// ---- Toy scene: 2D top-down, sensor at the origin looking along +x. Units: metres, degrees. ----
+const RES = 0.5;            // angular resolution (deg), illustrative
+const SIGMA = 0.02;         // point-to-plane noise (m), illustrative
+const TAU = 0.01;           // degeneracy threshold on lambda / N, illustrative
+const rect = (x0, y0, x1, y1) => [[x0, y0, x1, y0], [x1, y0, x1, y1], [x1, y1, x0, y1], [x0, y1, x0, y0]];
+const SCENES = {
+  city: { name: '都市街道', segs: [...rect(-60, 9, 22, 30), ...rect(32, 9, 70, 30), ...rect(78, 9, 140, 30), ...rect(-60, -30, 15, -9), ...rect(25, -30, 60, -9), ...rect(68, -30, 140, -9)] },
+  tee: { name: 'T 字路口', segs: [...rect(-60, 8, 30, 40), ...rect(-60, -40, 30, -8), ...rect(45, -40, 60, 40)] },
+  tunnel: { name: '長隧道', segs: [[-400, 5, 400, 5], [-400, -5, 400, -5]] },
+  highway: { name: '高速公路', segs: [[-400, 7, 400, 7], [-400, -5, 400, -5], [50, 4.5, 50, 6.5], [100, -4.5, 100, -2.5]] },
+};
+const PRESETS = [
+  { name: '都市街道', scene: 'city', fov: 120, range: 100, doppler: false },
+  { name: 'T 字路口', scene: 'tee', fov: 120, range: 100, doppler: false },
+  { name: '長隧道', scene: 'tunnel', fov: 120, range: 100, doppler: false },
+  { name: '長隧道、360°', scene: 'tunnel', fov: 360, range: 100, doppler: false },
+  { name: '高速公路', scene: 'highway', fov: 120, range: 100, doppler: false },
+  { name: '高速公路、量程 40 m', scene: 'highway', fov: 120, range: 40, doppler: false },
+  { name: '長隧道加 Doppler', scene: 'tunnel', fov: 120, range: 100, doppler: true },
+];
+
+// Nearest hit of a ray from the origin at angle ang (rad) within range R; normal faces the sensor.
+function cast(segs, ang, R) {
+  const dx = Math.cos(ang), dy = Math.sin(ang);
+  let best = null;
+  for (const [x1, y1, x2, y2] of segs) {
+    const ex = x2 - x1, ey = y2 - y1, den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-12) continue;
+    const t = (x1 * ey - y1 * ex) / den, s = (x1 * dy - y1 * dx) / den;
+    if (t > 1e-6 && t <= R && s >= 0 && s <= 1 && (!best || t < best.t)) {
+      let nx = -ey, ny = ex;
+      const L = Math.hypot(nx, ny); nx /= L; ny /= L;
+      if (nx * dx + ny * dy > 0) { nx = -nx; ny = -ny; }
+      best = { t, x: t * dx, y: t * dy, nx, ny };
+    }
+  }
+  return best;
+}
+
+// Symmetric 3x3 eigen-decomposition (cyclic Jacobi). Returns eigenvalues ascending with unit eigenvectors.
+function eig3(A) {
+  const a = A.map(r => r.slice()), v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  for (let sweep = 0; sweep < 60; sweep++) {
+    if (Math.abs(a[0][1]) + Math.abs(a[0][2]) + Math.abs(a[1][2]) < 1e-12 * (1 + Math.abs(a[0][0]) + Math.abs(a[1][1]) + Math.abs(a[2][2]))) break;
+    for (const [p, q] of [[0, 1], [0, 2], [1, 2]]) {
+      if (a[p][q] === 0) continue;
+      const th = 0.5 * Math.atan2(2 * a[p][q], a[q][q] - a[p][p]), c = Math.cos(th), s = Math.sin(th);
+      for (let k = 0; k < 3; k++) { const x = a[k][p], y = a[k][q]; a[k][p] = c * x - s * y; a[k][q] = s * x + c * y; }
+      for (let k = 0; k < 3; k++) { const x = a[p][k], y = a[q][k]; a[p][k] = c * x - s * y; a[q][k] = s * x + c * y; }
+      for (let k = 0; k < 3; k++) { const x = v[k][p], y = v[k][q]; v[k][p] = c * x - s * y; v[k][q] = s * x + c * y; }
+    }
+  }
+  return [0, 1, 2].map(i => ({ val: Math.max(0, a[i][i]), vec: [v[0][i], v[1][i], v[2][i]] })).sort((p, q) => p.val - q.val);
+}
+
+function analyse(S) {
+  const segs = SCENES[S.scene].segs, pts = [];
+  const n = Math.round(S.fov / RES), closed = S.fov >= 360;
+  for (let k = 0; k < n + (closed ? 0 : 1); k++) {
+    const h = cast(segs, (-S.fov / 2 + k * RES) * Math.PI / 180, S.range);
+    if (h) pts.push(h);
+  }
+  const H = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  const add = J => { for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) H[i][j] += J[i] * J[j]; };
+  pts.forEach(p => { p.J = [p.nx, p.ny, p.x * p.ny - p.y * p.nx]; add(p.J); });
+  if (S.doppler) pts.forEach(p => add([p.x / p.t, p.y / p.t, 0]));
+  const N = pts.length, E = N ? eig3(H) : [];
+  const weak = E[0];
+  // 1-sigma of a single-frame estimate per axis: sigma^2 * H^-1, infinite along (near-)zero eigenvalues.
+  const sd = [0, 1, 2].map(i => {
+    let s2 = 0;
+    for (const e of E) {
+      if (Math.abs(e.vec[i]) < 1e-6) continue;
+      if (e.val < 1e-9 * Math.max(1, N)) return Infinity;
+      s2 += SIGMA * SIGMA * e.vec[i] * e.vec[i] / e.val;
+    }
+    return N ? Math.sqrt(s2) : Infinity;
+  });
+  // A point "holds" the weakest direction when its geometric row (or its Doppler row) has a large component along it.
+  pts.forEach(p => {
+    if (!weak) { p.key = false; return; }
+    const w = weak.vec, g = Math.abs(p.J[0] * w[0] + p.J[1] * w[1] + p.J[2] * w[2]);
+    const d = S.doppler ? Math.abs((p.x * w[0] + p.y * w[1]) / p.t) : 0;
+    p.key = Math.max(g, d) > 0.3;
+  });
+  const kx = pts.filter(p => Math.abs(p.nx) > 0.3).length;
+  return { pts, H, N, E, weak, sd, kx, degenerate: !N || weak.val / N < TAU };
+}
+
+const AXES = ['x（前進）', 'y（側向）', 'yaw'];
+function dirName(vec) {
+  const i = [0, 1, 2].reduce((b, k) => Math.abs(vec[k]) > Math.abs(vec[b]) ? k : b, 0);
+  return Math.abs(vec[i]) > 0.9 ? AXES[i] : `混合方向（x ${fx(vec[0], 2)}、y ${fx(vec[1], 2)}、yaw ${fx(vec[2], 2)}）`;
+}
+function fx(v, n = 1) { return (Math.round(v * 10 ** n) / 10 ** n).toFixed(n); }
+const spaced = s => /^[A-Za-z0-9]/.test(s) ? ' ' + s : s;
+const auto = v => Math.abs(v) >= 100 ? fx(v, 0) : Math.abs(v) >= 1 ? fx(v, 2) : fx(v, 3);
+
+// ---- DOM ----
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const state = { ...PRESETS[0] };
+
+function btnRow(id, items, isOn, pick) {
+  const row = $(id);
+  row.replaceChildren(row.firstElementChild, ...items.map(([label, val]) => {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+    b.classList.toggle('chosen', isOn(val));
+    b.addEventListener('click', () => { pick(val); render(); });
+    return b;
+  }));
+}
+
+function drawView(A) {
+  const svg = $('#view'); svg.replaceChildren();
+  const X0 = -50, X1 = 130, k = 680 / (X1 - X0);
+  const X = x => (x - X0) * k, Y = y => 150 - y * k;
+  // field of view wedge and range circle
+  const a = state.fov / 2 * Math.PI / 180, R = state.range;
+  if (state.fov >= 360) el('circle', { class: 'fov', cx: X(0), cy: Y(0), r: R * k }, svg);
+  else el('path', { class: 'fov', d: `M${X(0)} ${Y(0)}L${X(R * Math.cos(a))} ${Y(R * Math.sin(a))}A${R * k} ${R * k} 0 0 0 ${X(R * Math.cos(a))} ${Y(-R * Math.sin(a))}Z` }, svg);
+  el('circle', { class: 'rng', cx: X(0), cy: Y(0), r: R * k }, svg);
+  SCENES[state.scene].segs.forEach(([x1, y1, x2, y2]) => el('line', { class: 'wall', x1: X(x1), y1: Y(y1), x2: X(x2), y2: Y(y2) }, svg));
+  A.pts.forEach(p => el('circle', { class: 'pt' + (p.key ? ' key' : ''), cx: X(p.x), cy: Y(p.y), r: p.key ? 2.4 : 1.6 }, svg));
+  el('path', { class: 'car', d: `M${X(0) + 9} ${Y(0)}L${X(0) - 6} ${Y(0) - 6}L${X(0) - 6} ${Y(0) + 6}Z` }, svg);
+  if (A.weak) {
+    const [vx, vy] = A.weak.vec, L = Math.hypot(vx, vy);
+    if (L > 0.3) {
+      const ux = vx / L, uy = vy / L, h = 16;
+      const cls = 'weak' + (A.degenerate ? ' bad' : '');
+      el('line', { class: cls, x1: X(-h * ux), y1: Y(-h * uy), x2: X(h * ux), y2: Y(h * uy), 'marker-start': 'url(#m-w)', 'marker-end': 'url(#m-w)' }, svg);
+      el('text', { class: 'weak-lab' + (A.degenerate ? ' bad' : ''), x: X(0) - 40, y: Y(0) + 34 }, svg).textContent = A.degenerate ? '退化的方向' : '最弱的方向';
+    }
+  }
+  const defs = el('defs', {}, svg);
+  const m = el('marker', { id: 'm-w', viewBox: '0 0 10 10', refX: 5, refY: 5, markerWidth: 5, markerHeight: 5, orient: 'auto-start-reverse' }, defs);
+  el('path', { d: 'M0 0L10 5L0 10z', style: `fill: var(${A.degenerate ? '--miss' : '--ink'})` }, m);
+  el('text', { x: 6, y: 292 }, svg).textContent = '10 m ≈ ' + Math.round(10 * k) + ' px；虛線圓是量程';
+  $('#view-sub').textContent = `${SCENES[state.scene].name}，${state.fov}°，${state.range} m`;
+}
+
+function render() {
+  const A = analyse(state);
+  btnRow('#scenes', Object.entries(SCENES).map(([key, s]) => [s.name, key]), v => v === state.scene, v => { state.scene = v; });
+  btnRow('#fovs', [['前向 120°', 120], ['360°', 360]], v => v === state.fov, v => { state.fov = v; });
+  btnRow('#meas', [['只有幾何', false], ['幾何加 Doppler', true]], v => v === state.doppler, v => { state.doppler = v; });
+  $('#in-r').value = state.range; $('#v-r').textContent = `${state.range} m`;
+  drawView(A);
+
+  const H = A.H, N = A.N || 1;
+  const row = r => '[' + r.map(v => auto(v / N).padStart(7)).join(' ') + ' ]';
+  const steps = [
+    ['射線打到表面，得到點 p 和法向量 n', `${A.N} 個點；其中 ${A.kx} 個點的法向量有明顯的 x 分量（|nₓ| > 0.3）`, ''],
+    ['每個點寫成一列 J：兩項平移加一項 yaw', `x 欄平方和 ${auto(H[0][0])}，y 欄 ${auto(H[1][1])}，yaw 欄 ${auto(H[2][2])}` + (state.doppler ? `\n另加 ${A.N} 列 Doppler：[dₓ, d_y, 0]` : ''), ''],
+    ['疊成資訊矩陣 H（下面是 H／N）', H.map(row).join('\n'), ''],
+    ['特徵分解：最小特徵值的方向最弱', A.E.map((e, i) => `λ${i + 1}／N = ${auto(e.val / N)}，${dirName(e.vec)}`).join('\n') || '沒有點', ''],
+    ['最小特徵值低於門檻就是退化', A.degenerate ? `退化：${A.weak ? dirName(A.weak.vec) : '全部'}，λ／N < ${TAU}` : `不退化：最弱的是${spaced(dirName(A.weak.vec))}，λ／N = ${auto(A.weak.val / N)}`, A.degenerate ? 'bad' : 'hit'],
+  ];
+  $('#steps').replaceChildren(...steps.map(([q, a, cls]) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="q">${q}</span><span class="a ${cls}">${a}</span>`;
+    return li;
+  }));
+  const cm = v => isFinite(v) ? `${fx(v * 100, 2)} cm` : '不受約束';
+  const deg = v => isFinite(v) ? `${fx(v * 180 / Math.PI, 3)}°` : '不受約束';
+  $('#vars').innerHTML = [['單幀 1σ x', cm(A.sd[0])], ['y', cm(A.sd[1])], ['yaw', deg(A.sd[2])]]
+    .map(([k, v]) => `<span class="var${v === '不受約束' ? ' chg' : ''}"><span class="k">${k}</span><span class="v">${v}</span></span>`).join('');
+
+  let say;
+  if (!A.N) say = '量程內沒有打到任何東西，匹配完全沒有資訊。';
+  else if (A.kx === 0) say = `${A.N} 個點的法向量都沒有明顯的 x 分量：牆面和護欄都平行於行進方向，沒有任何點說得出車子往前走了多遠。`;
+  else if (A.kx / A.N < 0.05) say = `${A.N} 個點裡只有 ${A.kx} 個點的法向量有明顯的 x 分量（例如路牌、建築側面），沿行進方向的約束全靠它們。`;
+  else say = `${A.N} 個點裡有 ${A.kx} 個點的法向量有明顯的 x 分量，前進和側向都約束得住。`;
+  if (state.scene === 'tunnel' && !state.doppler) say += 'yaw 仍然約束得住，因為牆上的點離感測器有遠有近，力臂各不相同。';
+  if (state.doppler) say += '加上 Doppler 之後，每個點的射線方向直接約束平移，x 方向有了大量資訊；yaw 那一欄沒有變，因為 Doppler 量不到旋轉。';
+  if (A.N && A.degenerate) say += `<span class="warn">${dirName(A.weak.vec)}方向退化：λ／N = ${auto(A.weak.val / A.N)}，低於門檻 ${TAU}。這一幀的匹配在這個方向上只是初值或雜訊，累積起來就是低估或高估的位移。</span>`;
+  else if (A.N) say += `<span class="note">最弱的是${spaced(dirName(A.weak.vec))}，λ／N = ${auto(A.weak.val / A.N)}，高於門檻。</span>`;
+  $('#say').innerHTML = say;
+}
+
+const pr = $('#presets');
+PRESETS.forEach(P => {
+  const b = document.createElement('button'); b.type = 'button'; b.textContent = P.name;
+  b.addEventListener('click', () => { Object.assign(state, P); render(); });
+  pr.appendChild(b);
+});
+$('#in-r').addEventListener('input', e => { state.range = +e.target.value; render(); });
+render();
+</script>
+</body>
+</html>

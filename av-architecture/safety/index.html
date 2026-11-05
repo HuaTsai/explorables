@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>標準與獨立安全層</title>
+<meta name="description" content="ISO 26262、SOTIF、ISO/PAS 8800、UL 4600 都沒有禁止端到端，但它們要的可分解需求和可追溯證據在黑箱上很難取得，所以 Waymo、NVIDIA、Mobileye 都在學習式主系統旁邊外掛一個簡單、可驗證的安全層。一步一步看 Simplex 式的安全層什麼時候介入，以及它為什麼要有自己的感知。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Stepper workbench over time steps of a 1D car-following toy: scenario and
+   safety-layer presets, a road view with the safe-distance band in front of the ego car, then the four
+   Simplex rules filled in for the current step, and a gap-vs-safe-distance chart with totals. */
+.road { overflow-x: auto; }
+.road svg { width: 100%; min-width: 600px; height: auto; display: block; }
+.road text, .chart text { font-family: var(--font-body); font-size: 11px; fill: var(--muted); }
+.road .lane { stroke: var(--line); stroke-width: 1.2; }
+.road .band { fill: var(--hit-soft); }
+.road .band.bad { fill: var(--miss-soft); }
+.road .ego { fill: var(--ink); }
+.road .ego.fb { fill: var(--miss); }
+.road .lead { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+.road .lead.unseen { stroke-dasharray: 4 3; stroke: var(--muted); }
+.road .lab { fill: var(--ink); }
+.work.sf { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
+.steps { list-style: none; margin: 0; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.55rem; counter-reset: s; }
+.steps li { counter-increment: s; font-size: 0.84rem; }
+.steps .q { display: block; font-size: 0.76rem; color: var(--muted); font-weight: 700; }
+.steps .q::before { content: counter(s) ". "; font-family: var(--font-mono); }
+.steps .a { font-family: var(--font-mono); font-size: 0.8rem; }
+.steps .a.hit { color: var(--hit); font-weight: 700; }
+.steps .a.wrong { color: var(--miss); font-weight: 700; }
+.steps .a.off { color: var(--muted); }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .axis { stroke: var(--line); stroke-width: 1; }
+.chart .now { fill: var(--mark); }
+.chart .gap { stroke: var(--hit); stroke-width: 2; fill: none; }
+.chart .dsafe { stroke: var(--muted); stroke-width: 1.4; fill: none; stroke-dasharray: 5 3; }
+.chart .int { stroke: var(--miss); stroke-width: 1.4; }
+table.cmp.std { min-width: 52rem; font-size: 0.86rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 量產自駕的架構走向</a>
+    <h1>標準與獨立安全層</h1>
+    <p class="lead">Waymo、NVIDIA、Mobileye 這些需要交代安全案例的系統，都在學習式主系統旁邊另外擺了一套簡單的安全層：NVIDIA 叫它 parallel classical safety stack，Waymo 叫 onboard validation layer，Mobileye 叫 PGF。這一頁先看相關標準要求什麼、為什麼業界會走向這個結構，再用一個玩具場景看獨立安全層什麼時候介入，以及「獨立」為什麼是重點。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、公司官方資料、新聞報導和標準文件後撰寫。</p>
+      <p>安全論證怎麼分層、Simplex 為什麼能縮小論證範圍，這些道理不會過期；標準的版本、法規的修訂進度和各公司的安全層做法會變，公司的說法都是截至這一天的狀態。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>標準管什麼</h2>
+    <p>ISO 26262、ISO 21448（SOTIF）、ISO/PAS 8800、UL 4600 都是目標導向、技術中立的標準，<strong>沒有禁止 E2E</strong>。但它們要求可分解的需求、可追溯的證據和可界定的 <span class="term" data-def="Operational design domain，系統設計上可以運作的條件範圍，例如道路類型、速度、天候、時段。">ODD</span>，這些在黑箱的 E2E 上很難取得。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp std">
+      <thead><tr><th>標準</th><th>內容</th><th>對架構的含意</th></tr></thead>
+      <tbody>
+        <tr><td class="name">ISO 26262:2018 功能安全</td><td>E/E 系統的隨機硬體失效和系統性失效；<span class="term" data-def="Automotive Safety Integrity Level，ISO 26262 依危害的嚴重度、暴露機率和可控性分出的等級，A 最低、D 最高。ASIL 分解是把一個高等級需求拆給兩個獨立的元件，各自用較低等級實作。">ASIL</span> 分解</td><td>處理的是「元件壞掉」，不是「ML 模型在正常運作下判斷錯」。安全層和平台（SoC、OS）可以走 ASIL，例如 NVIDIA 宣稱 DriveOS 6.0 符合 ASIL D（<a href="https://blogs.nvidia.com/blog/drive-av-mercedes-benz-cla-euro-ncap-safety-award">NVIDIA</a>）</td></tr>
+        <tr><td class="name">ISO 21448:2022（SOTIF）</td><td>「absence of unreasonable risk due to hazards caused by functional insufficiencies」，包含可預見的誤用（<a href="https://www.iso.org/standard/77490.html">ISO</a>）</td><td>感知誤判、ML 泛化不足正是 SOTIF 的範疇。需要找出 <span class="term" data-def="SOTIF 用語：讓系統的功能不足顯現成危害的情境條件，例如逆光讓相機看不清前車。">triggering condition</span>，把 unknown unsafe 的場景縮小；<strong>模組化或有明確中間輸出的架構，比較容易定義感知層的 triggering condition</strong></td></tr>
+        <tr><td class="name">ISO/PAS 8800:2024 道路車輛的 AI 安全</td><td>針對量產車上使用 AI 的安全相關 E/E 系統，處理 AI 元件的 output insufficiency、系統性錯誤和隨機硬體錯誤；聚焦 ML，但不深入特定方法（例如 DNN）（<a href="https://www.sis.se/en/produkter/road-vehicles-engineering/road-vehicle-systems/electrical-and-electronic-equipment/isopas-88002024">範圍文字，經國家標準機構轉載</a>）</td><td>給 ML 元件的資料、訓練、驗證生命週期一個框架，對 E2E 和模組化都適用；但 E2E 的「AI 元件」邊界就是整個駕駛功能，需求很難分解</td></tr>
+        <tr><td class="name">UL 4600 Ed.3（2023）</td><td>針對<strong>無人監督</strong>自主產品的安全案例（goals、argumentation、evidence），目標導向、技術中立，不定義 pass／fail 門檻（<a href="https://www.ul.com/news/ul-4600-edition-3-updates-incorporate-autonomous-trucking">UL</a>）</td><td>不禁止 E2E，但要求能論證 ODD 覆蓋、ML 失效的緩解和現場回饋。黑箱越大，論證越依賴統計證據</td></tr>
+        <tr><td class="name">ISO 34505:2025</td><td>ADS 測試情境的評估和 test case 產生（<a href="https://www.iso.org/standard/78954.html">ISO</a>）</td><td>情境化測試對所有架構都適用；有明確中間輸出時，還可以做<strong>元件級</strong>的情境測試</td></tr>
+        <tr><td class="name">UN R171（DCAS）、UN R157（ALKS）</td><td>R171 是 L2 的駕駛控制輔助，系統發起操作的部分有爭議、還在修訂；R157 是 L3 的車道維持，01 系列擴到 130 km/h、包含變換車道（<a href="https://globalautoregs.com/rules/269/documents?year=2025">GAR R171</a>、<a href="https://globalautoregs.com/rules/247?series=1">GAR R157</a>）</td><td>屬於型式認證的性能要求。例如 R171 的變換車道臨界距離取決於<strong>後方來車</strong>的速度（<a href="https://arxiv.org/pdf/2508.09233">arXiv 2508.09233</a>），這直接牽動感測器要涵蓋哪些方向</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>為什麼大家都把 E2E 和獨立安全層一起部署</h2>
+    <p><strong>統計論證的成本太高。</strong>只靠「開了多少里程、出了多少事故」證明安全，需要的里程數極大，RAND 的經典估算是數億到數百億英里（<a href="https://www.rand.org/pubs/research_reports/RR1478.html">Kalra &amp; Paddock, RAND 2016</a>）。只有 Waymo、Tesla 這種規模的車隊能接近；Waymo 也明說「no substitute for this volume of real-world fully autonomous experience」（<a href="https://waymo.com/blog/2025/12/demonstrably-safe-ai-for-autonomous-driving">Waymo</a>）<span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>。</p>
+    <p><strong>Simplex 架構讓論證範圍縮小。</strong>複雜的（學習式）控制器負責效能，簡單、可驗證的控制器負責把系統留在安全包絡內（<a href="https://doi.org/10.1109/MS.2001.936213">Sha, IEEE Software 2001</a>），安全論證主要落在簡單的那一層。Mobileye 的 <a href="https://arxiv.org/abs/1708.06374">RSS</a> 是這類安全包絡的形式化版本，PGF（Primary、Guardian、Fallback）是它的冗餘版本，相當於三取二的多數決（<a href="https://www.mobileye.com/blog/driving-ai/">Mobileye</a>）<span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>。NVIDIA Halos 的 classical safety stack、Waymo 的 onboard validation layer、Autoware 的「component-based 平行安全底層」（<a href="https://docs.autoware.org/main/home/roadmap/multi-year-roadmap/">roadmap</a>）是同一個思路。</p>
+    <p><strong>安全層本身需要「明確的世界模型」。</strong>要檢查一條軌跡會不會撞，需要明確的物件或自由空間表示。所以即使主系統是一段式 E2E，<strong>車上仍必須有一套輸出明確的感知</strong>，至少是 LiDAR 的自由空間或障礙物偵測。這是「E2E 取代所有感知模組」這種說法最常被忽略的地方。</p>
+    <p><strong>安全案例要有結構。</strong>Waymo 公開的安全案例框架用 layered、dynamic、credibility 三個視角，以 absence of unreasonable risk 為頂層目標（<a href="https://arxiv.org/abs/2306.01917">arXiv 2306.01917</a>），是可以參考的公開範本。</p>
+
+    <h2>Simplex 的四條規則</h2>
+    <p>把 Simplex 寫成每個控制週期做的事：</p>
+    <ol>
+      <li>主系統（學習式）提出這一步要怎麼開。</li>
+      <li>安全層用自己的明確世界模型檢查：照這個提議開下去，下一刻還在不在安全包絡內。</li>
+      <li>通過，就照主系統的提議執行。</li>
+      <li>不通過，改由 fallback（簡單、可驗證的控制器）接手，把車帶到安全的狀態。</li>
+    </ol>
+    <p>安全包絡要怎麼定，RSS 給了一個形式化的版本。下面的玩具只用它的縱向安全距離，而且把反應時間拿掉：假設前車最猛以 b<sub>lead</sub> 煞車、自車至少能以 b<sub>ego</sub> 煞車，兩車都煞到停時，自車停下的位置還在前車後方 d<sub>0</sub> 以外，就算安全。需要的間距是：</p>
+<pre class="code">d_safe = v² / (2·b_ego) − v_f² / (2·b_lead) + d0</pre>
+    <p>v 是自車速度，v<sub>f</sub> 是前車速度。第 2 條規則就是：把主系統的提議套用 0.5 秒，同時假設前車這 0.5 秒都在最猛地煞車，看那時的間距還夠不夠 d_safe。這半秒的提前量，扮演了 RSS 原式裡反應時間的角色。在 b<sub>lead</sub> 不小於 b<sub>ego</sub> 的前提下，只要一開始的狀態安全、fallback 的煞車至少有 b<sub>ego</sub>、前車煞得沒有比 b<sub>lead</sub> 更猛，這個檢查就保證不會追撞，不管主系統提了什麼。</p>
+    <p>場景是自車以 20 m/s 跟車，起始間距 44 m。主系統是一個跟車控制器，代表學習式 planner；它的減速度最多只到 3 m/s²，代表訓練資料裡很少出現急煞。三個情境：前車以 2 m/s² 緩慢減速；前車以 8 m/s² 急煞；前方 100 m 有一個靜止物體，主系統的感知沒有偵測到。安全層有三種設定：關閉、有自己獨立的感知、直接用主系統的感知輸出。</p>
+  </section>
+
+  <section class="bench" aria-label="Simplex 安全層逐步模擬">
+    <div class="row presets" id="scens"><span class="lbl">情境</span></div>
+    <div class="row presets" id="modes"><span class="lbl">安全層</span></div>
+    <div class="row">
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
+      </div>
+    </div>
+    <div class="row">
+      <div class="road"><svg id="road" viewBox="0 0 820 96" role="img" aria-label="自車、前車和自車前方的安全距離"></svg></div>
+      <p class="hint">玩具場景，所有參數都是示意值：每步 0.5 秒；安全距離假設自車至少能以 b<sub>ego</sub> = 4 m/s² 煞車、前車最猛以 b<sub>lead</sub> = 8 m/s² 煞車，d<sub>0</sub> = 2 m；fallback 實際以 6 m/s² 煞停，接手後不交還。自車前方的色帶是現在的安全距離，綠色表示間距還夠，紫色表示不夠。自車變紫色表示 fallback 已經接手；虛線框是主系統的感知沒有偵測到的物體。</p>
+    </div>
+    <div class="row work sf">
+      <div class="panel">
+        <div class="panel-head"><span>四條規則，這一步</span><span class="sub" id="st-t"></span></div>
+        <ol class="steps" id="steps"></ol>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>間距和安全距離</span><span class="sub">0–12 s</span></div>
+        <div class="panel-body chart"><svg id="chart" viewBox="0 0 260 160" role="img" aria-label="間距和安全距離隨時間的變化"></svg></div>
+        <div class="vars" id="vars"></div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>「獨立」是重點</h2>
+    <p>三個情境各說明一件事。前車緩慢減速時，主系統應付得來，安全層從頭到尾不出手：它只檢查，不參與正常駕駛。前車急煞時，主系統提出的減速不夠，安全層一直等到「再晚一步就來不及」才接手，所以介入的次數很少；只要前車煞得沒有比假設的更猛，接手時一定還來得及停下。第三個情境裡，主系統的感知漏看了靜止物體；有獨立感知的安全層照樣看得到它、提早接手，而直接吃主系統感知輸出的安全層也跟著看不到，檢查形同虛設。</p>
+    <p>第三個情境就是上面「安全層需要明確世界模型」那一點的延伸：安全層的價值，來自它和主系統不共用失效模式。最直接的做法，是讓它直接吃 LiDAR 原始點雲、用幾何方法（地面分割、聚類、前方走廊佔用）偵測障礙物，不共用主網路的 backbone；Mobileye PGF 的多數決和 NVIDIA 的平行 classical stack 都是這個思路<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。</p>
+    <p>這也說明安全層的保守程度是一個取捨：玩具裡假設前車可能以 8 m/s² 急煞，所以緩慢減速時安全距離也會先拉大；假設得越保守，越早介入，也越容易在不必要的時候介入。安全層每一次觸發都會留下 log，這本身就是很好的除錯訊號。</p>
+
+    <h2>各架構在安全案例中的位置</h2>
+    <ul>
+      <li><strong>模組化，或多任務 BEV 加規則 planner</strong>：需求可以分解，例如「前方 80 m 內，尺寸 X 以上的障礙物召回率 ≥ Y」，可以做元件級的 V&amp;V，符合 ISO 26262 和 SOTIF 的傳統工作流程。弱點是介面上的資訊損失本身，要當成 SOTIF 的 functional insufficiency 來處理。</li>
+      <li><strong>兩段式 E2E</strong>：感知部分仍可做元件級論證，learned planner 則要靠 closed-loop 情境測試加上安全層。</li>
+      <li><strong>一段式 E2E、VLA</strong>：幾乎只能靠情境測試、統計里程和外部安全層來論證。以今天的工具，<strong>在 L2（駕駛人監督）可行；在 L3、L4，沒有獨立安全層的話，目前沒有公開的成功安全案例</strong>。</li>
+    </ul>
+
+    <h2>結語</h2>
+    <p>安全標準沒有禁止端到端，但它們要的可分解需求、可追溯證據和可界定的 ODD，在黑箱上很難取得，而純靠統計里程又貴到只有最大的車隊負擔得起。所以實際部署的答案是 Simplex：學習式主系統負責效能，一個簡單、可驗證、和主系統不共用失效模式的安全層負責把車留在安全包絡內，安全論證主要落在後者。這也表示，就算主系統是一段式 E2E，車上仍需要一套輸出明確的感知，供安全層使用。</p>
+    <p>六類架構的定義和誰用了什麼樣的安全層，見<a href="../landscape/">架構那一頁</a>；學習式主系統本身為什麼難以證明，見<a href="../evaluation/">評估那一頁</a>。</p>
+    <p>這一頁沒能確認的事：UN R171 02 系列修訂（系統發起操作）在 2026 年 6 月 WP.29 的表決結果沒有查證，R157 的具體偵測距離數值沒有取得原文；ISO/PAS 8800 和 ISO 21448 在 ISO 網站上都標示「to be revised」，引用條文前請確認現行版本。玩具場景只有一維的縱向跟車，沒有側向、沒有感測雜訊和延遲，獨立感知被假設成完美；真實的安全層還得處理自己的漏檢和誤觸發。</p>
+  </section>
+</main>
+
+<script>
+// ---- Toy 1D car following. Positions are front bumper (ego) and rear bumper (lead), metres. ----
+const DT = 0.5, N = 24, SET = 20, GAP0 = 44, HEADWAY = 2, A_MAIN = -3;
+const B_EGO = 4, B_LEAD = 8, D0 = 2, B_FB = 6;           // monitor assumptions and fallback braking (illustrative)
+const SCENS = {
+  mild: { name: '前車緩慢減速', lead: { x: GAP0, v: SET }, leadA: t => (t >= 2 ? -2 : 0), blind: false },
+  hard: { name: '前車急煞', lead: { x: GAP0, v: SET }, leadA: t => (t >= 2 ? -8 : 0), blind: false },
+  miss: { name: '主系統漏看靜止物', lead: { x: 100, v: 0 }, leadA: () => 0, blind: true },
+};
+const MODES = { off: { name: '關閉' }, indep: { name: '獨立感知' }, shared: { name: '共用主系統的感知' } };
+const f1 = v => (Math.round(v * 10) / 10).toFixed(1);
+function move(x, v, a) {
+  if (a < 0 && v + a * DT < 0) { const t = v / -a; return { x: x + v * t / 2, v: 0 }; }
+  if (v <= 0 && a <= 0) return { x, v: 0 };
+  return { x: x + v * DT + a * DT * DT / 2, v: v + a * DT };
+}
+const dSafe = (v, vL) => Math.max(0, v * v / (2 * B_EGO) - vL * vL / (2 * B_LEAD)) + D0;
+// The main system: a car-following controller standing in for a learned planner; it never brakes harder than A_MAIN.
+function planner(ego, seen) {
+  if (!seen) return Math.max(-3, Math.min(1.5, 0.5 * (SET - ego.v)));
+  const gap = seen.x - ego.x, want = 4 + HEADWAY * ego.v;
+  return Math.max(A_MAIN, Math.min(1.5, 0.25 * (gap - want) + 0.7 * (seen.v - ego.v)));
+}
+
+function run(sk, mode) {
+  const S = SCENS[sk];
+  let ego = { x: 0, v: SET }, lead = { ...S.lead }, hit = null, fb = false, fbAt = null;
+  const rows = [];
+  for (let k = 0; k <= N; k++) {
+    const t = k * DT;
+    const mainSeen = S.blind ? null : lead;
+    const aP = hit !== null ? 0 : planner(ego, mainSeen);
+    const monSeen = mode === 'off' ? null : mode === 'shared' ? mainSeen : lead;
+    let check = null;                                        // null: nothing was checked this step
+    if (mode !== 'off' && monSeen && hit === null && !fb) {
+      const e1 = move(ego.x, ego.v, aP), l1 = move(monSeen.x, monSeen.v, -B_LEAD);
+      check = { gapN: l1.x - e1.x, dN: dSafe(e1.v, l1.v) };
+      check.ok = check.gapN >= check.dN;
+      if (!check.ok) { fb = true; fbAt = t; }
+    }
+    const a = hit !== null ? 0 : fb ? -B_FB : aP;
+    rows.push({ k, t, ego: { ...ego }, lead: { ...lead }, gap: lead.x - ego.x, dNow: dSafe(ego.v, lead.v), aP, a, check, fb, fbAt, hit, mainSeen: !!mainSeen, monSeen: !!monSeen });
+    if (hit === null) {
+      const e = move(ego.x, ego.v, a), l = move(lead.x, lead.v, S.leadA(t));
+      if (e.x >= l.x) { hit = t + DT; ego = { x: l.x, v: 0 }; lead = { x: l.x, v: 0 }; }
+      else { ego = e; lead = l; }
+    }
+  }
+  return { rows, hit, fbAt, minGap: Math.min(...rows.map(r => r.gap)) };
+}
+
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const state = { sk: 'hard', mode: 'indep', k: 0, R: null };
+
+function drawRoad(R, r) {
+  const svg = $('#road'); svg.replaceChildren();
+  const lo = Math.max(-5, r.ego.x - 15), X = x => 20 + (x - lo) / 130 * 780, carW = X(4.5) - X(0);
+  el('line', { class: 'lane', x1: 20, y1: 22, x2: 800, y2: 22 }, svg);
+  el('line', { class: 'lane', x1: 20, y1: 62, x2: 800, y2: 62 }, svg);
+  const bandEnd = Math.min(r.ego.x + r.dNow, lo + 130);
+  el('rect', { class: 'band' + (r.gap < r.dNow ? ' bad' : ''), x: X(r.ego.x), y: 30, width: Math.max(0, X(bandEnd) - X(r.ego.x)), height: 24 }, svg);
+  if (r.lead.x <= lo + 130) {
+    el('rect', { class: 'lead' + (r.mainSeen ? '' : ' unseen'), x: X(r.lead.x), y: 33, width: carW, height: 18, rx: 3 }, svg);
+    el('text', { class: 'lab', x: X(r.lead.x), y: 76 }, svg).textContent = SCENS[state.sk].blind ? '靜止物' : `前車 ${f1(r.lead.v)} m/s`;
+  }
+  el('rect', { class: 'ego' + (r.fb ? ' fb' : ''), x: X(r.ego.x) - carW, y: 33, width: carW, height: 18, rx: 3 }, svg);
+  el('text', { class: 'lab', x: X(r.ego.x) - carW, y: 76 }, svg).textContent = `自車 ${f1(r.ego.v)} m/s`;
+  el('text', { x: X(r.ego.x) + 4, y: 16 }, svg).textContent = `安全距離 ${f1(r.dNow)} m　間距 ${f1(r.gap)} m`;
+  el('text', { x: 20, y: 92 }, svg).textContent = `視窗 ${f1(lo)}–${f1(lo + 130)} m，跟著自車移動`;
+}
+
+function drawChart(R, r) {
+  const svg = $('#chart'); svg.replaceChildren();
+  const T = t => 30 + t / (N * DT) * 222, Y = d => 140 - Math.min(d, 120) / 120 * 124;
+  el('rect', { class: 'now', x: T(r.t) - 4, y: 10, width: 8, height: 132 }, svg);
+  el('line', { class: 'axis', x1: 30, y1: 140, x2: 252, y2: 140 }, svg);
+  [0, 50, 100].forEach(d => { el('text', { x: 4, y: Y(d) + 4 }, svg).textContent = d; });
+  el('text', { x: 34, y: 156 }, svg).textContent = '實線：間距　虛線：安全距離（m）';
+  const upto = R.rows.slice(0, r.k + 1);
+  el('polyline', { class: 'gap', points: upto.map(o => `${T(o.t)},${Y(o.gap)}`).join(' ') }, svg);
+  el('polyline', { class: 'dsafe', points: upto.map(o => `${T(o.t)},${Y(o.dNow)}`).join(' ') }, svg);
+  if (R.fbAt !== null && r.t >= R.fbAt) el('line', { class: 'int', x1: T(R.fbAt), y1: 10, x2: T(R.fbAt), y2: 140 }, svg);
+}
+
+function renderStep() {
+  const R = state.R, r = R.rows[state.k], S = SCENS[state.sk], mode = state.mode;
+  drawRoad(R, r); drawChart(R, r);
+  $('#st-t').textContent = `t = ${f1(r.t)} s`;
+  const crashed = r.hit !== null;
+  const propose = crashed ? '—' : r.mainSeen
+    ? `看到前方物體在 ${f1(r.gap)} m、${f1(r.lead.v)} m/s，提議 a = ${f1(r.aP)} m/s²`
+    : `沒偵測到前方物體，提議 a = ${f1(r.aP)} m/s²，想維持 ${SET} m/s 巡航`;
+  let chk, chkCls = '';
+  if (crashed) chk = '—';
+  else if (mode === 'off') { chk = '沒有安全層'; chkCls = 'off'; }
+  else if (r.check === null && r.fb) { chk = `fallback 已在 t = ${f1(r.fbAt)} s 接手，不再檢查`; chkCls = 'off'; }
+  else if (!r.monSeen) { chk = '安全層用的是主系統的感知輸出，也沒看到任何物體，沒有東西可以檢查'; chkCls = 'wrong'; }
+  else { chk = `照提議走 0.5 s 後間距 ${f1(r.check.gapN)} m；最壞情況需要 ${f1(r.check.dN)} m → ${r.check.ok ? '通過' : '不通過'}`; chkCls = r.check.ok ? 'hit' : 'wrong'; }
+  const usedMain = !crashed && !r.fb;
+  const items = [
+    ['主系統提出', propose, ''],
+    ['安全層檢查', chk, chkCls],
+    ['通過：照提議執行', crashed ? `照提議執行的結果：在 t = ${f1(r.hit)} s 撞上前方物體` : usedMain ? `執行 a = ${f1(r.a)} m/s²` : '沒有執行', crashed ? 'wrong' : usedMain ? 'hit' : 'off'],
+    ['不通過：fallback 接手', r.fb ? `以 ${B_FB} m/s² 煞停` : '沒有觸發', r.fb ? 'wrong' : 'off'],
+  ];
+  $('#steps').innerHTML = items.map(([q, a, c]) => `<li><span class="q">${q}</span><span class="a ${c}">${a}</span></li>`).join('');
+  $('#vars').innerHTML = [
+    ['間距', `${f1(r.gap)} m`], ['安全距離', `${f1(r.dNow)} m`],
+    ['接手', R.fbAt === null || r.t < R.fbAt ? '—' : `t = ${f1(R.fbAt)} s`],
+    ['結果', R.hit !== null && r.t >= R.hit ? '撞上' : r.k === N ? (R.hit === null ? '沒有撞' : '—') : '進行中'],
+  ].map(([a, b], i) => `<span class="var${i === 2 && R.fbAt !== null && r.t === R.fbAt ? ' chg' : ''}"><span class="k">${a}</span><span class="v">${b}</span></span>`).join('');
+  $('#say').innerHTML = say(R, r);
+}
+
+function say(R, r) {
+  const sk = state.sk, mode = state.mode;
+  if (r.hit !== null) {
+    if (mode === 'off') return `t = ${f1(r.hit)} s 撞上前方物體。<span class="warn">沒有安全層，主系統的錯誤直接變成事故。</span>`;
+    return `t = ${f1(r.hit)} s 撞上前方物體。安全層吃的是主系統的感知輸出，主系統沒看到的，它也看不到。<span class="warn">安全層必須有自己的世界模型，才能抓到主系統的感知錯誤。</span>`;
+  }
+  if (r.fb && r.t === R.fbAt) {
+    const worst = r.lead.v > 0 ? '若前車在這 0.5 s 內以 8 m/s² 急煞，' : '';
+    return `t = ${f1(r.t)} s，主系統提議 a = ${f1(r.aP)} m/s²，但照這樣走 0.5 s 後，${worst}間距只剩 ${f1(r.check.gapN)} m，不到最壞情況需要的 ${f1(r.check.dN)} m。<span class="warn">安全層否決這個提議，fallback 接手以 6 m/s² 煞停。</span>`;
+  }
+  if (r.k === N) {
+    const end = mode === 'off' ? '這一次沒有安全層也沒事，因為主系統自己應付得來。'
+      : R.fbAt === null ? '安全層從頭到尾沒有介入：主系統應付得來的情境，它只檢查、不出手。'
+      : `安全層在 t = ${f1(R.fbAt)} s 介入一次，最後停在前方物體後 ${f1(r.gap)} m。`;
+    return `跑完，沒有撞。最小間距 ${f1(R.minGap)} m。${end}`;
+  }
+  if (r.fb) return `fallback 持續煞車中，自車 ${f1(r.ego.v)} m/s，間距 ${f1(r.gap)} m。主系統的提議不再被採用。`;
+  const base = `主系統提議 a = ${f1(r.aP)} m/s²。`;
+  if (sk === 'mild') return base + (r.t < 2 ? '前車還在等速，兩車都是 20 m/s。' : `前車以 2 m/s² 減速，主系統跟著平穩減速，間距一直比安全距離大${mode === 'off' ? '。' : '，安全層每一步都放行。'}`);
+  if (sk === 'hard') return base + (r.t < 2 ? '前車還在等速。' : `前車以 8 m/s² 急煞，主系統最多只減速 3 m/s²。${mode === 'off' ? '沒有安全層，沒有人會修正。' : '安全層的檢查還過得了，所以先放行：它只在再晚一步就來不及時才接手。'}`);
+  return base + (mode === 'off' ? '主系統沒偵測到前方的靜止物，照常巡航，也沒有安全層。'
+    : mode === 'shared' ? '主系統沒偵測到前方的靜止物；安全層用的是同一份感知輸出，也看不到它。'
+    : '主系統沒偵測到前方的靜止物，但安全層有自己的感知，看得到它，正在檢查距離。');
+}
+
+function pick(row, items, key) {
+  row.replaceChildren(row.firstElementChild, ...Object.entries(items).map(([k, v]) => {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = v.name;
+    b.classList.toggle('chosen', state[key] === k);
+    b.addEventListener('click', () => { state[key] = k; rebuild(); });
+    return b;
+  }));
+}
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderStep(); } });
+function rebuild() {
+  pick($('#scens'), SCENS, 'sk'); pick($('#modes'), MODES, 'mode');
+  state.R = run(state.sk, state.mode);
+  stepper.setTotal(N); stepper.set(0);
+}
+rebuild();
+</script>
+</body>
+</html>

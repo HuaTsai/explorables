@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>六種架構，誰在車上跑哪一種</title>
+<meta name="description" content="業界說的「端到端」範圍很寬。依哪些部分是學習的、模組之間傳什麼，把自駕架構分成六類，再看 2025–2026 年實際上路的系統各屬於哪一類、證據有多硬。挑一類，看它的資料流哪裡是學習的、哪裡是手寫的。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Exploratory workbench: six type buttons, a data-flow diagram (sensors, perception,
+   prediction, planning, control, plus a safety lane for type F) where learned blocks are filled in hit, then two
+   panels: the four classification questions answered for the type, and the deployments the survey table puts there. */
+.flowdia { overflow-x: auto; }
+.flowdia svg { width: 100%; min-width: 640px; height: auto; display: block; }
+.flowdia text { fill: var(--ink); font-size: 13px; font-family: var(--font-body); }
+.flowdia .blk rect { fill: var(--bg); stroke: var(--line); stroke-width: 1.2; }
+.flowdia .blk.learned rect { fill: var(--hit-soft); stroke: var(--hit); stroke-width: 2; }
+.flowdia .blk.mix rect { stroke: var(--hit); stroke-width: 1.6; stroke-dasharray: 5 3; }
+.flowdia .blk .t { font-weight: 700; text-anchor: middle; }
+.flowdia .blk .s { font-size: 11.5px; fill: var(--muted); text-anchor: middle; }
+.flowdia .lane { fill: var(--muted); font-size: 12px; }
+.flowdia .flow { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+.flowdia .flow.latent { stroke-dasharray: 5 4; }
+.flowdia .tag { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+.flowdia .brace { stroke: var(--hit); stroke-width: 1.4; fill: none; }
+.flowdia .brace-t { fill: var(--hit); font-size: 12px; text-anchor: middle; }
+.work.ls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.qa { list-style: none; margin: 0; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.65rem; counter-reset: q; }
+.qa li { counter-increment: q; font-size: 0.86rem; }
+.qa .q { display: block; font-size: 0.78rem; color: var(--muted); font-weight: 700; }
+.qa .q::before { content: counter(q) ". "; font-family: var(--font-mono); }
+.cos { list-style: none; margin: 0; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.cos li { font-size: 0.84rem; }
+.cos .nm { font-weight: 700; }
+.cos .meta { display: block; color: var(--muted); font-size: 0.8rem; }
+.cos .none { color: var(--muted); }
+table.cmp.wide { min-width: 60rem; font-size: 0.84rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 量產自駕的架構走向</a>
+    <h1>六種架構，誰在車上跑哪一種</h1>
+    <p class="lead">發表會上的「端到端」範圍很寬：有人把多任務感知網路叫端到端，有人指的是一個網路直接從感測器輸出軌跡。這一頁先照「哪些部分是學習的、模組之間傳什麼」把架構分成六類，再看 2025–2026 年實際上路的系統各屬於哪一類、證據有多硬。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、公司官方資料、新聞報導和標準文件後撰寫。</p>
+      <p>六類架構的定義不會過期；誰部署了什麼、各公司的宣稱和比較表的評等會變。公司的說法都是截至這一天的狀態，證據日期附在每一列，超過六個月的業界說法引用前請重新查證。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>「端到端」指的範圍很寬</h2>
+    <p>要比較架構，先得把名詞分清楚。依「哪些部分是學習的」和「模組之間的介面是什麼」，可以分成六類：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp wide">
+      <thead><tr><th>類型</th><th>定義</th><th>中間介面</th><th>代表</th></tr></thead>
+      <tbody>
+        <tr><td class="name">A. 傳統模組化</td><td>各任務各自一個網路或演算法（2D／3D 偵測、車道、追蹤、預測），由手寫的 fusion／tracking 串接，planner 用規則或最佳化</td><td>明確、人可讀（object list、lane graph）</td><td>Autoware Universe、Apollo（早期）、2010 年代多數 ADAS</td></tr>
+        <tr><td class="name">B. 多任務 BEV 感知</td><td>多感測器 → 共用 backbone → <span class="term" data-def="Bird's-eye view，鳥瞰視角。把 3D 空間壓成地面上的一張格子特徵圖，每一格存那個位置的特徵。">BEV</span>／3D 特徵 → 多個任務 head（3D 偵測、地圖元素、<span class="term" data-def="把周圍空間切成格子，標出每一格有沒有被佔據。不需要先把障礙物歸成某個類別。">occupancy</span>、運動預測）。<strong>規劃仍是獨立模組</strong></td><td>明確（各 head 的輸出）</td><td><a href="https://arxiv.org/abs/2205.13542">BEVFusion</a>、<a href="https://arxiv.org/abs/2203.17270">BEVFormer</a></td></tr>
+        <tr><td class="name">C. 兩段式 E2E</td><td>感知、預測、規劃都是神經網路，以可微分方式串接、<strong>聯合訓練到規劃目標</strong>，但中間仍有明確的 query 或輸出可以監督</td><td>明確和潛在特徵並存</td><td><a href="https://arxiv.org/abs/2212.10156">UniAD</a>、<a href="https://arxiv.org/abs/2303.12077">VAD</a>、<a href="https://arxiv.org/abs/2405.19620">SparseDrive</a>；中國業界說的「兩段式端到端」</td></tr>
+        <tr><td class="name">D. 一段式 E2E</td><td>感測器 → 單一網路 → 軌跡（或控制）。可以帶輔助 head（depth、seg、偵測）幫助訓練和視覺化，但規劃<strong>不依賴</strong>這些明確輸出</td><td>主要是潛在特徵</td><td><a href="https://arxiv.org/abs/2205.15997">TransFuser</a>、Tesla FSD v12+、Horizon HSD</td></tr>
+        <tr><td class="name">E. VLM／VLA</td><td>以多模態大型語言模型為骨幹，輸出軌跡和／或語言推理；常以「快慢雙系統」部署</td><td>語言 token 或潛在 token</td><td><a href="https://arxiv.org/abs/2410.23262">EMMA</a>、<a href="https://arxiv.org/abs/2402.12289">DriveVLM</a>、<a href="https://arxiv.org/abs/2511.00088">Alpamayo-R1</a>、LINGO-2</td></tr>
+        <tr><td class="name">F. 混合（含獨立安全層）</td><td>以 B、C、D、E 任一種為主系統，外加<strong>獨立</strong>、較簡單、可驗證的安全監控或 fallback 堆疊</td><td>主系統的輸出，加上安全層自己的明確世界模型</td><td>NVIDIA DRIVE AV 加 Halos、Waymo 的 validation layer、Mobileye PGF、Autoware 的 hybrid 架構</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>有四個地方常被混在一起。</p>
+    <p>第一，<strong>「感知端到端」不等於「端到端自駕」</strong>。2021–2022 年 Tesla 的 HydraNet、occupancy network 和多數中國 BEV 方案屬於 B 類，規劃仍是手寫或最佳化。把 B 類稱為「端到端」，是行銷用語的延伸。</p>
+    <p>第二，<strong>「輸出軌跡」不等於「輸出控制」</strong>。公開的學術 E2E 模型幾乎都輸出軌跡或 <span class="term" data-def="未來幾個時間點自車應該在的位置，由控制器負責追上。">waypoints</span>，再交給 PID 或 MPC 控制器，例如 TransFuser 用 PID 追蹤預測的 waypoints。真正從感測器直接輸出方向盤和油門的量產系統，沒有公開證據。</p>
+    <p>第三，<strong>一段式 E2E 通常仍有輔助輸出</strong>。TransFuser 用 depth、semantic segmentation、HD map、車輛偵測當輔助任務，作者明說是為了可解釋性和強健性；拿掉全部輔助 loss 後，route completion 從 92.28 掉到 78.17<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>。Tesla 在 ICCV 2025 的演講，據 <a href="https://eu.36kr.com/en/p/3519984081869697">36Kr</a> 的報導也展示了 3D occupancy、panoptic segmentation、3D Gaussian 和語言等輔助輸出<span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>。</p>
+    <p>第四，<strong>VLA 的「L」正在被拿掉</strong>。<a href="https://www.xpeng.com/pressroom/news/019cae5e67b99c0960ee8a028129016a">XPeng 的 VLA 2.0</a> 官方描述為「end-to-end vision-to-action architecture」，去掉了中間的翻譯層<span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>（2026 年 3 月）；Huawei 則主張跳過語言、直接走 WA（World-Action）路線<span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>（<a href="https://chinaevhome.com/2025/08/28/huaweis-jin-yuzhi-skipping-vla-in-favor-of-wa-for-autonomous-driving/">ChinaEVHome</a>）。</p>
+
+    <h2>分類一個系統的四個問題</h2>
+    <p>拿到一個系統的公開描述，要放進上面哪一類，依序問四個問題：</p>
+    <ol>
+      <li>哪些部分是學習的？</li>
+      <li>模組之間傳的是什麼：人讀得懂的明確輸出（object list、車道、occupancy），還是潛在特徵？</li>
+      <li>規劃是手寫規則或最佳化，還是學出來的？</li>
+      <li>有沒有一個獨立於主系統、比較簡單、可以驗證的安全層？</li>
+    </ol>
+    <p>前兩題就是上表的分類軸，第 3 題把 B 和 C 分開，第 4 題把 F 和其他五類分開。下面的工作台對每一類回答這四題，並列出業界部署總表裡被歸到這一類的系統。</p>
+  </section>
+
+  <section class="bench" aria-label="架構類型探索">
+    <div class="row presets" id="types"><span class="lbl">類型</span></div>
+    <div class="row">
+      <div class="flowdia">
+        <svg id="dia" viewBox="0 0 826 236" role="img" aria-label="所選架構類型的資料流，標出哪些方塊是學習式的"></svg>
+      </div>
+      <p class="hint">綠底方塊是學習式元件，綠色虛線框是「網路或演算法都有」，灰框是手寫的規則、最佳化或控制器。箭頭下方標「明確」是人讀得懂的輸出，「潛在」是潛在特徵，「兩者」是並存。控制一律畫成 PID／MPC，因為沒有公開證據顯示量產系統直接輸出方向盤和油門。圖只畫資料流的大致分段，不是任何一家的實際架構。</p>
+    </div>
+    <div class="row work ls">
+      <div class="panel">
+        <div class="panel-head"><span>四個問題</span><span class="sub" id="t-name"></span></div>
+        <ol class="qa" id="qa"></ol>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>總表裡歸到這一類的</span><span class="sub">證據日期、等級</span></div>
+        <ul class="cos" id="cos"></ul>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>業界部署總表</h2>
+    <p>下表的架構類型照上面六類，一家公司如果有多個來源，另外列一行。這個領域變化很快，所以每一列都附證據日期；公司自己的說法標<span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>，只是自述而沒有獨立驗證的效能或安全宣稱另標<span class="term" data-def="公司自述、沒有經過獨立驗證的效能或安全宣稱。">【行銷】</span>。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp wide">
+      <thead><tr><th>公司／專案</th><th>架構類型</th><th>上路形態</th><th>主要證據</th><th>證據日期</th><th>證據等級</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Tesla FSD v12+</td><td>D，據稱帶輔助輸出</td><td>L2 監督式（FSD Supervised）；Austin Robotaxi</td><td>v12 release note：「single end-to-end neural network … replacing over 300k lines of explicit C++ code」</td><td class="num">2023-12／2024-01</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>in-car release note，經第三方存檔（<a href="https://www.notateslaapp.com/software-updates/version/2023.44.30.10/release-notes">NotATeslaApp</a>）</td></tr>
+        <tr><td class="name">Tesla（細節）</td><td>輸出含 occupancy、seg、Gaussian、語言等輔助；用神經世界模擬器做 closed-loop 評估</td><td>—</td><td>Ashok Elluswamy 的 ICCV 2025 演講和 X 貼文</td><td class="num">2025-10</td><td><span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>找不到原始投影片（<a href="https://eu.36kr.com/en/p/3519984081869697">36Kr</a>、<a href="https://www.humanoidsdaily.com/news/tesla-ai-chief-details-unified-world-simulator-for-fsd-and-optimus">Humanoids Daily</a>）</td></tr>
+        <tr><td class="name">Waymo Driver</td><td>F：以 E 類 foundation model 為核心，加結構化表示和獨立驗證層</td><td>L4 無人 Robotaxi</td><td>Waymo Foundation Model：Sensor Fusion Encoder、Driving VLM、World Decoder；「compact, materialized structured representations like objects, semantic attributes, and roadgraph elements」；「separate and rigorous onboard validation layer」</td><td class="num">2025-12</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>（<a href="https://waymo.com/blog/2025/12/demonstrably-safe-ai-for-autonomous-driving">Waymo blog</a>）</td></tr>
+        <tr><td class="name">Waymo EMMA</td><td>E（研究）</td><td>研究，<strong>非量產</strong></td><td>作者自陳限制：只能處理少量影格、沒有 LiDAR／radar、計算昂貴</td><td class="num">2024-10</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>（<a href="https://waymo.com/research/emma">Waymo Research</a>）</td></tr>
+        <tr><td class="name">Waymo（立場）</td><td>—</td><td>—</td><td>onboard software 副總表示，純 E2E 達不到 Waymo 規模所需的安全標準</td><td class="num">2026-08</td><td><span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>專訪（<a href="https://axios.com/2026/08/26/waymo-ai-shortcut-self-driving">Axios</a>）</td></tr>
+        <tr><td class="name">Mobileye</td><td>A／B 加 F：Compound AI、RSS、PGF；部分模組內部用 E2E 學習</td><td>量產 ADAS（量很大）、Surround ADAS；Robotaxi 開發中</td><td>「Compound AI takes a modular and layered approach」、「a blend of flexible end-to-end learning and purpose-built algorithms」、「RSS model encodes core safety principles that don't need to be learned」</td><td class="num">2025-07</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>（<a href="https://www.mobileye.com/blog/compound-ai-the-framework-powering-scalable-autonomy/">Mobileye blog</a>）</td></tr>
+        <tr><td class="name">Mobileye（對 E2E 的批評）</td><td>—</td><td>—</td><td>「A pure end-to-end approach has its limitations」，列出 shortcut learning、long tail、lack of abstractions；PGF 相當於三取二的多數決</td><td class="num">2024-11</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>（<a href="https://www.mobileye.com/blog/driving-ai/">Mobileye AI Day</a>）</td></tr>
+        <tr><td class="name">NVIDIA DRIVE AV</td><td>F：E2E 主堆疊加平行的 classical safety stack（Halos）</td><td>L2 point-to-point，Mercedes CLA（MB.DRIVE ASSIST PRO），美國預計 2026 年底</td><td>「uses an AI end-to-end stack for core driving, alongside a parallel classical safety stack — built on NVIDIA Halos」</td><td class="num">2026-01</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>（<a href="https://blogs.nvidia.com/blog/drive-av-software-mercedes-benz-cla">NVIDIA blog</a>）</td></tr>
+        <tr><td class="name">NVIDIA Alpamayo-R1／Alpamayo 1</td><td>E：VLA，Cosmos-Reason 加 diffusion 軌跡解碼器</td><td><strong>開放研究模型</strong>，非直接量產</td><td>closed-loop 模擬中 off-road 率降 35%、close encounter 降 25%</td><td class="num">2025-10（v2 2026-01）</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span><span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>（<a href="https://arxiv.org/abs/2511.00088">arXiv 2511.00088</a>）</td></tr>
+        <tr><td class="name">Wayve AI Driver</td><td>D／E：embodied AI foundation model；LINGO-2 是 VLA 研究</td><td>Nissan 次世代 ProPILOT（L2，日本 FY2027 起）；原型車 11 台相機、5 個雷達、1 顆 LiDAR</td><td>Nissan 新聞稿</td><td class="num">2025-04／2025-09</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>Nissan（<a href="https://global.nissannews.com/en/releases/250410-01-e">Nissan</a>）</td></tr>
+        <tr><td class="name">Wayve（安全層）</td><td>—</td><td>—</td><td>據 Reuters 報導，Wayve 自述「End-to-end models aren't enough to guarantee safety at scale」，並會產生 safety map</td><td class="num">2026-07</td><td><span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>（<a href="https://www.thestar.com.my/tech/tech-news/2026/07/01/wayve-courts-automakers-with-ai-driving-system-that-learns-like-humans">The Star／Reuters</a>）</td></tr>
+        <tr><td class="name">Li Auto</td><td>E：2024 年是 E2E 加 VLM 快慢雙系統，2025 年改為 VLA（MindVLA）</td><td>L2+ 量產</td><td>DriveVLM 論文自述 DriveVLM-Dual 已部署於量產車</td><td class="num">2024-02</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>論文（<a href="https://arxiv.org/abs/2402.12289">arXiv 2402.12289</a>）</td></tr>
+        <tr><td class="name">Li Auto（量產時程）</td><td>—</td><td>—</td><td>2024-07 早鳥、2024-10 全量推送 E2E 加 VLM</td><td class="num">2024</td><td><span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>（<a href="https://carnewschina.com/2024/07/05/li-auto-max-version-owners-will-receive-a-major-smart-driving-upgrade-this-month">CarNewsChina</a>、<a href="https://autonews.gasgoo.com/articles/icv/li-auto-rolls-out-end-to-end-vlm-smart-driving-system-via-ota-70034940">Gasgoo</a>）</td></tr>
+        <tr><td class="name">XPeng</td><td>D／E：VLA 2.0，vision → action，去除中間翻譯層</td><td>L2 監督式；全球交付 2027 起</td><td>官方新聞稿，強調「reducing reliance on high-definition maps and rigid rule-based systems」，<strong>沒有描述安全層</strong></td><td class="num">2026-03</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>（<a href="https://www.xpeng.com/pressroom/news/019cae5e67b99c0960ee8a028129016a">XPeng</a>）</td></tr>
+        <tr><td class="name">Huawei ADS 4</td><td>D／E 變體：WEWA，雲端 World Engine 加車端 World Action Model</td><td>L2+ 量產（尊界 S800 首發）</td><td>公司宣稱延遲降 50%、重煞率降 30%</td><td class="num">2025-04</td><td><span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span><span class="term" data-def="公司自述、沒有經過獨立驗證的效能或安全宣稱。">【行銷】</span>（<a href="https://autonews.gasgoo.com/articles/ev/huawei-qiankun-intelligent-driving-moving-another-step-forward-2013967408870301697">Gasgoo</a>）</td></tr>
+        <tr><td class="name">Momenta</td><td>D：自稱中國首個量產的 E2E 強化學習大模型（R6）</td><td>L2+ 量產（例如 FAW Toyota bZ5）</td><td>官方：從 80 億公里提煉出 1 億「黃金」樣本</td><td class="num">2026-03</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span><span class="term" data-def="公司自述、沒有經過獨立驗證的效能或安全宣稱。">【行銷】</span>（<a href="https://momenta.ai/en/article/563.html">Momenta</a>）</td></tr>
+        <tr><td class="name">Horizon Robotics HSD</td><td>D：官方稱 one-stage end-to-end，跑在 Journey 6P 上</td><td>L2 城市 NOA；2025-11 起交車（EXEED ET5 等）</td><td>官方產品頁。據 36Kr（2025-08）：2025-01 版仍是「兩段式加規則兜底」，2025-08 版改為一段式、「不再依賴規則兜底」，但<strong>仍保留輕量後處理與 safety verification 模組</strong></td><td class="num">2025-11</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>產品頁（<a href="https://www.horizon.auto/en/solutions/horizon-superdrive">Horizon</a>）加<span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>（<a href="https://eu.36kr.com/en/p/3438935084649859">36Kr</a>）</td></tr>
+        <tr><td class="name">Baidu Apollo Go</td><td>F：ADFM 大模型加「十層安全冗餘、六種 <span class="term" data-def="Minimal risk condition，最小風險狀態：系統無法繼續正常行駛時要把車帶到的狀態，例如靠邊停妥。">MRC</span> 策略」</td><td>L4 Robotaxi</td><td>Apollo Day 2024</td><td class="num">2024-05</td><td><span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span><span class="term" data-def="公司自述、沒有經過獨立驗證的效能或安全宣稱。">【行銷】</span>（<a href="https://autonews.gasgoo.com/articles/news/baidu-apollo-launches-apollo-adfm-large-model-sixth-gen-unmanned-robotaxi-at-apollo-day-2024-70033042">Gasgoo</a>）</td></tr>
+        <tr><td class="name">Autoware（開源）</td><td>A → F：roadmap 定為「E2E 為主模式，component-based 堆疊平行運作當安全底層」；Autoware 2.0 支援 rule-based、E2E、hybrid 參考堆疊和 generator-selector</td><td>開源參考（TIER IV 等商用）</td><td>官方多年 roadmap；2.0 release</td><td class="num">roadmap 2025；2.0 於 2026-11-02</td><td><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>（<a href="https://docs.autoware.org/main/home/roadmap/multi-year-roadmap/">Autoware roadmap</a>）加<span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>2.0 發布報導（<a href="https://www.unite.ai/tier-iv-leads-autoware-2-0-ecosystem-for-ai-defined-vehicles/">Unite.ai</a>）</td></tr>
+        <tr><td class="name">Apollo（開源）</td><td>A：Apollo Open Platform 10.0 圍繞 ADFM 重構</td><td>開源參考</td><td>2024-12 發布</td><td class="num">2024-12</td><td><span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>（<a href="https://autonews.gasgoo.com/articles/news/baidu-launches-apollo-open-platform-100-to-advance-autonomous-driving-development-70035320">Gasgoo</a>）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>誰「真的」在跑什麼</h2>
+    <p><strong>有人監督的 L2、L2+：一段式 E2E 已是行銷主流，中國市場尤其明顯。</strong>Tesla、Horizon、Momenta、XPeng、Huawei、Li Auto 都宣稱 E2E 或 VLA 已經量產。但這些全是 <span class="term" data-def="SAE J3016 的分級。L2 是駕駛輔助，駕駛人必須全程監督；L3 起在特定條件下由系統負責駕駛；L4 在限定範圍內完全不需要駕駛人。">SAE L2</span>，駕駛人負責監督，安全論證可以靠駕駛人接管：XPeng 官方明說「remains a supervised intelligent driving system」，Horizon 也寫「Car drives, human supervises」。外部也無法驗證「是否真的沒有規則層」：連最激進宣稱「去除規則兜底」的 Horizon HSD，據報導也仍保留輕量後處理和安全驗證模組<span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>（2025 年 8 月）。也就是說，「沒有規則」通常是指沒有規則式<strong>規劃</strong>，不是沒有安全檢查；AEB 這類被動安全功能通常仍是獨立的法規功能，例如 Horizon 的產品頁另外列出「Proactive Safety Always ON」。此外，中國廠商的「一段式」「VLA」「WA」定義並不一致，資料多是發表會說法，缺少論文等級的技術揭露。</p>
+    <p><strong>無人 L4：唯一規模化營運的 Waymo 明確走混合路線。</strong>Waymo 的 Foundation Model 本身是大型學習模型（有 VLM、有 world decoder），但它保留並使用物件、語意屬性、roadgraph 這些結構化表示，有獨立的 onboard validation layer 驗證生成的軌跡，並透過蒸餾得到較小的車端 Student 模型，再用 Simulator 加 Critic 以 RL 訓練 Driver。這不是放棄 E2E，而是 <strong>E2E 式的大模型、可監督的中間表示、獨立驗證</strong>三者並存。早在 2018 年，Waymo 的 <a href="https://arxiv.org/abs/1812.03079">ChauffeurNet</a> 就用感知輸出這種中層表示當輸入，並指出純模仿學習不夠，必須合成擾動過的「最差」情況。</p>
+    <p><strong>供應商的量產架構都含獨立安全堆疊。</strong>NVIDIA 給 OEM 量產的 DRIVE AV 明確是「E2E 加平行的 classical safety stack」，並宣稱 DriveOS 6.0 符合 ISO 26262 ASIL D（<a href="https://blogs.nvidia.com/blog/drive-av-mercedes-benz-cla-euro-ncap-safety-award">NVIDIA</a>）。Mobileye 的 PGF 是 Primary、Guardian、Fallback 三層。需要向車廠交代安全案例的供應商都這樣做，原因見<a href="../safety/">安全層那一頁</a>。</p>
+    <p><strong>Tesla 的公開技術資訊其實很少。</strong>v12 release note 的「single end-to-end neural network」是一手文字，之後關於輔助輸出、世界模擬器的細節都來自演講的二手轉述。Robotaxi 營運（2025 年 6 月起附安全監控員、2026 年 1 月起部分無人）也只有二手報導（<a href="https://teslanorth.com/2026/01/22/teslas-robotaxi-is-now-publicly-driving-with-nobody-inside">Teslanorth</a>），沒有可比的公開安全數據。Tesla 的證據是 L2 的使用體驗和自報數據；它的資料量（數百萬段 clip 加上百萬級車隊）是它選這個架構的前提，不是結果。<strong>不應把 Tesla 當成「E2E 已被證明可以無人化」的證據。</strong></p>
+    <p><strong>收斂方向。</strong>原本主打 E2E 的玩家都在補結構和安全層：Wayve 據報導自述 E2E 不足以保證規模化安全，Tesla 據報導展示可以探查的中間輸出。原本主打模組化的玩家則都把模組換成大模型：Mobileye 在模組內用 E2E 學習、Waymo 用 foundation model、Autoware 把 E2E 列為主模式。終點看起來是同一個地方：<strong>學習式核心、結構化中間表示、獨立安全層</strong>。</p>
+
+    <h2>六類架構的比較</h2>
+    <p>評等是相對值，依據是上面的部署現況、<a href="../evaluation/">評估那一頁</a>的學術證據和<a href="../safety/">安全層那一頁</a>的安全論證，再加上工程判斷；判斷的部分有註明。</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp wide">
+      <thead><tr><th>面向</th><th>A. 傳統模組化</th><th>B. 多任務 BEV 感知加規則／最佳化 planner</th><th>C. 兩段式 E2E</th><th>D. 一段式 E2E</th><th>E. VLA</th><th>F. 任一種加獨立安全層</th></tr></thead>
+      <tbody>
+        <tr><td class="name">穩定性、可重現性</td><td>高（規則是確定的），但介面處邊界情況多</td><td>高（感知是統計的，規劃是確定的）</td><td>中（planner 隨重訓而變）</td><td>低到中（對種子和資料變動敏感，見 Codevilla）</td><td>低到中（再加上推理和動作的一致性問題）</td><td>底線由安全層決定</td></tr>
+        <tr><td class="name">可驗證性、安全案例</td><td>最好</td><td>好（感知有元件級指標，planner 是確定的）</td><td>中</td><td>差（需要大量統計證據）</td><td>最差（研究階段）</td><td>主系統差，但整體因安全層變好</td></tr>
+        <tr><td class="name">資料需求</td><td>低到中（各任務分別標註）</td><td>中（3D 框、車道、occupancy 標註；可以自動標註）</td><td>中高（需要完整駕駛 log 加感知標註）</td><td><strong>極高</strong>（數百萬段 clip 等級）</td><td>極高，再加語言和推理標註</td><td>主系統的需求，加上安全層的少量需求</td></tr>
+        <tr><td class="name">車端算力</td><td>低到中</td><td>中（共用一個 backbone，比多個網路省）</td><td>中高（UniAD 在 A100 上 1.8 FPS；SparseDrive-S 在 RTX 4090 上 9.0 FPS）</td><td>中到高</td><td>高（10B 參數級，需要蒸餾）</td><td>多 10–30%<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span></td></tr>
+        <tr><td class="name">訓練和基礎設施算力</td><td>低</td><td>中</td><td>中高</td><td>極高</td><td>極高</td><td>—</td></tr>
+        <tr><td class="name">除錯</td><td>最容易（逐模組定位）</td><td>容易（看 head 輸出就知道是感知還是規劃錯）</td><td>中</td><td>難（只能靠 probing、輔助輸出、資料歸因）</td><td>難（語言解釋不一定忠實）</td><td>安全層的觸發 log 本身就是很好的除錯訊號</td></tr>
+        <tr><td class="name">城市互動能力（舒適度、類人）</td><td>差</td><td>中</td><td>中好</td><td>好（業界宣稱）</td><td>好（宣稱長尾推理更好，證據有限）</td><td>—</td></tr>
+        <tr><td class="name">閉環評估需求</td><td>低（可以做元件測試）</td><td>中</td><td>高</td><td><strong>必須</strong>（沒有它無法判斷好壞）</td><td>必須</td><td>必須</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>算力和資料量兩列是工程估計，不是量測值。車端算力的兩個數字來自 <a href="https://arxiv.org/html/2405.19620">SparseDrive</a> 論文<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>，平台不同，彼此不能直接比較。</p>
+    <p>資料需求這一列也說明了一個常見說法的限制：「E2E 不需要標註，所以資料比較便宜」只對有大車隊、能自動取得駕駛 log 的公司成立；而且沒有輔助任務監督的 E2E，收斂和可解釋性都更差，TransFuser 拿掉輔助 loss 後 route completion 從 92 掉到 78 就是一例。</p>
+
+    <h2>結語</h2>
+    <p>2025–2026 年實際上路的主流是混合架構，不是純端到端，也不是 2018 年那種純模組化：一個大型學習式核心（BEV 多任務網路，或從感測器到軌跡的大模型），保留明確的中間表示（物件、地圖元素、occupancy），再外掛一個獨立、可驗證的安全層。一段式 E2E 目前只在有人監督的 L2 量產，駕駛人就是最後的 fallback。過時的是「每個任務一個獨立小網路，加上大量手寫 fusion」，不是「明確介面」；比起「端到端還是模組化」，更能區分架構的是三件事：中間表示是否明確、規劃是否學習、有沒有獨立安全層。</p>
+    <p>多任務 BEV 感知（B 類）本身怎麼融合 LiDAR 和相機，見 <a href="../../lidar-camera-fusion/">LiDAR 與相機融合 3D 偵測</a>系列。各類架構的「穩定」有多少學術證據，見<a href="../evaluation/">評估那一頁</a>；安全層為什麼是標準配備，見<a href="../safety/">安全層那一頁</a>。</p>
+    <p>這一頁沒能確認的事：Tesla FSD v13、v14 的確切架構（是否仍有規則式安全層、輔助輸出做什麼用）沒有一手技術揭露；中國廠商的「一段式」「VLA」「WA」多半只有發表會說法，是否保留規則 fallback 各家說法不一或沒有揭露；Autoware 2.0（2026 年 11 月 2 日發布）只取得二手報導，使用前請直接查 GitHub release notes 和 docs.autoware.org；NVIDIA DRIVE AV 在美國的實際上市狀態（官方 2026 年 1 月稱「by end of this year」）沒有查證。</p>
+  </section>
+</main>
+
+<script>
+// Columns in the diagram: 0 sensors, 1 perception, 2 prediction, 3 planning, 4 control.
+const CX = [10, 144, 338, 532, 726], CW = [90, 150, 150, 150, 90], Y0 = 40, BH = 70, SY = 168, SH = 56;
+const TYPES = [
+  { k: 'A', name: 'A. 傳統模組化',
+    segs: [{ c: [1, 1], t: '感知', s: ['各任務各自網路，', '手寫 fusion、tracking'], kind: 'mix' }, { c: [2, 2], t: '預測', s: ['網路或演算法'], kind: 'mix' }, { c: [3, 3], t: '規劃', s: ['規則或最佳化'], kind: 'rule' }],
+    links: ['明確', '明確'],
+    qa: ['各任務各自一個網路或演算法（2D／3D 偵測、車道、追蹤、預測），由手寫的 fusion、tracking 串起來。', '明確、人可讀：object list、lane graph。', '規則或最佳化。', '沒有特別的安全層，但每個模組都能做元件級測試，可驗證性最好；弱點是介面處的邊界情況多，上游漏檢會直接傳到 planner。'],
+    say: '模組化最好除錯和驗證，但規則式 planner 會隨運行範圍擴大而膨脹。總表裡只有開源的 Apollo 是純 A；Autoware 正從 A 走向 F，Mobileye 是 A／B 加 F。' },
+  { k: 'B', name: 'B. 多任務 BEV 感知',
+    segs: [{ c: [1, 2], t: '多任務 BEV 網路', s: ['共用 backbone → BEV 特徵 →', '3D 偵測、地圖元素、occupancy、運動預測 head'], kind: 'learned' }, { c: [3, 3], t: '規劃', s: ['規則或最佳化'], kind: 'rule' }],
+    links: ['明確'],
+    qa: ['整個感知（含運動預測）是一個多任務網路：多感測器 → 共用 backbone → BEV／3D 特徵 → 多個任務 head。', '明確：各 head 的輸出。', '獨立模組，規則或最佳化。', '沒有特別的安全層，但感知可以用元件級指標驗證，planner 是確定的；看 head 輸出就知道錯在感知還是規劃。'],
+    say: '「感知端到端」不等於「端到端自駕」：B 類的規劃仍是獨立模組。2021–2022 年 Tesla 的 HydraNet、occupancy network 和多數中國 BEV 方案屬於這一類。「多任務 BEV 感知優於多個單任務網路」是證據最強的一條，BEVFusion 等在 nuScenes 上有可重現的結果。' },
+  { k: 'C', name: 'C. 兩段式 E2E', brace: '可微分串接，聯合訓練到規劃目標',
+    segs: [{ c: [1, 1], t: '感知', s: ['網路'], kind: 'learned' }, { c: [2, 2], t: '預測', s: ['網路'], kind: 'learned' }, { c: [3, 3], t: '規劃', s: ['網路'], kind: 'learned' }],
+    links: ['兩者', '兩者'],
+    qa: ['感知、預測、規劃都是神經網路，以可微分方式串接，聯合訓練到規劃目標。', '明確和潛在特徵並存：中間仍有明確的 query 或輸出可以監督。', '學出來的，planner 會隨重訓而變。', '感知部分仍可做元件級論證；learned planner 要靠 closed-loop 情境測試，再加安全層。'],
+    say: '學術界的 UniAD、VAD、SparseDrive 屬於這一類，中國業界說的「兩段式端到端」也是。總表裡目前沒有系統被歸到 C；Horizon HSD 的 2025-01 版據報導是「兩段式加規則兜底」【二手】，2025-08 版改成一段式。' },
+  { k: 'D', name: 'D. 一段式 E2E',
+    segs: [{ c: [1, 3], t: '單一網路：感測器 → 軌跡', s: ['輔助 head（depth、seg、偵測）幫助訓練和視覺化，', '規劃不依賴這些輸出'], kind: 'learned' }],
+    links: [], inner: '潛在',
+    qa: ['感測器到軌跡（或控制）是單一網路。輔助 head 只幫助訓練和視覺化。', '主要是潛在特徵。', '學出來的，和感知是同一個網路。', '幾乎只能靠情境測試、統計里程和外部安全層；在有駕駛人監督的 L2 可行，在 L3、L4 若沒有獨立安全層，目前沒有公開的成功安全案例。'],
+    say: '一段式 E2E 目前只在有人監督的 L2 量產，駕駛人就是最後的 fallback，所以安全論證的門檻比較低。無人 L4 中只有 Tesla 的 Austin Robotaxi 公開宣稱用同一套 FSD 網路，安全證據幾乎全是二手報導。' },
+  { k: 'E', name: 'E. VLM／VLA',
+    segs: [{ c: [1, 3], t: '多模態大型語言模型', s: ['輸出軌跡和／或語言推理；', '常以「快慢雙系統」部署'], kind: 'learned' }],
+    links: [], inner: '語言或潛在 token',
+    qa: ['以多模態大型語言模型為骨幹，整條都是學習的。', '語言 token 或潛在 token。', '學出來的；有的系統另有一個快速的 E2E 模型和慢速的 VLM 並行。', '可驗證性最差，還在研究階段；語言解釋不一定忠實，推理和實際動作也可能不一致。'],
+    say: 'VLA 在量產車上目前是有人監督的 L2、L2+（Li Auto、XPeng 等）；EMMA 和 Alpamayo-R1 都是研究模型，不是直接量產。Waymo Driver 的核心也是 E 類的 foundation model，但整體加上結構化表示和獨立驗證層，所以歸到 F。' },
+  { k: 'F', name: 'F. 混合（含獨立安全層）', safety: true,
+    segs: [{ c: [1, 3], t: '主系統：B、C、D、E 任一種', s: ['學習式為主'], kind: 'learned' }],
+    links: [],
+    qa: ['主系統是 B、C、D、E 任一種；另外有一個獨立、較簡單、可驗證的安全監控或 fallback 堆疊。', '主系統的輸出，加上安全層自己的明確世界模型（物件、自由空間）。', '由主系統決定；安全層只檢查或接手。', '主系統本身仍難論證，但安全論證主要落在簡單的那一層，整體因此變好。'],
+    say: '唯一規模化營運的無人 L4（Waymo）和兩家給車廠供貨的供應商（NVIDIA、Mobileye）都屬於這一類。原本主打 E2E 的在補結構和安全層，原本主打模組化的在把模組換成大模型，終點看起來是同一個地方。' },
+];
+const COS = [
+  { name: 'Tesla FSD v12+', ty: ['D'], cls: 'D，據稱帶輔助輸出', form: 'L2 監督式；Austin Robotaxi', date: '2023-12／2024-01', ev: '【一手】release note；輔助輸出和世界模擬器的細節是【二手】（2025-10）' },
+  { name: 'Waymo Driver', ty: ['F'], cls: 'F，以 E 類 foundation model 為核心', form: 'L4 無人 Robotaxi', date: '2025-12', ev: '【一手】' },
+  { name: 'Waymo EMMA', ty: ['E'], cls: 'E（研究）', form: '研究，非量產', date: '2024-10', ev: '【一手】' },
+  { name: 'Mobileye', ty: ['A', 'B', 'F'], cls: 'A／B 加 F', form: '量產 ADAS、Surround ADAS；Robotaxi 開發中', date: '2025-07', ev: '【一手】' },
+  { name: 'NVIDIA DRIVE AV', ty: ['F'], cls: 'F', form: 'L2 point-to-point，Mercedes CLA', date: '2026-01', ev: '【一手】' },
+  { name: 'NVIDIA Alpamayo-R1', ty: ['E'], cls: 'E（VLA）', form: '開放研究模型，非直接量產', date: '2025-10（v2 2026-01）', ev: '【一手】【論文自報】' },
+  { name: 'Wayve AI Driver', ty: ['D', 'E'], cls: 'D／E', form: 'Nissan 次世代 ProPILOT（L2，日本 FY2027 起）', date: '2025-04／2025-09', ev: '【一手】Nissan；安全層的自述是【二手】（2026-07）' },
+  { name: 'Li Auto', ty: ['E'], cls: 'E：E2E 加 VLM → VLA', form: 'L2+ 量產', date: '2024-02', ev: '【一手】論文；量產時程是【二手】' },
+  { name: 'XPeng', ty: ['D', 'E'], cls: 'D／E（VLA 2.0）', form: 'L2 監督式；全球交付 2027 起', date: '2026-03', ev: '【一手】；沒有描述安全層' },
+  { name: 'Huawei ADS 4', ty: ['D', 'E'], cls: 'D／E 變體（WEWA）', form: 'L2+ 量產', date: '2025-04', ev: '【二手】【行銷】' },
+  { name: 'Momenta', ty: ['D'], cls: 'D（R6）', form: 'L2+ 量產', date: '2026-03', ev: '【一手】【行銷】' },
+  { name: 'Horizon HSD', ty: ['D'], cls: 'D（one-stage）', form: 'L2 城市 NOA，2025-11 起交車', date: '2025-11', ev: '【一手】產品頁；仍保留後處理和安全驗證模組是【二手】' },
+  { name: 'Baidu Apollo Go', ty: ['F'], cls: 'F', form: 'L4 Robotaxi', date: '2024-05', ev: '【二手】【行銷】' },
+  { name: 'Autoware（開源）', ty: ['A', 'F'], cls: 'A → F', form: '開源參考', date: 'roadmap 2025；2.0 於 2026-11-02', ev: '【一手】roadmap；2.0 是【二手】' },
+  { name: 'Apollo（開源）', ty: ['A'], cls: 'A', form: '開源參考', date: '2024-12', ev: '【二手】' },
+];
+const NONE = { C: '總表裡目前沒有系統歸到 C。' };
+const QS = ['哪些部分是學習的', '模組之間傳什麼', '規劃怎麼做', '有沒有獨立安全層，安全怎麼論證'];
+
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const state = { k: 'F' };
+
+// Evidence labels in the strings become hover terms, same definitions as the prose.
+const DEF = {
+  '一手': '公司官方部落格、論文、新聞稿，或標準機構的頁面。',
+  '二手': '新聞或第三方的摘要轉述，找不到一手來源時才用。',
+  '行銷': '公司自述、沒有經過獨立驗證的效能或安全宣稱。',
+  '論文自報': '作者在自己的論文裡報告的數字。',
+  '工程判斷': '撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。',
+};
+const rich = t => t.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  .replace(/【(一手|二手|行銷|論文自報|工程判斷)】/g, (m, k) => `<span class="term" data-def="${DEF[k]}">${m}</span>`);
+
+function block(svg, x, y, w, h, kind, title, sub) {
+  const g = el('g', { class: 'blk ' + kind }, svg);
+  el('rect', { x, y, width: w, height: h, rx: 6 }, g);
+  const cx = x + w / 2, top = y + h / 2 - (sub.length * 15) / 2;
+  el('text', { class: 't', x: cx, y: top + 4 }, g).textContent = title;
+  sub.forEach((s, i) => { el('text', { class: 's', x: cx, y: top + 21 + i * 15 }, g).textContent = s; });
+}
+function arrow(svg, d, latent) {
+  el('path', { class: 'flow' + (latent ? ' latent' : ''), d, 'marker-end': 'url(#m-flow)' }, svg);
+}
+
+function draw(T) {
+  const svg = $('#dia'); svg.replaceChildren();
+  const defs = el('defs', {}, svg);
+  const mk = el('marker', { id: 'm-flow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto' }, defs);
+  el('path', { d: 'M0 0L10 5L0 10z', style: 'fill: var(--muted)' }, mk);
+  const mid = Y0 + BH / 2;
+  el('text', { class: 'lane', x: 10, y: 22 }, svg).textContent = '主系統';
+  block(svg, CX[0], Y0, CW[0], BH, 'rule', '感測器', ['相機、LiDAR']);
+  block(svg, CX[4], Y0, CW[4], BH, 'rule', '控制', ['PID／MPC']);
+  T.segs.forEach((s, i) => {
+    const x = CX[s.c[0]], w = CX[s.c[1]] + CW[s.c[1]] - x;
+    block(svg, x, Y0, w, BH, s.kind, s.t, s.s);
+    if (i > 0) {
+      const px = CX[T.segs[i - 1].c[1]] + CW[T.segs[i - 1].c[1]], lab = T.links[i - 1];
+      arrow(svg, `M${px} ${mid}H${x - 2}`, lab === '潛在');
+      el('text', { class: 'tag', x: (px + x) / 2, y: mid + 18 }, svg).textContent = lab;
+    }
+  });
+  const first = CX[T.segs[0].c[0]], last = T.segs[T.segs.length - 1].c[1], lastX = CX[last] + CW[last];
+  arrow(svg, `M${CX[0] + CW[0]} ${mid}H${first - 2}`, false);
+  el('text', { class: 'tag', x: (CX[0] + CW[0] + first) / 2, y: mid + 18 }, svg).textContent = '原始資料';
+  if (T.inner) el('text', { class: 'tag', x: (first + lastX) / 2, y: Y0 + BH + 16 }, svg).textContent = `內部：${T.inner}`;
+  if (T.brace) {
+    el('path', { class: 'brace', d: `M${first} ${Y0 - 6}V${Y0 - 14}H${lastX}V${Y0 - 6}` }, svg);
+    el('text', { class: 'brace-t', x: (first + lastX) / 2, y: Y0 - 19 }, svg).textContent = T.brace;
+  }
+  if (!T.safety) {
+    arrow(svg, `M${lastX} ${mid}H${CX[4] - 2}`, false);
+    el('text', { class: 'tag', x: (lastX + CX[4]) / 2, y: mid + 18 }, svg).textContent = '軌跡';
+    return;
+  }
+  // Type F: the main system's trajectory goes through the independent safety layer before control.
+  el('text', { class: 'lane', x: 10, y: SY - 8 }, svg).textContent = '安全層';
+  block(svg, CX[1], SY, CX[3] + CW[3] - CX[1], SH, 'rule', '獨立安全層：較簡單、可驗證', ['自己的明確世界模型（物件、自由空間），檢查主系統的軌跡']);
+  const sm = SY + SH / 2;
+  arrow(svg, `M${CX[0] + CW[0] / 2} ${Y0 + BH}V${sm}H${CX[1] - 2}`, false);
+  arrow(svg, `M${(first + lastX) / 2} ${Y0 + BH}V${SY - 2}`, false);
+  el('text', { class: 'tag', x: (first + lastX) / 2 + 8, y: (Y0 + BH + SY) / 2 + 4, 'text-anchor': 'start' }, svg).textContent = '提議的軌跡';
+  arrow(svg, `M${CX[3] + CW[3]} ${sm}H${CX[4] + CW[4] / 2}V${Y0 + BH + 2}`, false);
+  el('text', { class: 'tag', x: CX[3] + CW[3] + 8, y: sm + 16, 'text-anchor': 'start' }, svg).textContent = '放行或改走 fallback';
+}
+
+function render() {
+  const T = TYPES.find(t => t.k === state.k);
+  const bar = $('#types');
+  bar.replaceChildren(bar.firstElementChild, ...TYPES.map(t => {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = t.name;
+    b.classList.toggle('chosen', t.k === state.k);
+    b.addEventListener('click', () => { state.k = t.k; render(); });
+    return b;
+  }));
+  draw(T);
+  $('#t-name').textContent = T.name;
+  $('#qa').innerHTML = T.qa.map((a, i) => `<li><span class="q">${QS[i]}</span>${rich(a)}</li>`).join('');
+  const list = COS.filter(c => c.ty.includes(T.k));
+  const items = list.map(c => `<li><span class="nm">${c.name}</span>：${rich(c.cls)}<span class="meta">${rich(c.form)}；${c.date}；${rich(c.ev)}</span></li>`);
+  if (NONE[T.k]) items.push(`<li class="none">${NONE[T.k]}</li>`);
+  $('#cos').innerHTML = items.join('');
+  $('#say').innerHTML = rich(T.say);
+  site.terms(document.querySelector('.bench'));
+}
+render();
+</script>
+</body>
+</html>

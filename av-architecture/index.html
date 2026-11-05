@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>量產自駕的架構走向</title>
+<meta name="description" content="調研系列：量產車上的自駕架構走向端到端、模組化，還是混合。誰在車上跑哪一種架構、open-loop 分數為什麼證明不了會開車、為什麼大家都外掛一個獨立的安全層。資料截至 2026 年 11 月。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
+<style>
+/* 這一頁特有的：來源標記表和系列目錄。 */
+table.cmp { min-width: 28rem; }
+.entries { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); counter-reset: n; }
+.entries li { border-bottom: 1px solid var(--line); counter-increment: n; }
+.entry { display: flex; align-items: baseline; gap: 1rem; padding: 1.1rem 0; color: inherit; text-decoration: none; }
+.entry::before { content: counter(n, decimal-leading-zero); font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); flex: 0 0 2rem; }
+.entry:focus-visible { outline-offset: 4px; }
+.entry h2 { font-size: 1.1rem; line-height: 1.35; margin: 0; }
+.entry h2 .badge { margin-left: 0.3rem; vertical-align: 0.15em; }
+a.entry:hover h2 { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.entry p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.95rem; }
+.entry .text { flex: 1 1 16rem; min-width: 0; }
+</style>
+</head>
+<body>
+<main class="page index">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1>量產自駕的架構走向</h1>
+    <p class="lead">「端到端」和「模組化」常被說成兩條路線，但 2025–2026 年實際上路的系統，多半是兩者的混合：一個大型學習式核心，保留明確的中間表示，再外掛一個獨立、可驗證的安全層。一段式端到端目前只在有人監督的 L2 量產；學術上「端到端更穩定」的證據比宣傳弱得多；安全標準沒有禁止端到端，但它們要的證據在黑箱上很難取得，所以業界的標準解法是「學習式主系統加簡單的安全監控器」。這個系列照這三件事整理公開的證據。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、公司官方資料、新聞報導和標準文件後撰寫。</p>
+      <p>架構類型的定義、open-loop 評估為什麼會誤導、安全論證怎麼分層，這些不會過期；誰部署了什麼、各公司的宣稱和法規的修訂進度會變。公司的說法都是截至這一天的狀態，超過六個月的業界說法引用前請重新查證。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>來源怎麼標</h2>
+    <p>這個領域的資料很多來自公司自己的發表會和新聞稿，可信度差很多。系列裡的業界說法和數字都標了來源類型：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>標記</th><th>意思</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span></td><td>公司官方部落格、論文、新聞稿，或標準機構的頁面</td></tr>
+        <tr><td class="name"><span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span></td><td>新聞或第三方的摘要轉述，找不到一手來源時才用</td></tr>
+        <tr><td class="name"><span class="term" data-def="公司自述、沒有經過獨立驗證的效能或安全宣稱。">【行銷】</span></td><td>公司自述、沒有經過獨立驗證的效能或安全宣稱</td></tr>
+        <tr><td class="name"><span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span></td><td>作者在自己的論文裡報告的數字</td></tr>
+        <tr><td class="name"><span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span></td><td>撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>業界的說法都附上證據日期。來源都在行內連結；公司的說法只代表該公司在那個日期公開說了什麼，不代表經過驗證。</p>
+  </section>
+
+  <ul class="entries">
+    <li>
+      <a class="entry" href="landscape/">
+        <div class="text">
+          <h2>六種架構，誰在車上跑哪一種 <span class="badge outline">調研</span></h2>
+          <p>從傳統模組化、多任務 BEV 感知、兩段式和一段式端到端、VLA，到加上獨立安全層的混合架構。挑一類，看資料流哪裡是學習的、模組之間傳什麼，以及 Tesla、Waymo、Mobileye、NVIDIA 和中國廠商各被歸到哪裡、證據有多硬。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="evaluation/">
+        <div class="text">
+          <h2>Open-loop 分數證明不了會開車 <span class="badge outline">調研</span></h2>
+          <p>只看自車歷史狀態的 MLP 就能在 nuScenes open-loop 上打平大型端到端模型。一步一步比較 open-loop 和 closed-loop，看分數較好的模型為什麼在閉環裡撞車；再整理端到端和模組化各自已知的失效模式。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="safety/">
+        <div class="text">
+          <h2>標準與獨立安全層 <span class="badge outline">調研</span></h2>
+          <p>ISO 26262、SOTIF、ISO/PAS 8800、UL 4600 沒有禁止端到端，但它們要的可分解需求和可追溯證據在黑箱上很難取得，所以業界普遍採用 Simplex：學習式主系統加一個簡單、可驗證的安全層。看安全層什麼時候介入，以及它為什麼要有自己的感知。</p>
+        </div>
+      </a>
+    </li>
+  </ul>
+</main>
+</body>
+</html>

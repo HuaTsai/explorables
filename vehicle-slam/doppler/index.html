@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FMCW Doppler：直接量出自車速度</title>
+<meta name="description" content="FMCW 光達每個點都附帶徑向速度，靜止點的徑向速度就是一條關於自車速度的方程式。一步一步看 RANSAC 怎麼挑出靜止點、前車擋住大半視野時怎麼選錯、視野變窄時側向速度為什麼變難定，以及為什麼 Doppler 量不到角速度、在隧道裡實際幫了多少。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Stepper workbench over one frame of RANSAC: scene presets, FOV and lead-car
+   sliders, then three panels: the top-down scene (points coloured by the current hypothesis), the velocity
+   plane where every Doppler measurement is a line, and the highlighted pseudo-code with the running numbers. */
+.sliders { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem 1.25rem; }
+@media (max-width: 760px) { .sliders { grid-template-columns: minmax(0, 1fr); } }
+.sliders label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; }
+.sliders .v { font-family: var(--font-mono); font-weight: 600; }
+.sliders input { width: 100%; }
+.work.dp { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.95fr); }
+.view svg { width: 100%; height: auto; display: block; }
+.view text { font-family: var(--font-body); font-size: 10.5px; fill: var(--muted); }
+.view .rail { stroke: var(--muted); stroke-width: 1.4; }
+.view .obj { fill: var(--line); stroke: var(--muted); stroke-width: 1; }
+.view .arrow { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+.view .fov { fill: var(--line); opacity: 0.35; }
+.view .ego { fill: var(--ink); }
+.view .pt { fill: var(--muted); }
+.view .pt.in { fill: var(--hit); }
+.view .pt.out { fill: var(--miss); }
+.view .pt.pick { fill: var(--mark); stroke: var(--ink); stroke-width: 1.6; }
+.view .axis { stroke: var(--line); stroke-width: 1; }
+.view .ln { stroke: var(--muted); stroke-width: 0.8; opacity: 0.35; }
+.view .ln.in { stroke: var(--hit); opacity: 0.55; }
+.view .ln.out { stroke: var(--miss); opacity: 0.55; }
+.view .ln.pick { stroke: var(--ink); stroke-width: 1.8; opacity: 1; }
+.view .truth { stroke: var(--ink); stroke-width: 1.6; }
+.view .hyp { fill: var(--mark); stroke: var(--ink); stroke-width: 1.6; }
+.view .best { fill: none; stroke: var(--hit); stroke-width: 2; }
+.view .vhat { fill: var(--hit); }
+.view .naive { fill: var(--miss); }
+.view .lab { fill: var(--ink); font-size: 10.5px; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 車輛定位與 SLAM</a>
+    <h1>FMCW Doppler：直接量出自車速度</h1>
+    <p class="lead">FMCW 光達的每個回波除了距離，還附帶一個徑向速度。靜止的點看起來都以自車速度的反方向移動，所以一幀上千個點，就是一組關於自車速度的線性方程式。這一頁看這組方程式怎麼解、能觀測什麼、不能觀測什麼，以及它在隧道這類退化場景裡實際幫了多少。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、官方文件和程式庫後撰寫。</p>
+      <p>徑向速度和自車速度的關係、角速度為什麼不可觀，這些幾何不會過期；Doppler 輔助里程計的誤差數字和開源實作的維護狀態會改變，而且目前的量化證據幾乎都來自同一個研究圈。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>每個靜止點都是一條方程式</h2>
+    <p><span class="term" data-def="Frequency-modulated continuous wave，調頻連續波。光達發出頻率連續變化的光，從回波的頻率差同時算出距離和沿視線方向的相對速度（Doppler 頻移）。">FMCW</span> 光達每個回波都給出徑向相對速度 v<sub>r</sub>。對靜止的點 i，設 d<sub>i</sub> 是單位射線方向、v<sub>s</sub> 是感測器的線速度，則 v<sub>r,i</sub> ≈ −d<sub>i</sub>ᵀv<sub>s</sub>（正負號依廠商定義）。一幀上千個點就是一個超定的線性問題，最小二乘就能解出 v<sub>s</sub>。它不需要資料關聯：不必知道這個點上一幀在哪裡，這是它和 ICP 最大的不同。</p>
+    <p>在平面上看最清楚。每條方程式 d<sub>i</sub>ᵀv = −v<sub>r,i</sub> 是速度平面 (v<sub>x</sub>, v<sub>y</sub>) 上的一條直線，直線的法向量就是射線方向。所有靜止點的直線都通過真正的自車速度；移動物體上的點，直線通過「自車速度減去物體速度」那一點。射線方向張得越開，直線交得越乾淨；射線全擠在正前方，直線幾乎平行，交點在側向上就很難定。</p>
+    <p>動態物體和錯誤的反射用 <span class="term" data-def="Random sample consensus。反覆隨機取最少需要的幾個點解出一組參數，數有多少點和它一致（內點），留下內點最多的那組。">RANSAC</span> 剔除。<a href="https://arxiv.org/abs/2303.06511">Need-for-Speed</a> 每幀跑 20 次 RANSAC，在運動學約束下解 2 個自由度，兩個點就能解，RANSAC 本身只要 0.95 ms。<a href="https://arxiv.org/abs/2201.11944">DICP</a> 則把 Doppler 殘差和點到平面的幾何殘差放進同一個 ICP 目標函數，同時剔除動態點。下面是平面版本，解 (v<sub>x</sub>, v<sub>y</sub>)：</p>
+<pre class="code">1  每個回波：方向 dᵢ、徑向速度 v_r,i
+2  重複 20 次：
+3    隨機取 2 個點
+4    解 dᵢᵀv = −v_r,i（2 條方程式、2 個未知數）
+5    數內點：|v_r,j + dⱼᵀv| &lt; τ 的點
+6    內點比目前最多的還多 → 記下這組 v
+7  用最多內點那組的全部內點做最小二乘，得到 v̂
+8  輸出 v̂ 和共變異數 σ²(DᵀD)⁻¹</pre>
+    <p>第 5 行假設「靜止點佔多數」：靜止點的直線全部通過同一點，所以真正的自車速度會拿到最多內點。第 8 行的 D 是內點射線方向疊成的矩陣，DᵀD 和選型頁的資訊矩陣是同一個東西，只是這裡的「法向量」換成了射線方向。</p>
+  </section>
+
+  <section class="bench" aria-label="Doppler 自車速度的 RANSAC">
+    <div class="row presets" id="presets"><span class="lbl">情境</span></div>
+    <div class="row">
+      <div class="sliders">
+        <label>水平視野 <span class="v" id="v-fov"></span><input type="range" id="in-fov" min="20" max="360" step="5" aria-label="水平視野"></label>
+        <label>前車距離 <span class="v" id="v-d"></span><input type="range" id="in-d" min="4" max="40" step="1" aria-label="前車距離"></label>
+      </div>
+      <p class="hint">玩具場景：2D 俯視，視野內平均分佈 64 條射線，量程 60 m，路邊只有護欄；自車和其他車的速度、內點門檻 τ = 0.1 m/s 都是示意值。每點的 Doppler 雜訊 3 cm/s 取自 Picking Up Speed 用的 Aeva Aeries I，每幀 20 次 RANSAC 取自 Need-for-Speed；這裡解的是平面上的 (v<sub>x</sub>, v<sub>y</sub>)，Need-for-Speed 在運動學約束下解的是前進速度和偏航率，兩者都只要兩個點。加粗外框的是這一次抽到的兩個點，綠色是這一組的內點，最後一步的紫色是被剔除的點。</p>
+    </div>
+    <div class="row">
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
+      </div>
+    </div>
+    <div class="row work dp">
+      <div class="panel">
+        <div class="panel-head"><span>俯視圖</span><span class="sub" id="scene-sub"></span></div>
+        <div class="panel-body view"><svg id="scene" viewBox="0 0 300 150" role="img" aria-label="自車、護欄、其他車和打到的點的俯視圖"></svg></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>速度平面</span><span class="sub">每個點是一條直線</span></div>
+        <div class="panel-body view"><svg id="vplane" viewBox="0 0 300 240" role="img" aria-label="速度平面：每個 Doppler 量測是一條直線，標出真值、目前的假設和最後的估計"></svg></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>RANSAC 加最小二乘</span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+        <div class="vars" id="vars"></div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>能觀測什麼、不能觀測什麼</h2>
+    <p><strong>單顆 FMCW 光達量不到角速度。</strong>Need-for-Speed 的摘要原文是「angular velocity is not observable with a single FMCW lidar」。論文 §IV-A 證明單一感測器時量測矩陣秩缺 3，§IV-B 證明加一顆陀螺儀就完全可觀。不靠陀螺儀的話，需要三顆不共線的 FMCW 光達，而且這只是理論結果。</p>
+    <details>
+      <summary>直覺：旋轉不產生徑向速度</summary>
+      <p>這是標準的運動學，不是論文的證明本身。感測器以線速度 v、角速度 ω 運動時，在感測器座標裡，位置 p 的靜止點看起來以 −v − ω × p 移動。徑向速度是它在射線方向 d = p／|p| 上的分量：dᵀ(−v − ω × p)。ω × p 一定垂直於 p，所以 dᵀ(ω × p) = 0，ω 從每一條方程式裡消失。六個未知數（v 和 ω）裡只有 v 的三個出現在量測裡，這就是秩缺 3。</p>
+      <p>多顆感測器裝在不同位置 r<sub>k</sub> 時，第 k 顆的線速度是 v + ω × r<sub>k</sub>，ω 透過力臂 r<sub>k</sub> 重新出現在量測裡，所以多顆不共線的感測器才能把角速度解出來。</p>
+    </details>
+    <p><strong>透過力臂的弱可觀性。</strong>如果把速度表示在車體後軸，並強制「側向速度 = 0、垂直速度 = 0」的<span class="term" data-def="限制運動方向的約束。一般車輛的輪子不會側滑時，後軸中心只能沿車頭方向前進，側向和垂直速度都是 0。">非完整約束</span>，感測器處的側向速度就等於偏航率乘上感測器到後軸的距離，單一感測器就能解出前進速度和偏航率。<a href="https://doi.org/10.1109/ITSC.2013.6728341">Kellner 等人（ITSC 2013）</a>用單顆 Doppler 雷達正是這樣估計前進速度和偏航率；要估完整的 3 個自由度（含側向速度）就需要多顆雷達。Need-for-Speed 的 RANSAC 也是在這個約束下解 2 個自由度，但正式的估測器仍然用陀螺儀。</p>
+    <p>量級可以估一下<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>：前向光達離後軸大約 3–4 m（依車型而定），偏航率 0.05 rad/s 時，感測器處的側向速度約 0.15–0.2 m/s。單點 Doppler 精度在每秒幾公分的量級（Picking Up Speed 用的 Aeva Aeries I 是 3 cm/s），平均上千點後統計上解得出來。但側滑（高速轉彎、濕滑路面）會直接違反約束，Doppler 的偏差也會直接變成偏航率的偏差；一顆普通的 MEMS 陀螺儀（例如 BMI088，雜訊密度 0.014 °/s/√Hz）量偏航率又準又不依賴假設。所以偏航率應該來自陀螺儀或掃描匹配，Doppler 的力臂解只適合做一致性檢查或備援。</p>
+    <p><strong>視野決定三軸速度觀測得多好</strong><span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。以 120° × 25° 的前向光達為例，射線方向的 x（前進）分量接近 1，所以前進速度觀測最強；y 分量最大約 sin 60° ≈ 0.87，還不錯；z 分量最大只有 sin 12.5° ≈ 0.22，垂直速度觀測弱，但車輛的垂直速度本來就接近 0，可以用約束或先驗處理。workbench 把水平視野拉到 25°，看到的就是垂直方向的情況。好消息是，Doppler 觀測最強的那個軸，正好是 ICP 在隧道和高速公路最容易退化的軸，見<a href="../methods/">選型頁的退化分析</a>。</p>
+
+    <h2>Doppler 能取代 IMU 的哪一部分</h2>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>元件</th><th>在 LIO 裡的角色</th><th>Doppler 能取代嗎？</th></tr></thead>
+      <tbody>
+        <tr><td class="name">陀螺儀</td><td>高頻姿態傳播、旋轉去畸變</td><td><strong>不能。</strong>單一感測器的角速度不可觀（秩缺 3）。只有在非完整約束加力臂的條件下能勉強解出偏航率，無法可靠估測 roll 和 pitch 的角速度</td></tr>
+        <tr><td class="name">加速度計</td><td>① 積分出平移速度和位置；② 提供重力方向（roll、pitch 的參考）；③ 初始化</td><td><strong>部分取代 ①</strong>：Doppler 直接量速度，Need-for-Speed 完全不用加速度計。取代不了 ②，重力方向要靠加速度計，或靠地圖、地面幾何來約束</td></tr>
+        <tr><td class="name">輪速計</td><td>前進速度</td><td><strong>可以，而且更好</strong>：3D、沒有打滑或輪徑誤差，但會受 Doppler 偏差和動態場景影響</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>一句話：Doppler 是一個 3D 速度計，可以取代輪速計，以及加速度計「積分出速度」的那部分角色；陀螺儀它完全取代不了。「用 Doppler 部分取代 IMU」的正確說法是「Doppler 加陀螺儀」，而不是「Doppler 取代 IMU」。</p>
+
+    <h2>證據：退化場景裡幫了多少</h2>
+    <p><a href="https://arxiv.org/abs/2209.03304">Picking Up Speed</a>（Wu、Yoon、Burnett、Kammel、Chen、Vhavle、Barfoot，RA-L 2023）用 Aeva Aeries I（FOV 120° × 30°、10 Hz、Doppler 精度 3 cm/s），比較有沒有 Doppler 的里程計。KITTI 式相對平移誤差（%）<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>序列</th><th>CT-ICP</th><th>STEAM-ICP（沒有 Doppler）</th><th>STEAM-DICP（有 Doppler）</th><th>Doppler-ICP</th></tr></thead>
+      <tbody>
+        <tr><td class="name">01 Baker-Barry 隧道（有車）</td><td class="num">12.26</td><td class="num">12.86</td><td class="num">2.60</td><td class="num">2.60</td></tr>
+        <tr><td class="name">02 Robin Williams 隧道</td><td class="num">9.11</td><td class="num">22.74</td><td class="num">0.74</td><td class="num">1.03</td></tr>
+        <tr><td class="name">04–07 高速公路（幾何中等）平均</td><td class="num">0.38</td><td class="num">0.35</td><td class="num">0.36</td><td class="num">3.00</td></tr>
+        <tr><td class="name">04–07 高速公路，量程限制 40 m，平均</td><td class="num">33.87</td><td class="num">24.50</td><td class="num">2.44</td><td class="num">7.96</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <ul>
+      <li>幾何足夠的場景，Doppler 對精度幾乎沒有幫助（0.35 對 0.36）。它的價值集中在退化場景：隧道、看不遠的高速公路。論文 Fig. 7 寫道，沒有 Doppler 的方法在隧道裡「低估軌跡長度」，這就是典型的沿軸退化。</li>
+      <li>「量程限制 40 m」那一組最能代表前向光達的最壞情況：雨霧、近距離被前車擋住、路邊沒有結構。</li>
+      <li>Doppler-ICP（逐幀、沒有局部地圖）在一般場景反而比較差。重點在於把 Doppler 加進一個好的掃描匹配框架，不是用 Doppler 換掉框架。</li>
+      <li>Need-for-Speed（Doppler 加陀螺儀，不做掃描匹配）的平移誤差是 0.99–1.18%，CT-ICP 是 0.29%，STEAM-ICP 是 0.23%<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>，約是 ICP 的 3.4–5.1 倍（原報告寫 4–5 倍）；但它單執行緒只要 5.64 ms，CT-ICP 要 93.78 ms。適合當低延遲、不需要資料關聯的備援里程計，不適合當唯一來源。</li>
+    </ul>
+    <p>證據等級要說清楚：以上全是<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>，作者群裡有 Aeva 的員工，資料是作者自己收的，沒有找到獨立第三方的重現。<a href="https://github.com/IMRL/FMCW-LIO">FMCW-LIO</a>（RA-L 2024）宣稱在結構退化的環境裡更準、更穩，<a href="https://arxiv.org/abs/2504.11634">Doppler-SLAM</a> 也有類似的宣稱，同樣是<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>。<a href="https://arxiv.org/abs/2309.14590">HeLiPR</a> 資料集收了 FMCW 光達的資料，可以拿來做獨立驗證。</p>
+
+    <h2>開源實作</h2>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>實作</th><th>內容</th><th>授權</th><th>最後 commit</th><th>適用性</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><a href="https://github.com/aevainc/Doppler-ICP">aevainc/Doppler-ICP</a></td><td>DICP（RSS 2022）：逐幀 Doppler 加幾何的聯合 ICP，Python 加 Open3D fork</td><td>MIT</td><td class="num">2024-07</td><td>參考實作；Open3D 主線已內建 Doppler ICP（<code>examples/python/pipelines/doppler_icp_registration.py</code>）</td></tr>
+        <tr><td class="name"><a href="https://github.com/utiasASRL/steam_icp">utiasASRL/steam_icp</a></td><td>連續時間 LO 加 Doppler（Picking Up Speed 在 <code>picking_up_speed</code> 分支）；主線另有 lidar 加陀螺儀、LIO 等變體</td><td>MIT</td><td class="num">2026-02</td><td>授權友善、仍在維護，是比較好的工程起點</td></tr>
+        <tr><td class="name"><a href="https://github.com/IMRL/FMCW-LIO">IMRL/FMCW-LIO</a></td><td>FAST-LIO 風格的 IEKF，加 Doppler 觀測、Doppler 去畸變、動態點剔除</td><td>沒有授權檔</td><td class="num">2026-09</td><td>ROS Noetic、Aeva 的 launch 檔；只能評估，不能直接進產品</td></tr>
+        <tr><td class="name"><a href="https://github.com/Wayne-DWA/Doppler-SLAM">Wayne-DWA/Doppler-SLAM</a></td><td>Doppler 輔助的 LIO、RIO 加回環</td><td>沒有</td><td class="num">2025-11</td><td>repo 只有 README，原始碼沒有釋出</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <h2>實務陷阱</h2>
+    <ul>
+      <li><strong>Doppler 偏差需要校正。</strong>Need-for-Speed 發現 Doppler 量測有非零的偏差，要對每個方位角、仰角格做線性回歸，用訓練資料學出來；他們也發現車停著時位姿會漂，只好把低於 0.03 m/s 的速度直接歸零（§III、§IV）。換一顆感測器，偏差特性和廠內有沒有補償都要重新確認。</li>
+      <li><strong>動態點佔多數時 RANSAC 會選錯</strong><span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。塞車時緊跟大車，前向視野大半是移動物體，「靜止點佔多數」的假設可能不成立。要用陀螺儀加上一幀的速度做門檻檢查，並且監控內點比例。workbench 的「塞車」情境就是這種情況。</li>
+      <li><strong>時間。</strong>逐點時間戳和 Doppler 欄位必須正確輸出到 PointCloud2，FAST-LIO 系和 FMCW-LIO 都需要逐點時間。</li>
+    </ul>
+
+    <h2>結語</h2>
+    <p>Doppler 不需要資料關聯就能直接量出感測器的 3D 線速度，但單顆感測器量不到角速度，所以它取代的是輪速計，以及加速度計「積分出速度」的角色，不是陀螺儀；正確的組合是「Doppler 加陀螺儀」。它的價值集中在退化場景：有 Doppler 時，隧道和量程受限的高速公路誤差降了一個數量級，幾何足夠時幾乎沒有差別；只靠 Doppler 加陀螺儀、不做掃描匹配時，誤差約是 ICP 的 4–5 倍。所以 Doppler 應該補強掃描匹配，不能取代它。</p>
+    <p>退化方向從哪裡來，見<a href="../methods/">選型</a>；Doppler 速度在量產堆疊裡接到哪裡（Autoware 的 gyro_odometer、位姿圖裡的速度因子），見<a href="../stack/">量產堆疊與 IMU</a>。</p>
+    <p>Doppler 輔助的全部量化證據都來自 Aeva 光達和相關的作者群<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>；其他廠牌感測器的 Doppler 偏差、雜訊和動態場景表現都沒有公開驗證，要用 GNSS/INS 參考軌跡自己實測。workbench 只解一幀、平面上的線速度，沒有模擬 Doppler 偏差、垂直方向和逐點的時間差。</p>
+  </section>
+</main>
+
+<script>
+// ---- Toy frame: 2D top-down, sensor at the origin looking along +x. Units: metres, m/s. ----
+const NRAY = 64, RANGE = 60;     // illustrative
+const SIG = 0.03;                // per-point Doppler noise (m/s): Aeva Aeries I, Picking Up Speed
+const TAU = 0.1;                 // inlier threshold (m/s), illustrative
+const ITER = 20;                 // RANSAC iterations per frame, Need-for-Speed
+const MIN_SIN = Math.sin(2 * Math.PI / 180);   // two rays closer than 2 degrees: skip the sample
+const RAILS = [[-200, 6, 200, 6], [-200, -4, 200, -4]];
+const PRESETS = [
+  { name: '開闊道路', fov: 120, scene: 'open', D: 12 },
+  { name: '跟車', fov: 120, scene: 'follow', D: 10 },
+  { name: '塞車', fov: 120, scene: 'jam', D: 5 },
+  { name: '窄視野 25°', fov: 25, scene: 'open', D: 12 },
+  { name: '360°', fov: 360, scene: 'open', D: 12 },
+];
+const SCENE_NAME = { open: '開闊道路', follow: '跟車', jam: '塞車' };
+
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function gauss(r) { let u = 0; while (!u) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+const rectSegs = (x0, y0, x1, y1) => [[x0, y0, x1, y0], [x1, y0, x1, y1], [x1, y1, x0, y1], [x0, y1, x0, y0]];
+
+function build(S) {
+  const ego = S.scene === 'jam' ? [3, 0] : [10, 0];
+  const objs = [];
+  if (S.scene === 'follow') objs.push({ box: [S.D, -1, S.D + 4.5, 1], v: [9, 0] });
+  if (S.scene === 'jam') objs.push({ box: [S.D, -1.3, S.D + 10, 1.3], v: [3, 0] }, { box: [2, 2, 6.5, 3.8], v: [3, 0] }, { box: [3, -3.6, 7.5, -1.8], v: [3, 0] });
+  return { ego, objs };
+}
+
+function cast(W, ang) {
+  const dx = Math.cos(ang), dy = Math.sin(ang);
+  let best = null;
+  const test = (seg, obj) => {
+    const [x1, y1, x2, y2] = seg, ex = x2 - x1, ey = y2 - y1, den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-12) return;
+    const t = (x1 * ey - y1 * ex) / den, s = (x1 * dy - y1 * dx) / den;
+    if (t > 1e-6 && t <= RANGE && s >= 0 && s <= 1 && (!best || t < best.t)) best = { t, obj };
+  };
+  RAILS.forEach(s => test(s, null));
+  W.objs.forEach(o => rectSegs(...o.box).forEach(s => test(s, o)));
+  return best && { x: best.t * dx, y: best.t * dy, d: [dx, dy], obj: best.obj };
+}
+
+function measure(S) {
+  const W = build(S), rng = mulberry32(7), pts = [];
+  const full = S.fov >= 360, n = full ? NRAY : NRAY - 1;
+  for (let k = 0; k < NRAY; k++) {
+    const h = cast(W, (-S.fov / 2 + k * S.fov / n) * Math.PI / 180);
+    if (!h) continue;
+    const vo = h.obj ? h.obj.v : [0, 0];
+    // radial velocity = -d . (v_ego - v_obj) + noise
+    h.vr = -(h.d[0] * (W.ego[0] - vo[0]) + h.d[1] * (W.ego[1] - vo[1])) + SIG * gauss(rng);
+    h.moving = !!h.obj;
+    pts.push(h);
+  }
+  return { W, pts };
+}
+
+const resid = (p, v) => p.vr + p.d[0] * v[0] + p.d[1] * v[1];
+function lsq(pts) {
+  let a = 0, b = 0, c = 0, u = 0, w = 0;
+  pts.forEach(p => { const [x, y] = p.d; a += x * x; b += x * y; c += y * y; u -= x * p.vr; w -= y * p.vr; });
+  const det = a * c - b * b;
+  if (pts.length < 2 || det < 1e-12) return null;
+  return { v: [(c * u - b * w) / det, (a * w - b * u) / det], sx: SIG * Math.sqrt(c / det), sy: SIG * Math.sqrt(a / det) };
+}
+
+function trace(S) {
+  const { W, pts } = measure(S), rng = mulberry32(11), T = [];
+  T.push({ kind: 'init' });
+  let best = null;
+  for (let i = 1; i <= ITER; i++) {
+    const a = Math.floor(rng() * pts.length);
+    let b = Math.floor(rng() * (pts.length - 1)); if (b >= a) b++;
+    const A = pts[a], B = pts[b], det = A.d[0] * B.d[1] - A.d[1] * B.d[0];
+    const ang = Math.asin(Math.min(1, Math.abs(det))) * 180 / Math.PI;
+    if (pts.length < 2 || Math.abs(det) < MIN_SIN) { T.push({ kind: 'iter', i, a, b, ang, v: null, best }); continue; }
+    const v = [(B.d[1] * -A.vr - A.d[1] * -B.vr) / det, (-B.d[0] * -A.vr + A.d[0] * -B.vr) / det];
+    const inl = pts.map(p => Math.abs(resid(p, v)) < TAU), n = inl.filter(Boolean).length;
+    const improved = !best || n > best.n;
+    if (improved) best = { v, n, inl, i };
+    T.push({ kind: 'iter', i, a, b, ang, v, inl, n, improved, best });
+  }
+  const fin = best ? lsq(pts.filter((p, j) => best.inl[j])) : null;
+  T.push({ kind: 'final', best, fin, naive: lsq(pts) });
+  return { W, pts, T };
+}
+
+// ---- DOM ----
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const fx = (v, n = 2) => (Math.round(v * 10 ** n) / 10 ** n).toFixed(n);
+const vec = v => `(${fx(v[0])}, ${fx(v[1])})`;
+const LINES = ['每個回波：方向 dᵢ、徑向速度 v_r,i', '重複 20 次：', '  隨機取 2 個點', '  解 dᵢᵀv = −v_r,i（2 條方程式、2 個未知數）', '  數內點：|v_r,j + dⱼᵀv| < τ 的點', '  內點比目前最多的還多 → 記下這組 v', '用最多內點那組的全部內點做最小二乘，得到 v̂', '輸出 v̂ 和共變異數 σ²(DᵀD)⁻¹'];
+const JUDGE = '<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>';
+const state = { ...PRESETS[0], k: 0 };
+let R = null;
+
+// Per-point colour class for the current step: picked, inlier of the current hypothesis, rejected at the end.
+function ptClass(st, j) {
+  if (st.kind === 'iter' && (j === st.a || j === st.b)) return 'pick';
+  if (st.kind === 'iter' && st.inl) return st.inl[j] ? 'in' : '';
+  if (st.kind === 'final' && st.best) return st.best.inl[j] ? 'in' : 'out';
+  return '';
+}
+
+function drawScene(st) {
+  const svg = $('#scene'); svg.replaceChildren();
+  const X0 = -12, X1 = 63, k = 300 / (X1 - X0), X = x => (x - X0) * k, Y = y => 75 - y * k;
+  const a = state.fov / 2 * Math.PI / 180;
+  if (state.fov >= 360) el('circle', { class: 'fov', cx: X(0), cy: Y(0), r: RANGE * k }, svg);
+  else el('path', { class: 'fov', d: `M${X(0)} ${Y(0)}L${X(RANGE * Math.cos(a))} ${Y(RANGE * Math.sin(a))}A${RANGE * k} ${RANGE * k} 0 0 0 ${X(RANGE * Math.cos(a))} ${Y(-RANGE * Math.sin(a))}Z` }, svg);
+  RAILS.forEach(([x1, y1, x2, y2]) => el('line', { class: 'rail', x1: X(x1), y1: Y(y1), x2: X(x2), y2: Y(y2) }, svg));
+  R.W.objs.forEach(o => {
+    const [x0, y0, x1, y1] = o.box;
+    el('rect', { class: 'obj', x: X(x0), y: Y(y1), width: (x1 - x0) * k, height: (y1 - y0) * k }, svg);
+  });
+  el('path', { class: 'ego', d: `M${X(0) + 8} ${Y(0)}L${X(0) - 5} ${Y(0) - 5}L${X(0) - 5} ${Y(0) + 5}Z` }, svg);
+  R.pts.forEach((p, j) => {
+    const c = ptClass(st, j);
+    el('circle', { class: 'pt ' + c, cx: X(p.x), cy: Y(p.y), r: c === 'pick' ? 3.6 : 2.1 }, svg);
+  });
+  el('text', { x: 4, y: 146 }, svg).textContent = `自車 ${R.W.ego[0]} m/s` + (R.W.objs.length ? `，其他車 ${R.W.objs[0].v[0]} m/s` : '') + '（示意）';
+  $('#scene-sub').textContent = `${SCENE_NAME[state.scene]}，${state.fov}°，${R.pts.length} 個點`;
+}
+
+function clip(p0, dir, B) {
+  // Intersect the infinite line p0 + t*dir with box B = [x0, x1, y0, y1]; Liang-Barsky on t in (-inf, inf).
+  let t0 = -1e9, t1 = 1e9;
+  const sides = [[-dir[0], p0[0] - B[0]], [dir[0], B[1] - p0[0]], [-dir[1], p0[1] - B[2]], [dir[1], B[3] - p0[1]]];
+  for (const [p, q] of sides) {
+    if (Math.abs(p) < 1e-12) { if (q < 0) return null; continue; }
+    const r = q / p;
+    if (p < 0) t0 = Math.max(t0, r); else t1 = Math.min(t1, r);
+  }
+  return t0 > t1 ? null : [[p0[0] + t0 * dir[0], p0[1] + t0 * dir[1]], [p0[0] + t1 * dir[0], p0[1] + t1 * dir[1]]];
+}
+
+function drawPlane(st) {
+  const svg = $('#vplane'); svg.replaceChildren();
+  const ego = R.W.ego, xs = [ego[0], 0, ...R.W.objs.map(o => ego[0] - o.v[0])];
+  const xmin = Math.min(...xs) - 3, xmax = Math.max(...xs) + 3, k = 280 / (xmax - xmin), half = 110 / k;
+  const B = [xmin, xmax, -half, half];
+  const X = x => 10 + (x - xmin) * k, Y = y => 120 - y * k;
+  el('line', { class: 'axis', x1: X(xmin), y1: Y(0), x2: X(xmax), y2: Y(0) }, svg);
+  if (xmin < 0) el('line', { class: 'axis', x1: X(0), y1: Y(-half), x2: X(0), y2: Y(half) }, svg);
+  const order = R.pts.map((p, j) => j).sort((i, j) => (ptClass(st, i) === 'pick') - (ptClass(st, j) === 'pick'));
+  order.forEach(j => {
+    const p = R.pts[j], seg = clip([-p.vr * p.d[0], -p.vr * p.d[1]], [-p.d[1], p.d[0]], B);
+    if (!seg) return;
+    el('line', { class: 'ln ' + ptClass(st, j), x1: X(seg[0][0]), y1: Y(seg[0][1]), x2: X(seg[1][0]), y2: Y(seg[1][1]) }, svg);
+  });
+  const inBox = v => v[0] >= xmin && v[0] <= xmax && Math.abs(v[1]) <= half;
+  const pin = v => [Math.max(xmin, Math.min(xmax, v[0])), Math.max(-half, Math.min(half, v[1]))];
+  // truth: a cross
+  el('path', { class: 'truth', d: `M${X(ego[0]) - 5} ${Y(ego[1]) - 5}l10 10M${X(ego[0]) - 5} ${Y(ego[1]) + 5}l10 -10` }, svg);
+  el('text', { class: 'lab', x: X(ego[0]) + 7, y: Y(ego[1]) + 14 }, svg).textContent = '真值';
+  if (st.kind === 'iter' && st.best && !st.improved) {
+    const b = pin(st.best.v); el('circle', { class: 'best', cx: X(b[0]), cy: Y(b[1]), r: 7 }, svg);
+  }
+  if (st.kind === 'iter' && st.v) {
+    const h = pin(st.v); el('circle', { class: 'hyp', cx: X(h[0]), cy: Y(h[1]), r: 4.5 }, svg);
+    if (!inBox(st.v)) el('text', { class: 'lab', x: Math.min(X(h[0]) + 6, 230), y: Y(h[1]) + (h[1] > 0 ? 14 : -6) }, svg).textContent = '交點在圖外';
+  }
+  if (st.kind === 'final') {
+    if (st.naive) { const n = pin(st.naive.v); el('circle', { class: 'naive', cx: X(n[0]), cy: Y(n[1]), r: 4 }, svg); el('text', { class: 'lab', x: X(n[0]) + 6, y: Y(n[1]) - 6 }, svg).textContent = '不剔除'; }
+    if (st.fin) { const f = pin(st.fin.v); el('circle', { class: 'vhat', cx: X(f[0]), cy: Y(f[1]), r: 4 }, svg); el('text', { class: 'lab', x: X(f[0]) + 6, y: Y(f[1]) - 6 }, svg).textContent = 'v̂'; }
+  }
+  el('text', { x: 292, y: Y(0) - 4, 'text-anchor': 'end' }, svg).textContent = 'vₓ（前進）';
+  el('text', { x: 14, y: 12 }, svg).textContent = `v_y（側向），每格 1 m/s ≈ ${fx(k, 0)} px`;
+  for (let t = Math.ceil(xmin); t <= xmax; t++) el('line', { class: 'axis', x1: X(t), y1: Y(0) - 2, x2: X(t), y2: Y(0) + 2 }, svg);
+}
+
+function renderStep() {
+  const st = R.T[state.k], last = R.T.length - 1;
+  let on = [0];
+  if (st.kind === 'iter') on = !st.v ? [3] : st.improved ? [5] : [4];
+  if (st.kind === 'final') on = [6, 7];
+  $('#pseudo').innerHTML = LINES.map((l, i) => `<span class="pl${on.includes(i) ? ' on' : ''}">${i + 1}  ${l.replace(/</g, '&lt;')}</span>`).join('');
+  drawScene(st); drawPlane(st);
+
+  const N = R.pts.length, nMov = R.pts.filter(p => p.moving).length;
+  const vars = [['點數', N], ['移動物體上', nMov]];
+  if (st.kind === 'iter') vars.push(['第幾次', `${st.i}／${ITER}`], ['這組內點', st.v ? st.n : '—'], ['最多內點', st.best ? st.best.n : '—']);
+  if (st.kind === 'final' && st.fin) vars.push(['v̂', vec(st.fin.v)], ['σ vₓ', fx(st.fin.sx, 4)], ['σ v_y', fx(st.fin.sy, 4)]);
+  $('#vars').innerHTML = vars.map(([a, b], i) => `<span class="var${st.kind === 'iter' && st.improved && i === 4 ? ' chg' : ''}"><span class="k">${a}</span><span class="v">${b}</span></span>`).join('');
+
+  let say = '';
+  const ego = R.W.ego;
+  if (st.kind === 'init') {
+    say = `${N} 個點，${N - nMov} 個打在靜止的護欄上，${nMov} 個打在移動的車上。每個點在速度平面上是一條直線：靜止點的直線都通過真正的自車速度（十字），移動的車的直線通過「自車速度減去車速」那一點。`;
+    if (N - nMov < nMov) say += '<span class="warn">這一幀靜止點比移動點少，「靜止點佔多數」的假設不成立。</span>';
+  } else if (st.kind === 'iter') {
+    const A = R.pts[st.a], B = R.pts[st.b], mv = [A, B].filter(p => p.moving).length;
+    if (!st.v) say = `第 ${st.i} 次：抽到的兩個點射線夾角只有 ${fx(st.ang, 1)}°，兩條直線幾乎平行，交點不可靠，跳過這組。`;
+    else {
+      say = `第 ${st.i} 次：抽到兩個點（射線夾角 ${fx(st.ang, 1)}°${mv ? `，其中 ${mv} 個在移動的車上` : ''}），兩條直線交在 v = ${vec(st.v)}。${N} 個點裡有 ${st.n} 個的直線離它不到 τ，是內點。`;
+      say += st.improved ? '比目前最多的還多，記下這組。' : `沒有超過目前最多的 ${st.best.n} 個。`;
+      if (st.ang < 10) say += '<span class="note">夾角小的兩條直線，交點沿著直線方向很不穩；視野越窄，越常抽到這種組合。</span>';
+    }
+  } else {
+    const f = st.fin, b = st.best;
+    if (!f) say = '沒有任何一組可用的假設。';
+    else {
+      const nStatic = R.pts.filter((p, j) => b.inl[j] && !p.moving).length;
+      const err = Math.hypot(f.v[0] - ego[0], f.v[1] - ego[1]);
+      say = `最多內點的是第 ${b.i} 次那組，${b.n} 個內點（${fx(b.n / N * 100, 0)}%）。用它們做最小二乘得到 v̂ = ${vec(f.v)}，真值是 ${vec(ego)}。σ vₓ = ${fx(f.sx, 4)} m/s，σ v_y = ${fx(f.sy, 4)} m/s，側向的不確定性是前進的 ${fx(f.sy / f.sx, 1)} 倍。`;
+      if (err > 0.5 && nStatic < b.n / 2) say += `<span class="warn">內點大多在移動的車上：RANSAC 選中的是它們的速度，以為自車速度是 ${vec(f.v)}。這種時候要用陀螺儀和上一幀的速度做門檻檢查${JUDGE}。</span>`;
+      if (st.naive && nMov) say += `<span class="note">不剔除、直接用全部 ${N} 個點做最小二乘，會得到 ${vec(st.naive.v)}，被移動的車拉偏。</span>`;
+      else if (f.sy / f.sx > 3) say += '<span class="note">射線都集中在正前方，直線幾乎平行：前進速度量得很準，側向速度差了好幾倍。垂直方向只有 25° 的光達，垂直速度就是這個情況。</span>';
+    }
+  }
+  $('#say').innerHTML = say;
+  site.terms($('#say'));
+}
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderStep(); } });
+function recompute() {
+  $('#in-fov').value = state.fov; $('#v-fov').textContent = `${state.fov}°`;
+  $('#in-d').value = state.D; $('#v-d').textContent = state.scene === 'open' ? '沒有前車' : `${state.D} m`;
+  $('#in-d').disabled = state.scene === 'open';
+  R = trace(state);
+  stepper.setTotal(R.T.length - 1);
+  stepper.set(0);
+}
+const pr = $('#presets');
+PRESETS.forEach(P => {
+  const b = document.createElement('button'); b.type = 'button'; b.textContent = P.name;
+  b.addEventListener('click', () => { Object.assign(state, P); recompute(); });
+  pr.appendChild(b);
+});
+$('#in-fov').addEventListener('input', e => { state.fov = +e.target.value; recompute(); });
+$('#in-d').addEventListener('input', e => { state.D = +e.target.value; recompute(); });
+recompute();
+</script>
+</body>
+</html>

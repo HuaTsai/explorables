@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open-loop 分數證明不了會開車</title>
+<meta name="description" content="E2E 論文最常報的 nuScenes open-loop L2 已被證明不可靠：只看自車歷史狀態的 MLP 就能打平大型模型。一步一步比較 open-loop 和 closed-loop，看分數較好的模型為什麼在閉環裡撞車，再整理 E2E 和模組化各自已知的失效模式。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Stepper workbench over time steps of a 1D toy road: a two-row road view
+   (open-loop starts every step from the logged expert state; closed-loop starts from where the model drove itself),
+   then the four evaluation steps filled in for open-loop and closed-loop, and a speed-vs-time chart with totals. */
+.road svg { width: 100%; min-width: 600px; height: auto; display: block; }
+.road { overflow-x: auto; }
+.road text, .chart text { font-family: var(--font-body); font-size: 11px; fill: var(--muted); }
+.road .lane { stroke: var(--line); stroke-width: 1.2; }
+.road .obs { fill: var(--muted); }
+.road .log { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+.road .ghost { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.road .car { fill: var(--hit); }
+.road .car.crash { fill: var(--miss); }
+.road .pred { fill: var(--hit); }
+.road .fut { stroke: var(--ink); stroke-width: 1.4; }
+.road .trail { fill: var(--hit); opacity: 0.35; }
+.road .row-t { fill: var(--ink); font-weight: 700; }
+.work.ev { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
+.steps { list-style: none; margin: 0; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.55rem; counter-reset: s; }
+.steps li { counter-increment: s; font-size: 0.84rem; }
+.steps .q { display: block; font-size: 0.76rem; color: var(--muted); font-weight: 700; }
+.steps .q::before { content: counter(s) ". "; font-family: var(--font-mono); }
+.steps .a { font-family: var(--font-mono); font-size: 0.8rem; }
+.steps .a.hit { color: var(--hit); font-weight: 700; }
+.steps .a.wrong { color: var(--miss); font-weight: 700; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .axis { stroke: var(--line); stroke-width: 1; }
+.chart .now { fill: var(--mark); }
+.chart .logv { stroke: var(--muted); stroke-width: 1.6; fill: none; stroke-dasharray: 5 3; }
+.chart .clv { stroke: var(--hit); stroke-width: 2; fill: none; }
+.chart .clv.crash { stroke: var(--miss); }
+.chart .l2 { fill: var(--hit-soft); stroke: var(--hit); stroke-width: 0.8; }
+table.cmp.b2d { min-width: 34rem; }
+.cols ol { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← 量產自駕的架構走向</a>
+    <h1>Open-loop 分數證明不了會開車</h1>
+    <p class="lead">E2E 論文表格上最常見的數字，是 nuScenes 的 open-loop L2 和 collision rate。這些數字已經被證明不可靠：一個只看自車歷史狀態、完全不看感測器的小 MLP，就能和大型 E2E 模型打平。這一頁先說明 open-loop 和 closed-loop 差在哪，用一個玩具場景看兩者為什麼會給出相反的排名，再整理 E2E 和模組化各自已知的失效模式。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、公司官方資料、新聞報導和標準文件後撰寫。</p>
+      <p>open-loop 評估為什麼會誤導、模仿學習有哪些失效模式，這些道理不會過期；benchmark 數字、方法排名和公司的說法會隨新方法、新模擬器而改變，公司的說法都是截至這一天的狀態。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>兩種評估方式</h2>
+    <p><strong>Open-loop 評估</strong>拿錄好的駕駛 log 來考模型：在每一個時間點，把 log 裡到那一刻為止的資料交給模型，讓它預測未來幾秒的軌跡，再和人類駕駛（以下叫專家）實際開出來的軌跡比。nuScenes 上的 L2 是預測軌跡和專家軌跡之間的距離，collision rate 是預測軌跡會不會碰到 log 裡的其他物體。<strong>Closed-loop 評估</strong>則讓模型真的開：模型的輸出決定車怎麼動，下一刻的輸入是自己開出來的結果，通常在 CARLA 這類模擬器裡做。</p>
+    <p>兩者的差別在於，open-loop 每一步都把車「重設」回專家的狀態。模型某一步預測錯了，不會影響下一步看到什麼，錯誤永遠不會累積；反過來，專家對路況的反應（例如看到前車就減速）會透過自車的速度、加速度出現在下一步的輸入裡，模型就算沒看懂路況，也能從自車狀態讀到「接下來要減速」。closed-loop 沒有這種重設，也沒有這種提示。</p>
+
+    <h2>只看自車狀態就能打平</h2>
+    <p>AD-MLP 只用自車的歷史狀態，不看任何感測器，在 nuScenes 的 open-loop 規劃指標上就和大型 E2E 方法相當（<a href="https://arxiv.org/abs/2305.10430">Zhai et al.</a>）。<a href="https://arxiv.org/abs/2312.03031">Li et al.（CVPR 2024）</a>進一步指出：nuScenes 的場景太簡單，E2E 模型主要依賴 <span class="term" data-def="自車自己的狀態：速度、加速度、轉向角、過去的軌跡，不包含任何感測器看到的外部資訊。">ego status</span> 而不是感知；現有指標反映不了規劃品質，因此呼籲社群重新評估既有的結論。</p>
+    <p>這是 <span class="term" data-def="模仿學習的模型學到和專家行為相關、但不是原因的特徵，在訓練分佈裡有效，換了情境就失靈。">causal confusion</span> 的具體表現（<a href="https://arxiv.org/abs/1905.11979">de Haan et al.</a>）：模型可能學到和專家行為相關、但不是原因的特徵。「前車亮煞車燈」和「自己已經在減速」都和「接下來要減速」相關，但只有前者是原因；在 open-loop 裡，後者剛好可以從 log 讀到，這條捷徑完全不會被扣分。de Haan et al. 也發現，給模型越多資訊，有時反而越糟。</p>
+
+    <h2>兩種評估的流程</h2>
+    <p>把兩種評估寫成每個時間步做的事，差別只在第 1 步和第 4 步：</p>
+  </section>
+  <div class="cols">
+    <div class="col">
+      <h3>Open-loop</h3>
+      <ol>
+        <li>從 log 取出時間 t 之前的資料，包括自車的歷史狀態。</li>
+        <li>模型預測未來 2 秒的軌跡。</li>
+        <li>和 log 裡專家實際開的軌跡比，算 L2 誤差。</li>
+        <li>t 加一步，重新從 log 取資料；模型的預測不影響下一步的輸入。</li>
+      </ol>
+    </div>
+    <div class="col">
+      <h3>Closed-loop</h3>
+      <ol>
+        <li>從模擬器取出時間 t 的狀態，自車的歷史是自己開出來的。</li>
+        <li>模型決定這一步怎麼開。</li>
+        <li>車照模型的決定移動，檢查有沒有撞上東西。</li>
+        <li>t 加一步，下一步的輸入是模型自己開出來的結果。</li>
+      </ol>
+    </div>
+  </div>
+  <section class="prose">
+    <p>下面的玩具場景是一條直路，自車以 10 m/s 前進，前方 80 m 停著一台車。log 裡的專家在 5.5 秒開始以 2.5 m/s² 減速，剛好停在前車後方 5 m。兩個模型各跑一次 open-loop 和 closed-loop：</p>
+    <ul>
+      <li><strong>自車外插</strong>：只看自車最近兩步的速度，假設加速度不變往後推。它完全不看前車，相當於只用 ego status 的基準。</li>
+      <li><strong>看前車距離</strong>：看得到前車，算出「現在開始煞要多大的減速度才能停在 5 m 外」，超過 4 m/s² 才煞。它會停下來，但煞車的時機和力道和專家不一樣。</li>
+    </ul>
+  </section>
+
+  <section class="bench" aria-label="open-loop 和 closed-loop 逐步比較">
+    <div class="row presets" id="models"><span class="lbl">模型</span></div>
+    <div class="row presets" id="scens"><span class="lbl">情境</span></div>
+    <div class="row">
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
+      </div>
+    </div>
+    <div class="row">
+      <div class="road"><svg id="road" viewBox="0 0 820 170" role="img" aria-label="直路上的自車、前方靜止車和兩種評估下的位置"></svg></div>
+      <p class="hint">玩具場景，所有數字都是示意值：每步 0.5 秒，預測 2 秒（4 個點），L2 取這 4 個點和 log 的平均距離。上排是 open-loop：黑框是 log 裡專家此刻的位置，綠點是模型從這裡預測的未來位置，黑色短線是 log 裡專家實際的未來位置。下排是 closed-loop：綠車是模型自己開到的位置，虛線框是同一時刻 log 裡的專家，紫色表示撞上。</p>
+    </div>
+    <div class="row work ev">
+      <div class="panel">
+        <div class="panel-head"><span>Open-loop</span><span class="sub" id="ol-t"></span></div>
+        <ol class="steps" id="ol"></ol>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>Closed-loop</span><span class="sub" id="cl-t"></span></div>
+        <ol class="steps" id="cl"></ol>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>速度和 L2</span><span class="sub">0–12 s</span></div>
+        <div class="panel-body chart"><svg id="chart" viewBox="0 0 260 170" role="img" aria-label="log 和 closed-loop 的速度，以及每一步的 open-loop L2"></svg></div>
+        <div class="vars" id="vars"></div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>Bench2Drive：open-loop 最好的，closed-loop 不是最好</h2>
+    <p>玩具場景只是示意，真實的 closed-loop benchmark 也看到同樣的現象。<a href="https://arxiv.org/abs/2406.03877">Bench2Drive</a> 在 CARLA 裡做 closed-loop 評估，Base 訓練集的結果如下（Table 3）：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp b2d">
+      <thead><tr><th>方法</th><th>Open-loop 平均 L2 ↓</th><th>Driving Score ↑</th><th>Success Rate ↑</th></tr></thead>
+      <tbody>
+        <tr><td class="name">AD-MLP</td><td class="num">3.64</td><td class="num">18.05</td><td class="num">0.00%</td></tr>
+        <tr><td class="name">UniAD-Base</td><td class="num"><strong>0.73</strong></td><td class="num">45.81</td><td class="num">16.36%</td></tr>
+        <tr><td class="name">VAD</td><td class="num">0.91</td><td class="num">42.35</td><td class="num">15.00%</td></tr>
+        <tr><td class="name">TCP-traj*</td><td class="num">1.70</td><td class="num">59.90</td><td class="num">30.00%</td></tr>
+        <tr><td class="name">DriveAdapter*</td><td class="num">1.01</td><td class="num"><strong>64.22</strong></td><td class="num"><strong>33.08%</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>* 表示用 privileged expert 的特徵做蒸餾。所有方法用的都是 Bench2Drive 的 Base 訓練集。UniAD-Base 的 open-loop L2 最好，driving score 卻排在兩個 L2 較差的方法後面；AD-MLP 在這個 CARLA 資料集上的 L2 也最差，closed-loop 成功率是 0%。作者的結論是 open-loop 指標「could indicate model convergence but it fails for advanced comparison」：可以看模型有沒有收斂，但不能拿來比高下。他們也指出，CARLA 的 driving score 本身變異很大。</p>
+
+    <h2>簡單方法打平大型 E2E</h2>
+    <p><a href="https://arxiv.org/abs/2406.15349">NAVSIM</a> 發現「simple methods with moderate compute requirements such as TransFuser can match recent large-scale end-to-end driving architectures such as UniAD」，並指出在真實資料上做 open-loop 評估的結果「do not reflect closed-loop performance」。</p>
+    <p>規則式 planner 在真實資料的 closed-loop 評估上也很強。<a href="https://arxiv.org/abs/2106.11810">nuPlan</a> 2023 挑戰賽的冠軍 <a href="https://arxiv.org/abs/2306.07962">PDM</a>，核心是從 lane graph 搜尋出的中心線（一個規則式的先驗），加上簡單的評分。作者認為學習式規劃常被拿來同時追求的兩個目標，預測專家的軌跡（ego forecasting）和 closed-loop 規劃，彼此「fundamentally misaligned」。</p>
+
+    <h2>模仿學習的已知失效模式</h2>
+    <p>Causal confusion 之外，E2E 模型大多用模仿學習訓練，還有幾個已知的問題：</p>
+    <ul>
+      <li><strong>泛化和變異</strong>：<a href="https://arxiv.org/abs/1904.08980">Codevilla et al.</a> 指出 behavior cloning 有資料集偏差，在密集交通中泛化差，而且<strong>用不同隨機種子訓練出的模型，closed-loop 表現變異很大</strong>。<a href="https://arxiv.org/abs/2205.15997">TransFuser</a> 的消融也觀察到，單一輔助任務的影響落在種子變異的範圍內。這對「穩定性」很關鍵：同一份資料、同一個架構，重新訓練一次，行為就可能變了，而 open-loop 指標看不出來。</li>
+      <li><strong>長尾和資料分佈</strong>：模仿學習的訓練資料以常規駕駛為主，罕見的危險情境很少。<a href="https://www.mobileye.com/blog/driving-ai/">Mobileye</a> 把 shortcut learning、long tail、lack of abstractions 列為 E2E 的三大問題<span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>。業界的回應是用世界模型或生成式模擬合成罕見情境，例如 Huawei WEWA 的 World Engine、Tesla 的神經世界模擬器、Wayve 的 <a href="https://arxiv.org/abs/2503.20523">GAIA-2</a>；這些都還很新，沒有公開證據顯示合成資料足以支撐安全論證。</li>
+      <li><strong>可解釋性和除錯</strong>：<a href="https://arxiv.org/abs/2306.16927">Chen et al.</a> 的綜述把 interpretability、causal confusion、robustness、multi-modality、world model 列為 E2E 的核心挑戰。</li>
+      <li><strong>VLA 的額外問題</strong>：推理延遲和算力，<a href="https://waymo.com/research/emma">EMMA</a> 的作者自己說「computationally expensive」；以及語言推理和實際動作不一致，<a href="https://arxiv.org/abs/2511.00088">Alpamayo-R1</a> 專門用 RL 強化「reasoning-action consistency」，這說明問題確實存在。「VLA 能解決長尾」目前最強的公開證據，是 Alpamayo-R1 自報的模擬數據（closed-loop 模擬中 off-road 率降 35%、close encounter 降 25%）<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>和 EMMA 的研究結果；EMMA 的作者也列出沒有 LiDAR、計算昂貴等限制，而量產的 VLA（Li Auto、XPeng）沒有公開可比的安全數據。</li>
+    </ul>
+
+    <h2>模組化的已知失效模式</h2>
+    <ul>
+      <li><strong>錯誤傳遞</strong>：上游偵測漏檢或誤檢，會直接讓 planner 做錯，下游通常沒有機制修正。</li>
+      <li><strong>介面資訊損失和指標不對齊</strong>：<a href="https://arxiv.org/abs/2004.08745">Philion et al.</a> 指出，mAP 這類標準偵測指標沒有反映「哪些錯誤對規劃重要」，因此提出 planner-centric 的指標。物件清單也丟掉了不規則障礙物、遮擋、意圖這些資訊，這正是 occupancy 和 E2E 想補的。</li>
+      <li><strong>規則的脆弱性</strong>：Wayve 工程師的論點是規則在罕見情境下很「brittle」<span class="term" data-def="新聞或第三方的摘要轉述，找不到一手來源時才用。">【二手】</span>（<a href="https://www.thestar.com.my/tech/tech-news/2026/07/01/wayve-courts-automakers-with-ai-driving-system-that-learns-like-humans">Reuters via The Star</a>）。這在複雜的城市互動（併線、讓行協商）上是真問題，<a href="https://docs.autoware.org/main/home/roadmap/multi-year-roadmap/">Autoware</a> 也以此作為導入 learned planner 的理由。</li>
+      <li><strong>工程規模</strong>：Tesla 宣稱 v12 取代了 30 萬行以上的 C++（<a href="https://www.notateslaapp.com/software-updates/version/2023.44.30.10/release-notes">release note</a>）<span class="term" data-def="公司官方部落格、論文、新聞稿，或標準機構的頁面。">【一手】</span>。規則式 planner 會隨 ODD 擴大而膨脹。</li>
+    </ul>
+
+    <h2>證據強度小結</h2>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>主張</th><th>證據強度</th></tr></thead>
+      <tbody>
+        <tr><td>E2E 在城市互動（舒適度、類人感）上優於手寫規則</td><td>中：多家量產 L2 的使用者體驗和公司宣稱，但缺乏公開的 closed-loop 對照</td></tr>
+        <tr><td>E2E 比模組化更安全、更穩定</td><td><strong>弱</strong>：沒有公開、可比、獨立的證據；學術的 closed-loop 結果互有勝負</td></tr>
+        <tr><td>多任務 BEV 感知優於多個單任務網路（精度和算力）</td><td>強：<a href="https://arxiv.org/abs/2205.13542">BEVFusion</a> 等在 nuScenes 上有可重現的結果（重現的細節見 <a href="../../lidar-camera-fusion/levels/">LiDAR 與相機融合系列的融合層級那一頁</a>）</td></tr>
+        <tr><td>規則式或簡單 planner 在真實資料 closed-loop 上有競爭力</td><td>中強：nuPlan 的 PDM、NAVSIM 的結果</td></tr>
+        <tr><td>純 E2E 需要極大量資料</td><td>中強：成功量產的公司都宣稱有數百萬段影片或數十億公里等級的資料，例如 Tesla 的「millions of video clips」、<a href="https://momenta.ai/en/article/563.html">Momenta</a> 的 80 億公里</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>論文表格上的 nuScenes L2 和 collision rate 不能拿來決定架構。open-loop 每一步都把車重設回專家的狀態，錯誤不會累積，專家的反應還會透過自車狀態洩漏給模型，所以只看 ego status 的基準就能打平大型模型；真正的排名要靠 closed-loop 評估，而 Bench2Drive、NAVSIM、nuPlan 的 closed-loop 結果都顯示，open-loop 最好的模型不一定最好，簡單或規則式的方法常常一樣強。沒有 closed-loop 評估（模擬器或大規模影子模式），就無法判斷一個 E2E planner 好不好；「E2E 比模組化更安全、更穩定」目前也沒有公開、可比、獨立的證據。</p>
+    <p>既然學習式 planner 的好壞這麼難證明，量產系統怎麼交代安全，見<a href="../safety/">安全層那一頁</a>。</p>
+    <p>玩具場景只有一維、一台靜止的前車、兩個手寫的模型，沒有感測雜訊，也沒有會反應的其他車輛；它示範的是評估方式的結構性差異，不代表任何真實模型的表現。closed-loop 模擬本身也不完美：CARLA 的 driving score 變異很大，模擬器和真實道路之間的落差這裡沒有討論。</p>
+  </section>
+</main>
+
+<script>
+// ---- Toy 1D road. x is the ego front bumper (m), the stopped car's rear is at OBS. ----
+const DT = 0.5, N = 24, H = 4, V0 = 10, B_EXP = 2.5, STOP_GAP = 5, B_TRIG = 4;
+const SCENS = { stop: { name: '前方有靜止車', obs: 80 }, free: { name: '一路直行，沒有事件', obs: null } };
+const MODELS = {
+  ego: { name: '自車外插', roll: 'const',
+    act: (obs, x, v, vPrev) => (v - vPrev) / DT,
+    why: (obs, x, v, vPrev) => `最近兩步速度 ${f1(vPrev)} → ${f1(v)} m/s，外插加速度 ${f1((v - vPrev) / DT)} m/s²` },
+  gap: { name: '看前車距離', roll: 'policy',
+    act: (obs, x, v) => { if (v <= 0) return 0; const fr = room(obs, x); const req = fr > 0 ? v * v / (2 * fr) : 99; return req > B_TRIG ? -Math.min(req, 8) : 0; },
+    why: (obs, x, v) => { const fr = room(obs, x); if (fr === Infinity) return '前方沒有車，維持速度'; if (v <= 0) return '已經停下'; const req = fr > 0 ? v * v / (2 * fr) : 99; return `停在 5 m 外需要 ${f1(req)} m/s²，${req > B_TRIG ? '超過 4，煞車' : '還不到 4，先不煞'}`; } },
+};
+const f1 = v => (Math.round(v * 10) / 10).toFixed(1), f2 = v => (Math.round(v * 100) / 100).toFixed(2);
+const room = (obs, x) => obs === null ? Infinity : obs - STOP_GAP - x;
+function move(x, v, a) {
+  if (a < 0 && v + a * DT < 0) { const t = v / -a; return { x: x + v * t / 2, v: 0 }; }
+  if (v <= 0 && a <= 0) return { x, v: 0 };
+  return { x: x + v * DT + a * DT * DT / 2, v: v + a * DT };
+}
+const expertA = (obs, x, v) => v > 0 && room(obs, x) <= v * v / (2 * B_EXP) + 1e-9 ? -B_EXP : 0;
+
+// One full run: the expert log, then open-loop and closed-loop for every time step 0..N.
+function run(sk, mk) {
+  const obs = SCENS[sk].obs, M = MODELS[mk];
+  const log = [{ x: 0, v: V0 }];
+  for (let k = 0; k < N + H; k++) { const s = log[k]; log.push(move(s.x, s.v, expertA(obs, s.x, s.v))); }
+  const rows = [];
+  let cl = { x: 0, v: V0, vPrev: V0 }, hit = null, sum = 0;
+  for (let k = 0; k <= N; k++) {
+    const s = log[k], vPrev = k ? log[k - 1].v : s.v;
+    let p = { x: s.x, v: s.v }, pv = vPrev;
+    const a0 = M.act(obs, s.x, s.v, vPrev), pred = [];
+    for (let h = 1; h <= H; h++) {
+      const a = M.roll === 'const' ? a0 : M.act(obs, p.x, p.v, pv);
+      pv = p.v; p = move(p.x, p.v, a); pred.push(p.x);
+    }
+    const l2 = pred.reduce((acc, x, i) => acc + Math.abs(x - log[k + 1 + i].x), 0) / H;
+    sum += l2;
+    const aCl = hit !== null ? 0 : M.act(obs, cl.x, cl.v, cl.vPrev);
+    rows.push({ k, t: k * DT, s, vPrev, a0, pred, fut: log.slice(k + 1, k + 1 + H).map(o => o.x), l2, avg: sum / (k + 1),
+      cl: { ...cl }, aCl, hit, olWhy: M.why(obs, s.x, s.v, vPrev), clWhy: hit !== null ? '' : M.why(obs, cl.x, cl.v, cl.vPrev) });
+    if (hit === null) {
+      const n = move(cl.x, cl.v, aCl);
+      if (obs !== null && n.x >= obs) { hit = (k + 1) * DT; cl = { x: obs, v: 0, vPrev: cl.v }; }
+      else cl = { ...n, vPrev: cl.v };
+    }
+  }
+  return { rows, log, obs, hit };
+}
+
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const state = { mk: 'ego', sk: 'stop', k: 0, R: null };
+
+function drawRoad(R, r) {
+  const svg = $('#road'); svg.replaceChildren();
+  const X = x => 40 + x / 95 * 760;
+  [[18, 'Open-loop：每一步從 log 的狀態出發'], [100, 'Closed-loop：從自己開到的位置出發']].forEach(([y, label], row) => {
+    el('text', { class: 'row-t', x: 40, y: y + 4 }, svg).textContent = label;
+    el('line', { class: 'lane', x1: X(-2), y1: y + 22, x2: X(95), y2: y + 22 }, svg);
+    el('line', { class: 'lane', x1: X(-2), y1: y + 52, x2: X(95), y2: y + 52 }, svg);
+    if (R.obs !== null) {
+      el('rect', { class: 'obs', x: X(R.obs), y: y + 28, width: X(4.5) - X(0), height: 18, rx: 3 }, svg);
+      if (!row) el('text', { x: X(R.obs), y: y + 64 }, svg).textContent = `靜止車 ${R.obs} m`;
+    }
+  });
+  const carW = X(4.5) - X(0);
+  // open-loop row: logged expert now, predicted points, logged future
+  el('rect', { class: 'log', x: X(r.s.x) - carW, y: 46, width: carW, height: 18, rx: 3 }, svg);
+  r.fut.forEach(x => el('line', { class: 'fut', x1: X(x), y1: 42, x2: X(x), y2: 68 }, svg));
+  r.pred.forEach(x => el('circle', { class: 'pred', cx: X(x), cy: 55, r: 3.6 }, svg));
+  // closed-loop row: trail, logged expert ghost, own car
+  R.rows.slice(0, r.k).forEach(o => el('circle', { class: 'trail', cx: X(o.cl.x), cy: 137, r: 2.4 }, svg));
+  el('rect', { class: 'ghost', x: X(r.s.x) - carW, y: 128, width: carW, height: 18, rx: 3 }, svg);
+  el('rect', { class: 'car' + (r.hit !== null ? ' crash' : ''), x: X(r.cl.x) - carW, y: 128, width: carW, height: 18, rx: 3 }, svg);
+  [0, 20, 40, 60, 80].forEach(m => el('text', { x: X(m), y: 166, 'text-anchor': 'middle' }, svg).textContent = `${m} m`);
+}
+
+function drawChart(R, r) {
+  const svg = $('#chart'); svg.replaceChildren();
+  const T = t => 30 + t / (N * DT) * 222, V = v => 120 - v / 12 * 110, E = e => 160 - Math.min(e, 3) / 3 * 30;
+  el('rect', { class: 'now', x: T(r.t) - 4, y: 6, width: 8, height: 156 }, svg);
+  el('line', { class: 'axis', x1: 30, y1: 120, x2: 252, y2: 120 }, svg);
+  el('line', { class: 'axis', x1: 30, y1: 160, x2: 252, y2: 160 }, svg);
+  el('text', { x: 2, y: V(10) + 4 }, svg).textContent = '10';
+  el('text', { x: 2, y: V(0) + 4 }, svg).textContent = '0';
+  el('text', { x: 34, y: 14 }, svg).textContent = '速度 m/s：虛線 log，實線 closed-loop';
+  el('text', { x: 2, y: 136 }, svg).textContent = 'L2';
+  const logPts = R.rows.map(o => `${T(o.t)},${V(o.s.v)}`).join(' ');
+  el('polyline', { class: 'logv', points: logPts }, svg);
+  const clPts = R.rows.slice(0, r.k + 1).map(o => `${T(o.t)},${V(o.cl.v)}`).join(' ');
+  el('polyline', { class: 'clv' + (R.hit !== null && r.t >= R.hit ? ' crash' : ''), points: clPts }, svg);
+  R.rows.slice(0, r.k + 1).forEach(o => { if (o.l2 > 0.005) el('rect', { class: 'l2', x: T(o.t) - 3, y: E(o.l2), width: 6, height: 160 - E(o.l2) }, svg); });
+}
+
+function fillSteps(ol, items) {
+  ol.innerHTML = items.map(([q, a, cls]) => `<li><span class="q">${q}</span><span class="a ${cls || ''}">${a}</span></li>`).join('');
+}
+
+function renderStep() {
+  const R = state.R, r = R.rows[state.k], M = MODELS[state.mk];
+  drawRoad(R, r); drawChart(R, r);
+  $('#ol-t').textContent = `t = ${f1(r.t)} s`; $('#cl-t').textContent = `t = ${f1(r.t)} s`;
+  fillSteps($('#ol'), [
+    ['從 log 取資料', `專家在 ${f1(r.s.x)} m，速度 ${f1(r.s.v)} m/s（上一步 ${f1(r.vPrev)}）`],
+    ['模型預測未來 2 秒', `${r.olWhy}；預測位置 ${r.pred.map(f1).join('、')} m`],
+    ['和專家的軌跡比', `專家實際 ${r.fut.map(f1).join('、')} m；L2 = ${f2(r.l2)} m`, r.l2 > 0.5 ? 'wrong' : 'hit'],
+    ['下一步', '重設回 log 的狀態，這一步的預測不影響下一步'],
+  ]);
+  const gap = R.obs === null ? null : R.obs - r.cl.x;
+  fillSteps($('#cl'), r.hit !== null ? [
+    ['從模擬器取狀態', `自車停在 ${f1(r.cl.x)} m`],
+    ['模型決定怎麼開', '—'],
+    ['照決定移動', `在 t = ${f1(r.hit)} s 撞上前方的靜止車`, 'wrong'],
+    ['下一步', '模擬結束'],
+  ] : [
+    ['從模擬器取狀態', `自車在 ${f1(r.cl.x)} m，速度 ${f1(r.cl.v)} m/s（上一步 ${f1(r.cl.vPrev)}）`],
+    ['模型決定怎麼開', `${r.clWhy}；加速度 ${f1(r.aCl)} m/s²`],
+    ['照決定移動', gap === null ? '前方沒有障礙物' : `離前車 ${f1(gap)} m；同一時刻專家離前車 ${f1(R.obs - r.s.x)} m`, gap !== null && gap < STOP_GAP - 0.01 ? 'wrong' : ''],
+    ['下一步', '輸入是自己開出來的位置和速度'],
+  ]);
+  const crashed = r.hit !== null;
+  $('#vars').innerHTML = [
+    ['這一步 L2', `${f2(r.l2)} m`], ['平均 L2', `${f2(r.avg)} m`],
+    ['closed-loop', crashed ? '撞車' : gap === null ? '行駛中' : `距前車 ${f1(gap)} m`],
+  ].map(([a, b]) => `<span class="var"><span class="k">${a}</span><span class="v">${b}</span></span>`).join('');
+  $('#say').innerHTML = say(R, r);
+}
+
+function say(R, r) {
+  const k = r.k, mk = state.mk;
+  if (R.obs === null) {
+    return k < N
+      ? `一路直行，沒有任何事件。兩個模型的預測都和專家完全一樣，L2 是 0，closed-loop 也和 log 重合。<span class="note">如果資料集裡大多是這種片段，open-loop 平均分數幾乎分不出模型的好壞；Li et al. 指出 nuScenes 的場景就偏簡單。</span>`
+      : '整段都沒有事件，兩個模型的 open-loop 平均 L2 都是 0，closed-loop 也都沒問題。這種資料考不出差別。';
+  }
+  if (k === N) {
+    const other = run(state.sk, mk === 'ego' ? 'gap' : 'ego');
+    const me = { avg: r.avg, hit: R.hit }, ot = { avg: other.rows[N].avg, hit: other.hit };
+    const E = mk === 'ego' ? me : ot, G = mk === 'ego' ? ot : me;
+    return `跑完。整段的 open-loop 平均 L2：自車外插 ${f2(E.avg)} m，看前車距離 ${f2(G.avg)} m（示意值）。只看 open-loop，自車外插比較好；放進 closed-loop，自車外插在 t = ${f1(E.hit)} s 撞上前車，看前車距離的模型停在前車後方 5 m。open-loop 的排名和 closed-loop 的排名剛好相反。`;
+  }
+  const brakeK = R.rows.findIndex(o => o.s.v < V0 - 1e-6) - 1;   // last step before the logged speed drops
+  let t = '';
+  if (k < brakeK - 3) t = `專家還在等速前進。open-loop 和 closed-loop 的狀態相同，兩邊的預測都和專家一樣，L2 是 0。`;
+  else if (k <= brakeK) t = mk === 'ego'
+    ? `專家在 ${f1(R.rows[brakeK].t)} s 開始煞車，預測的 2 秒範圍已經跨過這一刻。自車外插只看自己的速度，還不知道要煞，所以這幾步的 L2 變大。`
+    : `專家在 ${f1(R.rows[brakeK].t)} s 開始煞車，但這個模型要等需要的減速度超過 4 m/s² 才煞，預測和專家開始分歧。`;
+  else t = mk === 'ego'
+    ? `log 的歷史裡已經有專家的減速，自車外插照著外插就和專家一樣，L2 回到 0。它其實沒看到前車，是 open-loop 把專家的反應透過自車狀態交給了它。`
+    : `專家已經在用 2.5 m/s² 平穩減速；這個模型從 log 的狀態出發，判斷「還不用煞」或「要煞得更用力」，和專家的軌跡對不上，所以 open-loop 一直被扣分。`;
+  if (r.hit !== null) t += `<span class="warn">closed-loop 在 t = ${f1(r.hit)} s 撞上前車：它自己的歷史裡沒有減速，所以一直不煞。</span>`;
+  else if (mk === 'ego' && k > brakeK) t += `<span class="note">closed-loop 這邊，自車外插的歷史是自己開出來的，裡面沒有減速，所以它一直以 ${f1(r.cl.v)} m/s 前進。</span>`;
+  else if (mk === 'gap' && k > brakeK && r.cl.v < V0) t += `<span class="note">closed-loop 這邊，它看前車距離自己煞車，煞得比專家晚、比專家用力，但會停在 5 m 外。</span>`;
+  return t;
+}
+
+function pick(row, items, key) {
+  row.replaceChildren(row.firstElementChild, ...Object.entries(items).map(([k, v]) => {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = v.name;
+    b.classList.toggle('chosen', state[key] === k);
+    b.addEventListener('click', () => { state[key] = k; rebuild(); });
+    return b;
+  }));
+}
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderStep(); } });
+function rebuild() {
+  pick($('#models'), MODELS, 'mk'); pick($('#scens'), SCENS, 'sk');
+  state.R = run(state.sk, state.mk);
+  stepper.setTotal(N); stepper.set(0);
+}
+rebuild();
+</script>
+</body>
+</html>
