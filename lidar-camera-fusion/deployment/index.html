@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>從論文到車上：換資料集、上 Orin</title>
+<meta name="description" content="融合偵測模型換一台車就崩：nuScenes 訓練的 BEVFusion 直接拿到 Waymo 測只剩 25.8 Car mAP。一步一步加上地面對齊、移除 intensity、移除 velocity、類別重映射，看分數回來多少；再看哪些 codebase 還有人維護、在 Orin 上跑多快。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Stepper workbench over MUSDA's four cumulative preprocessing steps: the step
+   list (highlighted), what the data looks like after the steps so far (mount height and ground, point
+   channels, head outputs, classes), and the Car mAP bars against the oracle line. */
+.work.dp { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.2fr) minmax(0, 1fr); }
+.data { padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.7rem; font-size: 0.82rem; }
+.data .k { display: block; font-size: 0.74rem; color: var(--muted); font-weight: 700; margin-bottom: 0.25rem; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.chip { font-family: var(--font-mono); font-size: 0.74rem; padding: 0.05rem 0.4rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+.chip.off { text-decoration: line-through; color: var(--muted); opacity: 0.55; }
+.chip.new { border-color: var(--hit); background: var(--hit-soft); }
+.side svg, .bars svg { width: 100%; height: auto; display: block; }
+.side text, .bars text { font-family: var(--font-body); font-size: 11px; fill: var(--muted); }
+.side .ground { stroke: var(--ink); stroke-width: 1.4; }
+.side .sensor { fill: var(--ink); }
+.side .zero { stroke: var(--hit); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.side .zero-bad { stroke: var(--miss); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.side .mast { stroke: var(--muted); stroke-width: 1.2; }
+.bars .bar { fill: var(--line); }
+.bars .bar.on { fill: var(--hit); }
+.bars .oracle { stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 5 3; }
+.bars .val { fill: var(--ink); font-family: var(--font-mono); font-weight: 600; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← LiDAR 與相機融合 3D 偵測</a>
+    <h1>從論文到車上：換資料集、上 Orin</h1>
+    <p class="lead">論文裡的融合模型是在一個資料集上訓練、在同一個資料集上測的。換一台車，LiDAR 的型號、安裝高度、類別定義都會變，分數可能直接崩掉；搬上嵌入式平台，還要問有沒有人維護、跑不跑得動。這一頁整理這兩件事的公開證據。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、官方文件和程式庫後撰寫。</p>
+      <p>「什麼讓模型綁死在一台車上」的道理不會過期；跨資料集的數字、repo 的維護狀態和 Orin 上的延遲都會隨新版本改變，維護狀態是查詢當天的快照。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>可移植不等於可遷移</h2>
+    <p>跨資料集泛化的直接證據非常少。常見的「這個方法在 DAIR-V2X、Argoverse 2、Waymo 上也有好成績」，例如 CMT 在 Argoverse 2 的 CDS 0.361 對 FSF 的 0.332、MIT BEVFusion 在 Waymo 的成績，都是在各個資料集<strong>分別訓練</strong>的。這證明方法可以移植到別的資料集，不證明在一個資料集上訓練好的模型能搬到另一台車上用。</p>
+    <p>少數直接測過遷移的證據都不樂觀。<a href="https://arxiv.org/abs/2203.08195">DeepFusion</a> 在 Waymo 自家車隊換城市（Kirkland 子集）時，相機的幫助反而變大：行人 L2 APH 從 LiDAR-only 的 27.6 到融合的 34.6（+8.0），同域只有 +4.0<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>。但這只是換城市，沒有換車。真正換車的證據來自 <a href="https://arxiv.org/abs/2605.10026">MUSDA</a>（2026 年 5 月的 arXiv 預印本）：它以 BEVFusion 為基底，從 nuScenes 遷到 Waymo，nuScenes 上訓練的模型直接拿去 Waymo 測，Car mAP L1 只有 25.8，在 Waymo 上完整訓練的是 78.8。</p>
+
+    <h2>MUSDA 的四個前處理</h2>
+    <p>MUSDA 不改網路架構，只在資料上做四件事，每一步累加上去：</p>
+    <ol>
+      <li><strong>座標平移</strong>：把點雲從感測器原點轉到地面座標，地面在 z = 0。</li>
+      <li><strong>移除 intensity</strong>：點只留 x、y、z。</li>
+      <li><strong>移除 velocity 預測</strong>：偵測頭不再回歸物件速度。</li>
+      <li><strong>類別重映射</strong>：兩個資料集的類別統一成 Car、Pedestrian、Cyclist 三類。</li>
+    </ol>
+    <p>每一步拿掉的，都是只在來源資料集上成立的假設：LiDAR 裝多高、這個型號的反射強度長怎樣、速度是怎麼算出來的、類別怎麼切。</p>
+  </section>
+
+  <section class="bench" aria-label="逐步加上前處理">
+    <div class="row">
+      <div class="controls" data-stepper>
+        <button type="button" data-step="reset">重來</button>
+        <button type="button" data-step="prev">上一步</button>
+        <button type="button" data-step="next" class="primary">下一步</button>
+        <button type="button" data-step="play">播放</button>
+        <input type="range" min="0" max="0" value="0" aria-label="步驟">
+        <span class="count"></span>
+      </div>
+    </div>
+    <div class="row work dp">
+      <div class="panel">
+        <div class="panel-head"><span>前處理</span><span class="sub">累加</span></div>
+        <pre class="pseudo" id="pseudo"></pre>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>資料長什麼樣</span><span class="sub">nuScenes → Waymo</span></div>
+        <div class="data" id="data"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>Car mAP L1</span><span class="sub">IoU 0.5</span></div>
+        <div class="panel-body bars"><svg id="bars" viewBox="0 0 240 200" role="img" aria-label="各步驟的 Car mAP"></svg></div>
+        <div class="vars" id="vars"></div>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <p>上面的增益是照這個順序累加量到的。換個順序，每一步分到的增益可能不同；MUSDA 只報了這一種順序<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>，目前也沒有看到同行評審或第三方重現。安裝高度是示意值。</p>
+
+    <h2>什麼讓方法綁死在一台車上</h2>
+    <p>把 MUSDA 和其他幾篇的結果放在一起，可以整理出哪些設計會讓模型綁死在特定的感測器配置上<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>，每一列都附上依據：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>因素</th><th>綁死在一台車上的做法</th><th>比較能遷移的做法</th><th>依據</th></tr></thead>
+      <tbody>
+        <tr><td class="name">LiDAR 座標</td><td>用感測器原點，高度隨安裝位置變</td><td>轉到 ego 或地面座標（z = 0 是地面）</td><td>MUSDA：+8.4 mAP</td></tr>
+        <tr><td class="name">LiDAR 特徵</td><td>用 intensity、ring index、Δt</td><td>只用 xyz（必要時加正規化的 intensity）</td><td>MUSDA：+9.8 mAP</td></tr>
+        <tr><td class="name">物件尺寸</td><td>用來源資料集的統計</td><td>統計正規化，或少量目標資料標註</td><td><a href="https://arxiv.org/abs/2005.08139">Train in Germany, Test in the USA</a></td></tr>
+        <tr><td class="name">相機深度（LSS 類）</td><td>綁定焦距和相機高度的 metric depth bin</td><td>scale-invariant depth、透視增強、焦距增強</td><td><a href="https://arxiv.org/abs/2303.01686">DG-BEV</a>；NVIDIA V2XFusion 文件要求換資料集時調 dbound</td></tr>
+        <tr><td class="name">相機數量和布局</td><td>固定 6 台相機的 index 或位置編碼</td><td>每台相機獨立處理，FOV 外用 mask 表示</td><td>TransFusion 指出 PointAugmenting 靠 CenterPoint 補 FOV 外</td></tr>
+        <tr><td class="name">時間</td><td>多 sweep 加 velocity head</td><td>單 sweep，或用 ego pose 累積但不回歸速度</td><td>MUSDA：移除 velocity +6.6</td></tr>
+        <tr><td class="name">融合位置</td><td>早期硬投影（外參一錯就毒化特徵）</td><td>晚期、soft association</td><td>KITTI-C、Yu et al.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <p>關於速度：沒有任何主流融合方法需要 LiDAR 的 Doppler 速度欄位。nuScenes 上的速度預測來自多個 sweep 的累積（加上 Δt 通道和 ego pose），可以改成單 sweep、拿掉 velocity head；但這樣一來就不該再用 NDS 比較，因為 NDS 包含速度誤差 mAVE，要改用 mAP 或不含 mAVE 的指標。</p>
+
+    <h2>Codebase 還有沒有人維護</h2>
+    <p>以下是 2026 年 11 月 5 日用 GitHub API 查到的狀態：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>Repo</th><th>最後 push</th><th>狀態</th><th>融合相關的內容</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><a href="https://github.com/NVIDIA-AI-IOT/Lidar_AI_Solution">NVIDIA-AI-IOT/Lidar_AI_Solution</a></td><td class="num">2026-07</td><td><strong>活躍</strong></td><td>CUDA-BEVFusion、CUDA-V2XFusion（1 台相機加 1 顆 LiDAR）、CUDA-CenterPoint、CUDA-PointPillars、3D SparseConv engine（INT8／FP16，不依賴 TensorRT）</td></tr>
+        <tr><td class="name"><a href="https://github.com/open-mmlab/OpenPCDet">open-mmlab/OpenPCDet</a></td><td class="num">2025-10</td><td>低頻維護</td><td>BEVFusion（nuScenes val 67.75 mAP／70.98 NDS）、TransFusion-L、Focals Conv-F（KITTI）、自訂資料集範本</td></tr>
+        <tr><td class="name"><a href="https://github.com/open-mmlab/mmdetection3d/tree/main/projects/BEVFusion">open-mmlab/mmdetection3d</a></td><td class="num">2024-07</td><td><strong>實質停滯</strong></td><td>projects/BEVFusion（重現 68.6／71.4）、MVX-Net</td></tr>
+        <tr><td class="name"><a href="https://github.com/mit-han-lab/bevfusion">mit-han-lab/bevfusion</a></td><td class="num">2024-07</td><td><strong>已 archived</strong></td><td>原始實作；NVIDIA 版鎖定它的 commit</td></tr>
+        <tr><td class="name"><a href="https://github.com/autowarefoundation/autoware_universe">autowarefoundation/autoware_universe</a></td><td class="num">2026-11</td><td><strong>活躍</strong></td><td><code>autoware_bevfusion</code>（TensorRT，LiDAR-only 和相機加 LiDAR，README 註明相機加 LiDAR 還沒完全整合）；<code>autoware_image_projection_based_fusion</code>（晚期融合和 pointpainting）</td></tr>
+        <tr><td class="name">其他研究碼</td><td class="num">2023–2025</td><td>停在論文發表時</td><td>CMT、TransFusion、FUTR3D、MetaBEV、GraphBEV、MoME、CLOCs、ADLab BEVFusion：可以借鑑想法，不適合當產品依賴</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>在 Orin 上跑多快</h2>
+    <p>有公開記載的延遲不多，而且量測平台不一：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>模型</th><th>設定</th><th>精度</th><th>速度</th><th>平台</th></tr></thead>
+      <tbody>
+        <tr><td class="name">CUDA-BEVFusion</td><td>ResNet50、256×704、6 台相機，nuScenes val</td><td>FP16：67.89 mAP／70.98 NDS</td><td class="num">18 FPS</td><td>Orin（NVIDIA）</td></tr>
+        <tr><td class="name">同上</td><td>同上</td><td>FP16 加 INT8 PTQ：67.66／70.81</td><td class="num">25 FPS</td><td>同上；文件說 FPS 主要受點數影響</td></tr>
+        <tr><td class="name">CUDA-V2XFusion</td><td>PointPillars 加 ResNet34，1 台相機加 1 顆 LiDAR，864×1536，DAIR-V2X-I</td><td>INT8 和 FP16 差距小於 1 AP</td><td class="num">81–158 FPS</td><td>AGX Orin，batch 4（FP16 dense 到 INT8 sparsity）</td></tr>
+        <tr><td class="name">CUDA-CenterPoint</td><td>VoxelNet，nuScenes val 57.57 mAP／65.64 NDS</td><td>FP16／INT8 head</td><td class="num">40.0／35.7 ms</td><td>Drive Orin</td></tr>
+        <tr><td class="name"><a href="https://arxiv.org/abs/1911.10150">PointPainting</a> 的 painting 步驟</td><td>pipelined（用前一張影像）</td><td>—</td><td class="num">+0.75 ms</td><td>論文的 GPU，不是 Orin</td></tr>
+        <tr><td class="name"><a href="https://arxiv.org/abs/2009.00784">CLOCs</a> 融合層</td><td>—</td><td>—</td><td class="num">&lt; 3 ms</td><td>桌機 GPU，不是 Orin</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <ul>
+      <li>BEVFusion 類模型需要自訂算子（sparse conv、BEV pool、voxelization）。NVIDIA 版自己實作了這些算子；mmdet3d 也提醒它的 voxelization 和原版不同，載入原版權重時要注意。</li>
+      <li>最省事的 TensorRT 路徑是用 mmdet3d 或 OpenPCDet 訓練，再對齊 NVIDIA CUDA-BEVFusion 的網路結構匯出（NVIDIA 版鎖定 MIT 的 commit db75150）。改了架構就要自己補 plugin<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。</li>
+      <li>Query 類模型（CMT、MoME）的 decoder 主要是標準 attention，理論上容易匯出 ONNX，但沒有找到官方的 TensorRT 或 INT8 實測。</li>
+      <li>晚期融合的部署最簡單：一個 TensorRT 化的 2D 偵測器（YOLO、RT-DETR 這類）、一個 3D 偵測器（CUDA-CenterPoint 或 PointPillars），加一個小融合模組，三者可以各自更新<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。</li>
+    </ul>
+
+    <h2>結語</h2>
+    <p>跨資料集的證據很少，現有的都顯示會崩，而能救回來的關鍵在資料前處理和座標、類別的規範，不在融合架構：intensity 是跨 LiDAR 型號最不可靠的通道，velocity 預測在跨域時是負擔。部署面，在這份調研涵蓋的方法裡，只有 BEVFusion（MIT）同時有三個獨立重現、TensorRT INT8 路徑（Orin 上 25 FPS、只掉 0.27 mAP）和 Autoware 整合，是最穩的環周 baseline；但訓練時要加上隨機遮掉感測器（CMT 的做法是 LiDAR 和相機各以 0.25 的機率遮掉），否則 LiDAR 一失效就歸零。CMT、MoME 這些穩健性更好的方法都停在研究碼，沒有 TensorRT 路徑，要自己承擔維護。</p>
+    <p>幾個常見的誤用也都和這一頁有關：用 nuScenes NDS 或 KITTI 榜的名次選方法（榜首常含 TTA 或 ensemble，KITTI 前十名差距約 2 AP，已經飽和）、依賴深度補全產生虛擬點的方法（VirConv 系）、用 6 台相機的權重硬套別的相機配置（只留前相機時 MVX-Net 從 61.0 掉到 17.5）、靠 intensity 做跨 LiDAR 遷移，以及把研究碼當成產品依賴。</p>
+    <p>這裡沒有涵蓋的是：跨資料集的結論幾乎都建立在 MUSDA 一篇預印本上，還沒有第三方重現；延遲數字來自不同平台，彼此不能直接比較；部分數字是 PDF 表格解析後再對照正文還原的，引用前請以原文為準。</p>
+  </section>
+</main>
+
+<script>
+const STEPS = [
+  { line: '直接遷移', l1: 25.8, l2: 22.0,
+    say: 'nuScenes 上訓練的 BEVFusion 直接拿到 Waymo 測，Car mAP L1 只有 25.8（L2 22.0）。在 Waymo 上完整訓練的 oracle 是 78.8：同一個架構，換一台車就少了三分之二。' },
+  { line: '+ 座標平移：地面對齊到 z = 0', l1: 34.2, l2: 29.1,
+    say: '兩台車的 LiDAR 裝在不同高度，感測器座標下的地面高度就不同，模型學到的「物件底部在哪個 z」對不上。把座標平移到地面 z = 0，+8.4。' },
+  { line: '+ 移除 intensity', l1: 44.0, l2: 37.5,
+    say: 'intensity 的尺度和分佈隨 LiDAR 型號而變，是跨型號最不可靠的通道。點只留 x、y、z，+9.8，是四步裡第二大的增益。' },
+  { line: '+ 移除 velocity 預測', l1: 50.6, l2: 43.2,
+    say: 'nuScenes 的設定用多個 sweep 累積來預測物件速度，這和來源資料的 sweep 數、時戳、ego pose 綁在一起，跨域時是負擔。拿掉 velocity head，+6.6。' },
+  { line: '+ 類別重映射', l1: 61.0, l2: 52.0,
+    say: '兩個資料集的類別定義不同，統一成 Car、Pedestrian、Cyclist 三類，+10.4。四步做完到 61.0，離 oracle 還差 17.8。<span class="note">多源設定（nuScenes 加 Lyft 遷到 Waymo）下，Cyclist 即使做完這些也只有 20.0（oracle 61.5）。</span>' },
+];
+const ORACLE = 78.8;
+const NUSC_CLASSES = ['car', 'truck', 'bus', 'trailer', 'construction_vehicle', 'pedestrian', 'motorcycle', 'bicycle', 'traffic_cone', 'barrier'];
+const H_SRC = 1.8, H_TGT = 2.2;            // illustrative mount heights (m)
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const state = { k: 0 };
+
+function chips(list) {
+  return `<div class="chips">${list.map(([t, cls]) => `<span class="chip ${cls || ''}">${t}</span>`).join('')}</div>`;
+}
+
+function drawSide(k) {
+  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 260 96');
+  const G = 82, S = 26;                       // ground y, pixels per metre
+  [[50, H_SRC, '來源車'], [180, H_TGT, '目標車']].forEach(([x, h, name]) => {
+    el('line', { class: 'ground', x1: x - 45, y1: G, x2: x + 45, y2: G }, svg);
+    el('line', { class: 'mast', x1: x, y1: G, x2: x, y2: G - h * S }, svg);
+    el('circle', { class: 'sensor', cx: x, cy: G - h * S, r: 3.5 }, svg);
+    el('text', { x: x - 44, y: 94 }, svg).textContent = `${name}，LiDAR 高 ${h} m`;
+    // where z = 0 sits: at the sensor before step 1, on the ground after it
+    const zy = k >= 1 ? G : G - h * S;
+    el('line', { class: k >= 1 ? 'zero' : 'zero-bad', x1: x - 45, y1: zy, x2: x + 45, y2: zy }, svg);
+  });
+  el('text', { x: 4, y: 10 }, svg).textContent = k >= 1 ? '虛線 z = 0：兩台車都在地面' : '虛線 z = 0：在感測器上，地面分別在 z = −1.8 和 −2.2';
+  return svg;
+}
+
+function drawBars(k) {
+  const svg = $('#bars'); svg.replaceChildren();
+  const Y = v => 175 - v / 100 * 160, bw = 34, gap = 10;
+  el('line', { class: 'oracle', x1: 8, y1: Y(ORACLE), x2: 236, y2: Y(ORACLE) }, svg);
+  el('text', { x: 236, y: Y(ORACLE) - 5, 'text-anchor': 'end' }, svg).textContent = `oracle ${ORACLE}`;
+  STEPS.forEach((s, i) => {
+    const x = 14 + i * (bw + gap);
+    if (i <= k) {
+      el('rect', { class: 'bar' + (i === k ? ' on' : ''), x, y: Y(s.l1), width: bw, height: 175 - Y(s.l1) }, svg);
+      el('text', { class: 'val', x: x + bw / 2, y: Y(s.l1) - 4, 'text-anchor': 'middle' }, svg).textContent = s.l1.toFixed(1);
+    }
+    el('text', { x: x + bw / 2, y: 190, 'text-anchor': 'middle' }, svg).textContent = i === 0 ? '直接' : `+${i}`;
+  });
+}
+
+function renderStep() {
+  const k = state.k, s = STEPS[k];
+  $('#pseudo').innerHTML = STEPS.map((st, i) => `<span class="pl${i === k ? ' on' : ''}${i < k ? ' add' : ''}${i > k ? ' cm' : ''}">${i}  ${st.line}</span>`).join('');
+
+  const data = $('#data'); data.replaceChildren();
+  const box = (k_, html) => { const d = document.createElement('div'); d.innerHTML = `<span class="k">${k_}</span>${html}`; data.appendChild(d); return d; };
+  const side = box('安裝高度和 z = 0（示意）', '');
+  side.classList.add('side'); side.appendChild(drawSide(k));
+  box('每個點的輸入通道', chips([['x'], ['y'], ['z', k === 1 ? 'new' : ''], ['intensity', k >= 2 ? 'off' : '']]));
+  box('偵測頭輸出', chips([['框'], ['類別'], ['velocity', k >= 3 ? 'off' : '']]));
+  box('類別', k >= 4
+    ? chips([['Car', 'new'], ['Pedestrian', 'new'], ['Cyclist', 'new']])
+    : chips(NUSC_CLASSES.map(c => [c])) + '<span class="k" style="margin-top:0.3rem">nuScenes 的 10 類；Waymo 是 Vehicle、Pedestrian、Cyclist 等</span>');
+
+  drawBars(k);
+  const prev = k ? STEPS[k - 1].l1 : null;
+  $('#vars').innerHTML = [
+    ['L1', s.l1.toFixed(1)], ['L2', s.l2.toFixed(1)], ['這一步', prev === null ? '—' : `+${(s.l1 - prev).toFixed(1)}`],
+    ['離 oracle', (ORACLE - s.l1).toFixed(1)],
+  ].map(([a, b], i) => `<span class="var${i === 2 && k ? ' chg' : ''}"><span class="k">${a}</span><span class="v">${b}</span></span>`).join('');
+  $('#say').innerHTML = s.say;
+}
+
+const stepper = site.stepper(document.querySelector('[data-stepper]'), { onChange: k => { state.k = k; renderStep(); } });
+stepper.setTotal(STEPS.length - 1);
+stepper.set(0);
+</script>
+</body>
+</html>

@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>融合層級：相機資訊從哪裡接進來</title>
+<meta name="description" content="LiDAR 和相機融合的五個層級：點級 decoration、frustum、BEV 融合、query 融合、晚期融合。挑一個方法，看相機資訊接進 LiDAR 管線的哪一段，以及外參不準、相機或 LiDAR 壞掉時它會怎樣。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Exploratory workbench: level buttons, method buttons, a pipeline diagram
+   (camera lane on top, LiDAR lane below) where the selected method's camera-to-LiDAR hook is drawn in hit,
+   then two panels answering the six questions from the static list for the selected method. */
+.fuse { overflow-x: auto; }
+.fuse svg { width: 100%; min-width: 640px; height: auto; display: block; }
+.fuse text { fill: var(--ink); font-size: 13px; font-family: var(--font-body); }
+.fuse .node rect { fill: var(--bg); stroke: var(--line); stroke-width: 1.2; }
+.fuse .node.on rect { stroke: var(--hit); stroke-width: 2.4; }
+.fuse .node text { text-anchor: middle; dominant-baseline: central; }
+.fuse .lane { fill: var(--muted); font-size: 12px; }
+.fuse .flow { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+.fuse #hook { stroke: var(--hit); stroke-width: 2.4; fill: none; }
+.fuse #hook-label { fill: var(--hit); font-size: 12.5px; font-weight: 700; }
+.work.qa2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.qa { list-style: none; margin: 0; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.65rem; counter-reset: q var(--start, 0); }
+.qa li { counter-increment: q; font-size: 0.86rem; }
+.qa .q { display: block; font-size: 0.78rem; color: var(--muted); font-weight: 700; }
+.qa .q::before { content: counter(q) ". "; font-family: var(--font-mono); }
+table.cmp.wide { min-width: 62rem; font-size: 0.84rem; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← LiDAR 與相機融合 3D 偵測</a>
+    <h1>融合層級：相機資訊從哪裡接進來</h1>
+    <p class="lead">LiDAR 和相機融合的方法名字很多，但拆開來看，幾乎都是同一條 LiDAR 偵測管線，差別只在相機資訊從哪一段接進來。接得越早，兩邊綁得越緊，外參一不準就出錯；接得越晚，兩邊越獨立，但能互補的東西也越少。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、官方文件和程式庫後撰寫。</p>
+      <p>融合層級的分類和各方法的機制不會過期；benchmark 數字、方法間的優劣和 repo 的維護狀態會隨新方法出現而改變。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>兩個感測器各缺什麼</h2>
+    <p>LiDAR 直接量到每個點的 3D 位置，幾何很準，但點很稀疏：遠處的行人可能只有幾個點，而且看不到顏色和紋理。相機剛好相反，每個像素都有豐富的外觀資訊，2D 網路很擅長認出「這是行人」，但影像本身沒有深度。融合想要的是兩邊互補：幾何交給 LiDAR，語意交給相機。</p>
+    <p>要互補，就得知道 LiDAR 的某個點對到影像上的哪個像素。這靠兩組校正參數：<span class="term" data-def="LiDAR 和相機之間的相對位置和朝向，也就是一個旋轉加一個平移。">外參</span>把點從 LiDAR 座標轉到相機座標，<span class="term" data-def="相機的焦距和光心位置，決定相機座標裡的 3D 點投到影像的哪個像素。">內參</span>再把它投到像素（u, v）。外參會因為安裝、震動、溫度而漂移，所以「融合方法有多依賴這個對應關係」，就決定了它對校正誤差有多敏感。</p>
+
+    <h2>五個接入點</h2>
+    <p>一條典型的 LiDAR 偵測管線是：點雲 → 體素或柱編碼 → 3D 主幹 → <span class="term" data-def="Bird's-eye view，鳥瞰視角。把 3D 空間壓成地面上的一張格子特徵圖，每一格存那個位置的特徵。">BEV</span> 特徵 → 偵測頭 → 3D 框。相機那邊是：影像 → 2D 主幹 → 影像特徵或分割 → 2D 偵測頭 → 2D 框。融合方法依相機資訊接進來的位置分成五類：</p>
+    <ol>
+      <li><strong>點級（early／point-level）</strong>：每個 LiDAR 點投影到影像上，取那個像素的語意分數或特徵附加到點上，再交給幾乎不改的 LiDAR 偵測器。</li>
+      <li><strong>Frustum（cascade）</strong>：先用 2D 偵測器框出物件，只在框對應的 3D 視錐裡用點雲估 3D 框。</li>
+      <li><strong>中期（BEV 融合）</strong>：兩邊各自轉成 BEV 特徵圖，在同一張格子上合併。</li>
+      <li><strong>Query 融合</strong>：Transformer 的物件 query 同時去兩邊的特徵裡查資料，對應關係用 attention 學出來。</li>
+      <li><strong>晚期（late／object-level）</strong>：兩邊各自偵測完，再把 2D 框和 3D 框配對、重新評分。</li>
+    </ol>
+    <p>越往前接，點和像素的對應越「硬」：外參錯一點，點就被塗上錯誤的語意，而且後面的網路分不出來。越往後接，兩個分支越獨立，可以各自訓練、各自替換，任一個感測器壞掉時自然退化成單一感測器；代價是特徵層級的互補（例如 LiDAR 稀疏的地方由影像補出物件）用不到。</p>
+
+    <h2>看一個融合方法的六個問題</h2>
+    <p>比較融合方法時，與其看 leaderboard 的名次，不如對每個方法問同樣六個問題。前三個問結構，後三個問它怎麼壞：</p>
+    <ol>
+      <li>相機分支輸出什麼？（類別分數、CNN 特徵、深度、2D 框）</li>
+      <li>接到 LiDAR 管線的哪一段？</li>
+      <li>點和像素怎麼對應？（固定的投影、學出來的 attention、還是框和框配對）</li>
+      <li>外參不準時會怎樣？</li>
+      <li>相機壞掉時會怎樣？</li>
+      <li>LiDAR 壞掉時會怎樣？</li>
+    </ol>
+  </section>
+
+  <section class="bench" aria-label="融合方法探索">
+    <div class="row presets" id="levels"><span class="lbl">層級</span></div>
+    <div class="row presets" id="methods"><span class="lbl">方法</span></div>
+    <div class="row">
+      <div class="fuse">
+        <svg viewBox="0 0 905 304" role="img" aria-label="LiDAR 與相機融合管線，標出所選方法的相機資訊接入位置">
+          <defs>
+            <marker id="m-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill: var(--muted)"/></marker>
+            <marker id="m-hook" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" style="fill: var(--hit)"/></marker>
+          </defs>
+          <text class="lane" x="10" y="14">相機分支</text>
+          <g class="node" data-n="img"><rect x="10" y="22" width="130" height="46" rx="6"/><text x="75" y="45">影像</text></g>
+          <g class="node" data-n="cbb"><rect x="161" y="22" width="130" height="46" rx="6"/><text x="226" y="45">2D 主幹</text></g>
+          <g class="node" data-n="cfeat"><rect x="312" y="22" width="130" height="46" rx="6"/><text x="377" y="45">影像特徵／分割</text></g>
+          <g class="node" data-n="chead"><rect x="463" y="22" width="130" height="46" rx="6"/><text x="528" y="45">2D 偵測頭</text></g>
+          <g class="node" data-n="cbox"><rect x="614" y="22" width="130" height="46" rx="6"/><text x="679" y="45">2D 框</text></g>
+          <path class="flow" d="M140 45H159" marker-end="url(#m-flow)"/><path class="flow" d="M291 45H310" marker-end="url(#m-flow)"/>
+          <path class="flow" d="M442 45H461" marker-end="url(#m-flow)"/><path class="flow" d="M593 45H612" marker-end="url(#m-flow)"/>
+
+          <text class="lane" x="10" y="298">LiDAR 分支</text>
+          <g class="node" data-n="pc"><rect x="10" y="236" width="130" height="46" rx="6"/><text x="75" y="259">點雲</text></g>
+          <g class="node" data-n="vox"><rect x="161" y="236" width="130" height="46" rx="6"/><text x="226" y="259">體素／柱編碼</text></g>
+          <g class="node" data-n="bb"><rect x="312" y="236" width="130" height="46" rx="6"/><text x="377" y="259">3D 主幹</text></g>
+          <g class="node" data-n="bev"><rect x="463" y="236" width="130" height="46" rx="6"/><text x="528" y="259">BEV 特徵</text></g>
+          <g class="node" data-n="head"><rect x="614" y="236" width="130" height="46" rx="6"/><text x="679" y="259">偵測頭</text></g>
+          <g class="node" data-n="box"><rect x="765" y="236" width="130" height="46" rx="6"/><text x="830" y="259">3D 框</text></g>
+          <path class="flow" d="M140 259H159" marker-end="url(#m-flow)"/><path class="flow" d="M291 259H310" marker-end="url(#m-flow)"/>
+          <path class="flow" d="M442 259H461" marker-end="url(#m-flow)"/><path class="flow" d="M593 259H612" marker-end="url(#m-flow)"/>
+          <path class="flow" d="M744 259H763" marker-end="url(#m-flow)"/>
+
+          <path id="hook" d="" marker-end="url(#m-hook)"/>
+          <text id="hook-label" x="0" y="0"></text>
+        </svg>
+      </div>
+      <p class="hint">綠色箭頭是相機資訊接進 LiDAR 管線的位置，起點和終點的方塊也標成綠色。圖只畫接入點，省略時間同步和校正細節。</p>
+    </div>
+    <div class="row work qa2">
+      <div class="panel">
+        <div class="panel-head"><span>結構</span><span class="sub" id="m-name"></span></div>
+        <ol class="qa" id="qa-a"></ol>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>怎麼壞</span></div>
+        <ol class="qa" id="qa-b" style="--start: 3"></ol>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>點級：把影像資訊塗到點上</h2>
+    <p>點級方法的共同機制是：每個 LiDAR 點用外參加內參投影到影像上，取該像素的影像資訊附加到點的特徵後面，再交給（幾乎）不改的 LiDAR 偵測器。差別在 2D 網路輸出什麼、接到 LiDAR 分支的哪一段。</p>
+    <p><a href="https://arxiv.org/abs/1911.10150">PointPainting</a> 是最乾淨的版本：附加的是語意分割的類別分數，影像網路和 LiDAR 網路完全解耦，偵測器只要把輸入通道數改大。它在 KITTI val 的 BEV moderate 上讓 PointPillars 的行人 +4.57、自行車 +2.84，但車幾乎沒變（+0.08）；nuScenes test 上 PointPillars 加 painting 多 6.3 mAP<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>。用前一張影像的分割結果做 pipelining，只多 0.75 ms，精度不掉，而且偵測增益和分割品質（mIoU）正相關。<a href="https://openaccess.thecvf.com/content/CVPR2021/html/Wang_PointAugmenting_Cross-Modal_Augmentation_for_3D_Object_Detection_CVPR_2021_paper.html">PointAugmenting</a> 和 <a href="https://arxiv.org/abs/1904.01649">MVX-Net</a> 改附加更高維的 CNN 特徵，資訊比較豐富，但和影像網路綁得更緊。<a href="https://arxiv.org/abs/2111.06881">MVP</a> 和 <a href="https://arxiv.org/abs/2303.02314">VirConv</a> 則反過來，用影像替點雲補出虛擬點；<a href="https://arxiv.org/abs/2007.08856">EPNet</a> 和 <a href="https://arxiv.org/abs/2204.12463">Focals Conv</a> 把融合放進 3D 主幹內部。</p>
+    <p>點級方法需要外參、內參，以及時間同步的點和像素。它們的共同弱點也來自這裡：<strong>對應關係是寫死的投影</strong>，外參一偏，點就被塗上錯誤的語意，後面的網路沒有辦法分辨。相機壞掉時，painting 通道變成雜訊或零，LiDAR 偵測器收到訓練時沒見過的分佈。<a href="https://arxiv.org/abs/2203.11496">TransFusion</a> 論文把 PointAugmenting 式融合裝到同一個 LiDAR 主幹上測，6 張影像全掉時 mAP 降 17.2；逐點 concat 降 23.8。外參誤差的數字在<a href="../robustness/">穩健性那一頁</a>。</p>
+    <p>另一個不會報錯的陷阱是資料增強。旋轉、翻轉、縮放、GT-sampling 這些幾何增強都改了點的位置，投影時必須能反推回原始座標，否則點會對到錯的像素。<a href="https://arxiv.org/abs/2203.08195">DeepFusion</a> 的消融顯示，不做這個反推（InverseAug）時，行人 L2 APH 只有 63.5，幾乎等於 LiDAR-only 的 63.0；做了才是 67.0<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>。對齊做錯時融合增益會悄悄消失，訓練照樣收斂。</p>
+
+    <h2>Frustum：先 2D 再 3D</h2>
+    <p><a href="https://arxiv.org/abs/1711.08488">Frustum PointNets</a> 和 <a href="https://arxiv.org/abs/1903.01864">Frustum ConvNet</a> 先用 2D 偵測器框出物件，再只在框對應的 3D 視錐裡用點雲估 3D 框。這很適合單一前相機的配置（它們都從 KITTI 起家），但召回率被 2D 偵測器封頂：F-PointNet 原文承認，暗光或嚴重遮擋時 2D 偵測器漏掉的物件，3D 也不會偵測到。相機失效就等於整個偵測失效，所以不適合當唯一的偵測路徑。兩個 repo 都已多年沒有更新（最後 push 分別在 2020 年 3 月和 12 月）。</p>
+
+    <h2>BEV 融合：在同一張地圖上合併</h2>
+    <p><a href="https://arxiv.org/abs/2205.13542">BEVFusion（MIT）</a>是這一類的代表：相機特徵用 LSS（估每個像素的深度分佈，再 pooling 到 BEV 格子）轉成相機 BEV，LiDAR 走體素到 BEV，兩張圖 concat 後用卷積融合，接 TransFusion head。它沒有逐點對應，外參誤差的效果是整塊相機 BEV 特徵平移，LiDAR BEV 不受影響，所以校正敏感度中等。但不同評測對它的敏感度給出互相矛盾的結論，細節在穩健性那一頁。</p>
+    <p>它的官方 repo 已經 archived（最後 push 2024 年 7 月），但 mmdet3d、OpenPCDet、NVIDIA 三個獨立 codebase 都重現了接近的數字（nuScenes val mAP／NDS 分別是 68.6／71.4、67.75／70.98、68.52／71.38）<span class="term" data-def="其他 codebase 重新訓練後得到相近的數字。">【第三方重現】</span>，NVIDIA 還有 TensorRT 版。論文聲稱比 TransFusion 少 1.9 倍 MACs、延遲低 1.3 倍，在 RTX 3090 上 8.4 FPS。相機分支的深度 bin 和影像解析度、焦距有關，換相機要重調；NVIDIA V2XFusion 的文件就明確要求換資料集時調整 dbound。</p>
+    <p>同一類的其他方法各自補一個弱點：<a href="https://arxiv.org/abs/2205.13790">ADLab 的 BEVFusion</a> 把兩條 stream 設計成可以獨立運作，目標是 LiDAR 失效時相機 stream 仍能偵測，但需要用 robust augmentation 微調；<a href="https://arxiv.org/abs/2403.11848">GraphBEV</a> 專門處理外參誤差；<a href="https://arxiv.org/abs/2311.07152">DAL</a> 主張相機只輔助分類、框的幾何全靠 LiDAR；<a href="https://arxiv.org/abs/2309.14516">UniBEV</a> 用正規化的權重取代 concat，讓缺一個感測器時不用重訓。LiDAR 失效時，這一類沒做 <span class="term" data-def="訓練時隨機把某個感測器的輸入整個遮掉，逼模型學會只靠另一個感測器偵測。">modality dropout</span> 訓練的模型會崩。</p>
+
+    <h2>Query 融合：讓 attention 去找對應</h2>
+    <p>TransFusion 分兩階段：先用 LiDAR 的 BEV heatmap 初始化物件 query 並產生初始框，再讓 query 用 cross-attention 去影像特徵裡精修。相機只負責精修，所以它對相機雜訊和外參誤差非常穩：camera 到 LiDAR 平移誤差 1 m 時只掉 0.49 mAP。代價是相機的貢獻也很小，nuScenes test 上只比 LiDAR-only 多 1.5 NDS，而且 LiDAR 一掉就完全無法運作，因為 query 的初始化整個靠點雲。</p>
+    <p><a href="https://arxiv.org/abs/2301.01283">CMT</a> 沒有顯式的視角轉換，影像和點雲 token 都加上 3D 位置編碼後直接送進 DETR decoder，再加上 masked-modal training（訓練時隨機遮掉某個感測器）。它在 nuScenes test 上 74.1 NDS（單模型）<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>，在第三方的 MultiCorrupt 評測裡穩健性排第一，但沒有官方 TensorRT 實作。<a href="https://arxiv.org/abs/2203.10642">FUTR3D</a> 用 3D reference point 去各感測器取樣特徵，支援任意感測器組合，相機加 4 線 LiDAR 就有 58.0 mAP，高於 32 線的 CenterPoint（56.6），對低線數 LiDAR 有參考價值。<a href="https://arxiv.org/abs/2304.09801">MetaBEV</a> 和 <a href="https://arxiv.org/abs/2503.19776">MoME</a> 針對缺感測器設計，MoME 用三個 expert decoder（只相機、只 LiDAR、兩者）讓 router 依特徵品質替每個 query 選一個。</p>
+    <p>反例是 <a href="https://arxiv.org/abs/2208.11112">DeepInteraction</a> 這種早期雙向互動：相機雜訊會透過互動污染整個特徵，它在 MultiCorrupt 的整體穩健性最低，霧天只剩 0.583。<a href="https://arxiv.org/abs/2304.14340">SparseFusion</a> 則讓兩個感測器各自偵測出稀疏的候選，再用輕量的 self-attention 融合，結構上接近「可學習的晚期融合」，MultiCorrupt 的作者認為它的穩健性就來自兩條平行分支。</p>
+
+    <h2>晚期融合：各自偵測完再配對</h2>
+    <p><a href="https://arxiv.org/abs/2009.00784">CLOCs</a> 在 NMS 之前，把任意 2D 偵測器和任意 3D 偵測器的候選框組成稀疏張量（2D 和 3D 框投影後的 IoU、兩邊的分數、距離），用一個小 CNN 重新評分 3D 候選，只多不到 3 ms。沒有 2D 對應的 3D 候選不會被丟掉，而是把 IoU 和 2D 分數設成 −1，讓網路分得出「相機沒看到」和「IoU 很低」。它的增益隨 LiDAR 基線變強而遞減：KITTI test 的 Car 3D moderate，SECOND +5.90、PointRCNN +1.04、PV-RCNN 只有 +0.39<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>。官方 repo 只支援 KITTI 和 SECOND，不過邏輯很小，重寫不難。</p>
+    <p>Autoware 的 <code>autoware_image_projection_based_fusion</code> 是規則式的晚期融合：用 2D ROI 更新 3D 物件的類別、替 LiDAR cluster 指定類別，也有 pointpainting 節點，而且附完整的時間同步機制（每相機的 timestamp offset、timeout、matching window）。它是少數有實車產品經驗、持續維護的開源參考實作。</p>
+    <p>晚期融合的優點是兩個感測器可以各自訓練、驗證、替換，任一個壞掉時自然退化，校正誤差只影響「配對」，不影響 3D 幾何；缺點是用不到特徵層級的互補，分數上限較低。但有一個必須說清楚的證據缺口：Yu et al.、Dong et al.、MultiCorrupt 這幾個穩健性 benchmark <strong>都沒有評測晚期融合</strong>。「晚期融合比較穩健」目前是結構推論加業界實務，沒有同一協定下的直接數字<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。</p>
+
+    <h2>方法比較表</h2>
+    <p>「多 sweep」一欄指方法是否依賴多個 sweep 的時戳。沒有任何方法需要 LiDAR 的 Doppler 速度欄位；nuScenes 的官方設定普遍用 10 個 sweep 加 Δt 通道來預測速度（例如 mmdet3d 的 BEVFusion config 和 OpenPCDet 的 nuScenes config），這是設定問題，可以改成單 sweep 並拿掉 velocity head，但多 sweep 累積本身需要 ego pose。</p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="cmp wide">
+      <thead><tr><th>方法</th><th>層級</th><th>主要輸入</th><th>多 sweep</th><th>相機失效</th><th>LiDAR 失效</th><th>外參誤差敏感度</th><th>開源／部署</th></tr></thead>
+      <tbody>
+        <tr><td class="name">PointPainting</td><td>點級 decoration</td><td>xyz(+i) 加 2D 分割</td><td>不需要</td><td>中到差（painting 通道失真）</td><td>全掛</td><td><strong>高</strong></td><td>沒有官方 repo；Autoware 有 pointpainting_fusion 節點</td></tr>
+        <tr><td class="name">PointAugmenting、MVX-Net</td><td>點級特徵</td><td>xyz(+i) 加 CNN 特徵</td><td>不需要</td><td>差（PA 掉 6 張圖 −17.2 mAP）</td><td>全掛</td><td><strong>高</strong>（MVX-Net −10.2 mAP）</td><td>mmdet3d 有 MVX-Net（KITTI）</td></tr>
+        <tr><td class="name">EPNet、Focals Conv-F、VirConv</td><td>點、體素級</td><td>另加深度補全（VirConv）</td><td>不需要</td><td>—</td><td>全掛</td><td><strong>極高</strong>（KITTI-C：EPNet 82.7→35.1）</td><td>OpenPCDet 有 Focals Conv；VirConv repo 停在 2024-03</td></tr>
+        <tr><td class="name">F-PointNet、F-ConvNet</td><td>cascade</td><td>2D 偵測加點雲</td><td>不需要</td><td><strong>全掛</strong>（需要 2D 框）</td><td>全掛</td><td>中</td><td>2020 年後沒有維護</td></tr>
+        <tr><td class="name">BEVFusion（MIT）</td><td>BEV 特徵</td><td>多相機加 LiDAR</td><td>nuScenes 設定用 10 sweeps 加 velocity head（可拿掉）</td><td>小幅退化（MultiCorrupt RA 0.974）</td><td>沒做 dropout 時崩；masked-modal 訓練後只相機約 40 NDS</td><td>中（各評測結論不一）</td><td><strong>最成熟</strong>：mmdet3d、OpenPCDet、NVIDIA CUDA-BEVFusion、Autoware</td></tr>
+        <tr><td class="name">BEVFusion（ADLab）</td><td>BEV 特徵</td><td>同上</td><td>同上</td><td>小</td><td>做了 robust aug 時較好</td><td>中</td><td>repo 2023-04 後停止</td></tr>
+        <tr><td class="name">TransFusion</td><td>query（LiDAR 初始化）</td><td>同上</td><td>同上</td><td><strong>極穩</strong>（6 張全掉 −3.9 mAP）</td><td><strong>全掛</strong></td><td><strong>低</strong>（1 m 平移只掉 0.49）</td><td>OpenPCDet（TransFusion-L）、mmdet3d</td></tr>
+        <tr><td class="name">FUTR3D</td><td>query（不分感測器）</td><td>任意組合</td><td>同上</td><td>中</td><td>有相機時可運作</td><td>中</td><td>repo 2023-07</td></tr>
+        <tr><td class="name">CMT</td><td>query（token 加位置編碼）</td><td>多相機加 LiDAR</td><td>同上</td><td>穩（缺單一相機平均 −0.7 NDS）</td><td><strong>穩</strong>（masked 訓練後只相機約 0.45 NDS）</td><td>中（MultiCorrupt spatial RA 0.809，最佳）</td><td>研究碼（2023-10），沒有 TensorRT</td></tr>
+        <tr><td class="name">MetaBEV、UniBEV、MoME、MEFormer</td><td>針對缺感測器</td><td>同上</td><td>同上</td><td>穩</td><td>穩（需要對應的訓練）</td><td>中</td><td>研究碼</td></tr>
+        <tr><td class="name">CLOCs</td><td>晚期（候選級）</td><td>任意 2D 偵測加任意 3D 偵測</td><td>不需要</td><td><strong>自然退化成 LiDAR-only</strong></td><td>沒有 3D（需另有 LiDAR 路徑）</td><td><strong>低到中</strong>（只影響配對）</td><td>官方 repo 只支援 KITTI 和 SECOND；容易重寫</td></tr>
+        <tr><td class="name">規則式 ROI 融合（Autoware）</td><td>晚期（物件級）</td><td>3D 物件加 2D ROI</td><td>不需要</td><td>自然退化</td><td>同上</td><td>低到中</td><td><strong>Autoware 持續維護（ROS 2）</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <h2>結語</h2>
+    <p>融合方法的差別，說到底是相機資訊接在 LiDAR 管線的哪一段、點和像素怎麼對應。接得越早，對應越依賴固定的投影，外參不準時越容易悄悄出錯；接得越晚，兩邊越獨立，越容易各自替換和退化，但能從影像拿到的增益也越少。最穩健的融合方式和增益最大的融合方式往往不是同一個。</p>
+    <p>這一頁只比較了結構。每個方法實際上壞得多嚴重，要看合成腐化的評測數字，那些數字彼此還常常矛盾，見<a href="../robustness/">穩健性</a>；換一台車或搬上嵌入式平台會遇到的問題，見<a href="../deployment/">從論文到車上</a>。</p>
+  </section>
+</main>
+
+<script>
+const LEVELS = [
+  { id: 1, name: '① 點級' }, { id: 2, name: '② Frustum' }, { id: 3, name: '③ BEV' },
+  { id: 4, name: '④ Query' }, { id: 5, name: '⑤ 晚期' },
+];
+// Node centers (x) in the SVG; camera nodes sit on top (y 22..68), LiDAR nodes below (y 236..282).
+const CX = { img: 75, cbb: 226, cfeat: 377, chead: 528, cbox: 679, pc: 75, vox: 226, bb: 377, bev: 528, head: 679, box: 830 };
+const POINT_CALIB = '高。投影是固定的公式，外參一偏，點就被塗上別處的語意，後面的網路分辨不出來。';
+const POINT_CAM = 'painting 通道變成雜訊或零，偵測器收到訓練時沒見過的分佈。';
+const LIDAR_DEAD = '全掛。LiDAR 是主感測器，偵測器沒有點就沒有輸出。';
+const NO_DATA = '沒有找到專門的評測數字。';
+const METHODS = [
+  { k: 'pp', lv: 1, name: 'PointPainting', src: 'cfeat', dst: 'pc', lab: '按（u, v）取分數，附加到每個點',
+    a: ['語意分割的每像素類別分數（KITTI 是 4 類：車、行人、自行車、背景）。', '點雲本身：（x, y, z, i）變成（x, y, z, i, s1…sC），偵測器只把輸入通道數改大。', '固定投影：外參加內參把每個點投到（u, v），取那個像素的分數。'],
+    b: [POINT_CALIB, '中到差：' + POINT_CAM, LIDAR_DEAD],
+    say: '影像網路和 LiDAR 偵測器完全解耦，各自可換；用前一張影像的分割結果 pipelining 只多 0.75 ms。KITTI 上對行人、自行車有增益，對車幾乎沒有。' },
+  { k: 'pa', lv: 1, name: 'PointAugmenting', src: 'cfeat', dst: 'pc', lab: '按（u, v）取 64 維特徵',
+    a: ['CenterNet 的 DLA34 輸出，每像素 64 維特徵。', '點特徵；帶影像特徵的點另走一條 3D 稀疏卷積流，最後在 BEV 上和 LiDAR 流 concat。', '固定投影。'],
+    b: [POINT_CALIB + 'Yu et al. 的外參擾動下 46.9→43.6 mAP【第三方評測】。', '差：TransFusion 論文把 PA 式融合裝到同一主幹上，6 張影像全掉時 −17.2 mAP。', LIDAR_DEAD],
+    say: '以 CenterPoint 為基礎，另提出跨感測器的資料增強（貼 GT 物件時點雲和影像同步貼）。Waymo 上相機 FOV 外的區域要靠 CenterPoint 補。' },
+  { k: 'pf', lv: 1, name: 'MVX-Net（PointFusion）', src: 'cfeat', dst: 'pc', lab: '按（u, v）取特徵，降到 16 維',
+    a: ['Faster R-CNN 的 VGG16 conv5 特徵（512 維），經全連接層降到 16 維。', '點特徵，在 VFE（體素特徵編碼）之前：7 維點特徵加 16 維影像特徵一起送進 VFE。', '固定投影。'],
+    b: [POINT_CALIB + 'Yu et al. 的外參擾動下 61.0→50.8 mAP（−10.2）【第三方評測】。', '差：缺前相機時 61.0→47.8 mAP（ADLab 重跑）。', LIDAR_DEAD],
+    say: '以 VoxelNet 為主幹，論文中精度略優於 VoxelFusion；mmdet3d 有 KITTI 設定。' },
+  { k: 'vf', lv: 1, name: 'MVX-Net（VoxelFusion）', src: 'cfeat', dst: 'vox', lab: '每個體素投影成 ROI，池化後接上',
+    a: ['同 PointFusion：VGG16 conv5 特徵，降到 64 維。', '體素特徵，在 VFE 之後。', '固定投影：每個非空體素投影成影像上的 ROI，池化出特徵。'],
+    b: [POINT_CALIB, '差：同 MVX-Net。', LIDAR_DEAD],
+    say: '精度略低於 PointFusion，但比較省記憶體，也能延伸到沒有 LiDAR 點的空體素。' },
+  { k: 'mvp', lv: 1, name: 'MVP', src: 'cfeat', dst: 'pc', lab: 'mask 內取樣，借最近點的深度生成虛擬點',
+    a: ['CenterNet2 的實例 mask 和類別分數。', '點雲本身：新增虛擬點，原有的點不變。', '每個物件 mask 內隨機取樣像素，借投影後最近的真實 LiDAR 點的深度反投影回 3D。'],
+    b: ['屬於固定投影的硬關聯，和同層級一樣敏感；' + NO_DATA, NO_DATA, '依賴 LiDAR 偵測器本身夠強：1-beam LiDAR 時只有 35.8 NDS（MIT BEVFusion 論文的比較）。'],
+    say: '以 CenterPoint 為基礎，主要補遠處、小物件點太稀疏的問題；體素化時真實點和虛擬點分開池化。' },
+  { k: 'ep', lv: 1, name: 'EPNet', src: 'cfeat', dst: 'bb', lab: '每個 SA 層各融合一次',
+    a: ['輕量 CNN 的 4 個尺度影像特徵，和 3D 網路一起訓練。', '3D 主幹內部：PointNet++ 的 4 個 SA 層各融合一次。', '固定投影加雙線性插值；融合權重由 LiDAR 和影像特徵一起算出。'],
+    b: ['極高：KITTI-C 的外參擾動下 Car moderate 3D AP 82.72→35.14【第三方評測】。', NO_DATA, LIDAR_DEAD],
+    say: '兩階段（RPN 加精修），另有讓兩邊預測一致的 loss。KITTI 導向。' },
+  { k: 'fc', lv: 1, name: 'Focals Conv-F', src: 'cfeat', dst: 'bb', lab: '前幾個 stage 相加融合',
+    a: ['1/4 解析度的影像特徵，影像分支只有幾層，和偵測器一起訓練。', '3D 稀疏卷積主幹的前幾個 stage（論文的消融：融合到最後兩個 stage 反而有害）。', '固定投影，影像特徵經 MLP 降到相同通道數後直接相加。'],
+    b: ['極高：KITTI-C 的外參擾動下 85.88→43.01【第三方評測】。', NO_DATA, LIDAR_DEAD],
+    say: '可以插進 PV-RCNN、Voxel R-CNN、CenterPoint 等既有偵測器；OpenPCDet 有 KITTI 的實作。Dong et al. 發現 LiDAR 和相機的雜訊同時出現時，它比 LiDAR-only 還差。' },
+  { k: 'vc', lv: 1, name: 'VirConv', src: 'cfeat', dst: 'pc', lab: '深度補全後逐像素反投影成虛擬點',
+    a: ['PENet 用影像加 LiDAR 補成的稠密深度圖。', '點雲本身：大量虛擬點（1242×375 的影像約 46.6 萬點）和 LiDAR 點合併後送進主幹。', '固定投影：每個像素依補全的深度反投影成 3D 點。'],
+    b: ['極高：同類的點級方法在 KITTI-C 外參擾動下崩潰；VirConv 本身沒有被這些 benchmark 評測。', NO_DATA, LIDAR_DEAD],
+    say: 'KITTI Car 3D 榜第 1（87.20% moderate），但依賴在特定資料集上訓練的深度補全，論文也承認補全的雜訊會傷害精度。repo 停在 2024 年 3 月。' },
+  { k: 'fpn', lv: 2, name: 'F-PointNet', src: 'cbox', dst: 'pc', lab: '用 2D 框裁出 3D 視錐',
+    a: ['2D 偵測框。', '點雲本身：只保留框對應的 3D 視錐裡的點。', '框到視錐：用內參和外參把 2D 框反投影成一個錐體。'],
+    b: ['中：外參誤差讓裁出的視錐偏移。' + NO_DATA, '全掛：沒有 2D 框就沒有 3D 框。', LIDAR_DEAD],
+    say: '很適合單一前相機的配置，但召回率被 2D 偵測器封頂：暗光、遮擋時 2D 漏掉的物件，3D 也不會出現。repo 2020 年後沒有維護。' },
+  { k: 'bev', lv: 3, name: 'BEVFusion（MIT）', src: 'cfeat', dst: 'bev', lab: 'LSS 轉成相機 BEV，concat 後卷積',
+    a: ['影像特徵經 LSS（估每個像素的深度分佈，再 pooling 到 BEV 格子）轉成相機 BEV。', 'BEV 特徵：和 LiDAR BEV concat 後用卷積融合，接 TransFusion head。', '沒有逐點對應：兩邊各自落到同一張 BEV 格子上。'],
+    b: ['中：誤差讓整塊相機 BEV 平移，LiDAR BEV 不受影響。各評測結論互相矛盾：nuScenes-C 幾乎無影響，GraphBEV 依 Yu 協定重跑是 −7.7 mAP。', '小幅退化：MultiCorrupt 缺相機的 RA 0.974【第三方評測】。', '沒做 modality dropout 時崩；用 masked-modal 重訓後只剩相機約 40 NDS／32 mAP。'],
+    say: '三個獨立 codebase 重現一致，NVIDIA 有 TensorRT 版（Orin 上 INT8 25 FPS），是目前最成熟的環周 baseline。官方 repo 已 archived。' },
+  { k: 'graph', lv: 3, name: 'GraphBEV', src: 'cfeat', dst: 'bev', lab: '多學一個對齊，再合併 BEV',
+    a: ['同 BEVFusion 的相機 BEV。', 'BEV 特徵。', '在 BEVFusion 上加 LocalAlign（用 KD-tree 找鄰域點的深度）和 GlobalAlign（學 BEV 的整體偏移）。'],
+    b: ['低：noisy misalignment 下約 69.1 mAP，同條件的 BEVFusion 掉到 60.8【論文自報】。', NO_DATA, NO_DATA],
+    say: '專門處理外參誤差的研究碼，最後 push 2024 年 8 月。' },
+  { k: 'dal', lv: 3, name: 'DAL', src: 'cfeat', dst: 'head', lab: '相機特徵只進分類分支',
+    a: ['相機 BEV 特徵。', '偵測頭的分類分支；框的回歸只用 LiDAR 特徵。', 'BEV 上合併，但刻意不讓相機特徵影響框的幾何。'],
+    b: ['設計上框的幾何不受校正誤差污染；' + NO_DATA, NO_DATA, NO_DATA],
+    say: '主張「回歸不該用相機特徵」（Detecting As Labeling），作者強調可攜性。程式碼在 BEVDet 的 repo 裡。' },
+  { k: 'tf', lv: 4, name: 'TransFusion', src: 'cfeat', dst: 'head', lab: 'LiDAR 初始化的 query 用 attention 查影像',
+    a: ['影像特徵。', '偵測頭：第二階段的 query 去影像特徵精修初始框。', '學出來的 soft association：query 由 LiDAR BEV heatmap 初始化，再用 cross-attention 取影像特徵。'],
+    b: ['低：camera 到 LiDAR 平移誤差 1 m 時只掉 0.49 mAP【論文自報】。但在 MultiCorrupt 的錯位協定下 RA 0.685，墊底【第三方評測】。', '極穩：6 張影像全掉只降 3.9 mAP。', '全掛：query 的初始化完全依賴點雲。'],
+    say: '相機只負責精修，所以穩，但相機的貢獻也小：nuScenes test 只比 LiDAR-only 多 1.5 NDS。穩健性和融合增益之間有取捨。' },
+  { k: 'cmt', lv: 4, name: 'CMT', src: 'cfeat', dst: 'head', lab: '兩邊 token 加 3D 位置編碼，同進 decoder',
+    a: ['影像 token，加上 3D 位置編碼。', '偵測頭：DETR decoder 同時看影像和點雲的 token。', '沒有顯式視角轉換，對應關係由 attention 和位置編碼學出來。'],
+    b: ['中：MultiCorrupt spatial misalignment RA 0.809，所有方法裡最好【第三方評測】。', '穩：缺單一相機平均 −0.7 NDS。', '沒做 masked-modal 訓練時只剩相機 0.073 NDS；做了約 0.45 NDS。'],
+    say: 'nuScenes test 74.1 NDS（單模型），MultiCorrupt 整體穩健性第一。研究碼停在 2023 年 10 月，沒有官方 TensorRT 實作。' },
+  { k: 'mome', lv: 4, name: 'MoME', src: 'cfeat', dst: 'head', lab: 'router 替每個 query 選 expert',
+    a: ['影像特徵。', '偵測頭：三個 expert decoder（只相機、只 LiDAR、兩者）。', 'router 依特徵品質替每個 query 選一個 expert。'],
+    b: ['中：MultiCorrupt spatial misalignment RA 0.788。', '穩。', '穩，但需要對應的訓練。'],
+    say: '2025 年感測器失效方向的代表，MultiCorrupt mRA 0.856。研究碼。' },
+  { k: 'clocs', lv: 5, name: 'CLOCs', src: 'cbox', dst: 'box', lab: '2D、3D 候選配對後重新評分',
+    a: ['任意 2D 偵測器的框和分數。', '3D 候選框，在 NMS 之前。', '框和框配對：3D 候選投影到影像，和 2D 框算 IoU，連同兩邊分數、距離組成稀疏張量，小 CNN 重新評分。'],
+    b: ['低到中：只影響配對，不影響 3D 框的幾何。', '自然退化成 LiDAR-only：沒有 2D 對應的候選以 IoU＝−1 保留。', '沒有 3D 輸出，需要另一條 LiDAR 路徑。'],
+    say: '只多不到 3 ms。增益隨 LiDAR 基線變強而遞減：SECOND +5.90、PV-RCNN 只有 +0.39。注意：穩健性 benchmark 都沒有評測晚期融合。' },
+  { k: 'aw', lv: 5, name: 'Autoware ROI 融合', src: 'cbox', dst: 'box', lab: '3D 物件投影後和 ROI 比對，更新類別',
+    a: ['2D ROI（框和類別）。', '3D 物件或 LiDAR cluster：用 ROI 更新或指定類別。', '規則式：3D 物件投影到影像後和 ROI 比對，搭配每相機的 timestamp offset、timeout、matching window。'],
+    b: ['低到中：只影響配對。', '自然退化。', '同 CLOCs，需要另一條 LiDAR 路徑。'],
+    say: '有實車產品經驗、持續維護（ROS 2）的開源參考實作，時間同步這一層在實車上往往比模型架構更重要。' },
+];
+
+const $ = s => document.querySelector(s);
+const state = { lv: 1, k: 'pp' };
+
+function btn(label, on, fn) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.textContent = label; b.classList.toggle('chosen', on);
+  b.addEventListener('click', fn);
+  return b;
+}
+// Evidence labels in the strings become hover terms, same definitions as the prose.
+const DEF = {
+  '論文自報': '作者在自己的論文裡報告的數字。',
+  '第三方評測': '其他團隊拿公開的 checkpoint 或程式重新跑的評測。',
+  '第三方重現': '其他 codebase 重新訓練後得到相近的數字。',
+  '工程判斷': '撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。',
+};
+const rich = t => t.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  .replace(/【(論文自報|第三方評測|第三方重現|工程判斷)】/g, (m, k) => `<span class="term" data-def="${DEF[k]}">${m}</span>`);
+function fill(ol, items) {
+  ol.innerHTML = items.map(([q, a]) => `<li><span class="q">${q}</span>${rich(a)}</li>`).join('');
+}
+const QS = ['相機分支輸出什麼', '接到 LiDAR 管線的哪一段', '點和像素怎麼對應', '外參不準時', '相機壞掉時', 'LiDAR 壞掉時'];
+
+function render() {
+  const lv = $('#levels'), ms = $('#methods');
+  lv.replaceChildren(lv.firstElementChild, ...LEVELS.map(L => btn(L.name, L.id === state.lv, () => {
+    state.lv = L.id; state.k = METHODS.find(m => m.lv === L.id).k; render();
+  })));
+  ms.replaceChildren(ms.firstElementChild, ...METHODS.filter(m => m.lv === state.lv).map(m => btn(m.name, m.k === state.k, () => { state.k = m.k; render(); })));
+
+  const m = METHODS.find(x => x.k === state.k);
+  document.querySelectorAll('.fuse .node').forEach(g => g.classList.toggle('on', g.dataset.n === m.src || g.dataset.n === m.dst));
+  // Hook: down from the camera node, across at mid height, down into the LiDAR node.
+  const sx = CX[m.src], dx = CX[m.dst] + (CX[m.src] === CX[m.dst] ? 0 : (CX[m.dst] < CX[m.src] ? 22 : -22)), mid = 152;
+  $('#hook').setAttribute('d', `M${sx} 70V${mid}H${dx}V234`);
+  const lab = $('#hook-label');
+  lab.textContent = m.lab;
+  if (sx === dx) { lab.setAttribute('x', sx + 10); lab.setAttribute('y', mid - 8); lab.setAttribute('text-anchor', 'start'); }
+  else { lab.setAttribute('x', (sx + dx) / 2); lab.setAttribute('y', mid - 10); lab.setAttribute('text-anchor', 'middle'); }
+
+  $('#m-name').textContent = m.name;
+  fill($('#qa-a'), m.a.map((a, i) => [QS[i], a]));
+  fill($('#qa-b'), m.b.map((a, i) => [QS[i + 3], a]));
+  $('#say').innerHTML = rich(m.say);
+  site.terms(document.querySelector('.bench'));
+}
+render();
+</script>
+</body>
+</html>

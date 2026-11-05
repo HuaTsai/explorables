@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>穩健性：哪一邊壞掉、壞多少</title>
+<meta name="description" content="LiDAR 和相機融合模型的穩健性證據：相機壞掉時幾乎不受影響，LiDAR 壞掉時直接歸零，外參誤差的結論隨評測協定而變。拖動外參誤差，看投影偏了幾個像素、多少點被塗錯語意、晚期融合的框還配不配得上。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<script src="../../assets/site.js"></script>
+<style>
+/* Layout: one reading column. Exploratory workbench: presets, three sliders plus an object switch, then three
+   panels: a local top-down view around the object (LiDAR points coloured by whether painting labelled them
+   right), the image row near the object (mask, projected points, 2D box vs projected 3D box) with the numbers,
+   and the five projection steps filled in for one selected point. */
+.sliders { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.6rem 1.25rem; }
+@media (max-width: 760px) { .sliders { grid-template-columns: minmax(0, 1fr); } }
+.sliders label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; }
+.sliders .v { font-family: var(--font-mono); font-weight: 600; }
+.sliders input { width: 100%; }
+.work.rb { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); }
+.view svg { width: 100%; height: auto; display: block; }
+.view text { font-family: var(--font-body); font-size: 11px; fill: var(--muted); }
+.view .obj { fill: var(--hit-soft); stroke: var(--hit); stroke-width: 1.2; }
+.view .wall { stroke: var(--line); stroke-width: 3; }
+.view .ray { stroke: var(--line); stroke-width: 0.6; }
+.view .pt { cursor: pointer; }
+.view .pt.car { fill: var(--hit); }
+.view .pt.bg { fill: var(--muted); }
+.view .pt.wrong { fill: var(--miss); }
+.view .pt.sel { stroke: var(--ink); stroke-width: 2; }
+.view .mask { fill: var(--hit-soft); }
+.view .box2d { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+.view .box3d { fill: none; stroke: var(--miss); stroke-width: 1.4; stroke-dasharray: 4 3; }
+.view .tick { stroke-width: 2; }
+.view .tick.car { stroke: var(--hit); }
+.view .tick.bg { stroke: var(--muted); }
+.view .tick.wrong { stroke: var(--miss); }
+.steps { list-style: none; margin: 0; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.55rem; counter-reset: s; }
+.steps li { counter-increment: s; font-size: 0.84rem; }
+.steps .q { display: block; font-size: 0.76rem; color: var(--muted); font-weight: 700; }
+.steps .q::before { content: counter(s) ". "; font-family: var(--font-mono); }
+.steps .a { font-family: var(--font-mono); font-size: 0.8rem; }
+.steps .a.hit { color: var(--hit); font-weight: 700; }
+.steps .a.wrong { color: var(--miss); font-weight: 700; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← LiDAR 與相機融合 3D 偵測</a>
+    <h1>穩健性：哪一邊壞掉、壞多少</h1>
+    <p class="lead">「融合比單一感測器更穩健」這句話只成立一半。現有的融合模型幾乎都以 LiDAR 為主：相機壞掉時影響很小，LiDAR 壞掉時直接歸零。外參不準時誰比較穩，各家評測的結論甚至互相矛盾。這一頁先從投影的幾何看外參誤差是怎麼變成錯誤的，再整理各種失效情境的評測數字。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、官方文件和程式庫後撰寫。</p>
+      <p>投影幾何和誤差怎麼隨距離放大不會過期；各模型的穩健性數字和排名會隨新方法、新評測協定而改變。標成<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>的是撰寫者的推論。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>評測是怎麼做的</h2>
+    <p>穩健性的數字主要來自三個第三方 benchmark，加上各篇論文自己設計的實驗：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>基準</th><th>資料</th><th>腐化類型</th><th>被評測的融合模型</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><a href="https://arxiv.org/abs/2205.14951">Yu et al. 2022</a></td><td>nuScenes、Waymo</td><td>LiDAR FOV 受限、物件沒有反射點、相機缺失、鏡頭遮擋、外參誤差（各相機獨立的 0–5° 旋轉、1–5 cm 平移）、畫面卡住</td><td>PointAugmenting、MVX-Net、TransFusion</td></tr>
+        <tr><td class="name"><a href="https://arxiv.org/abs/2303.11040">Dong et al. CVPR 2023</a></td><td>KITTI、nuScenes、Waymo</td><td>27 種：天候、感測器、運動、物件、對齊</td><td>KITTI：EPNet、Focals Conv；nuScenes：FUTR3D、TransFusion、BEVFusion</td></tr>
+        <tr><td class="name"><a href="https://arxiv.org/abs/2402.11677">MultiCorrupt（IV 2024）</a></td><td>nuScenes</td><td>10 種：線數或點數減少、霧、雪、缺相機、空間或時間錯位、動態模糊、亮度、黑暗</td><td>CMT、MEFormer、MoME、UniBEV、SparseFusion、BEVFusion、IS-Fusion、TransFusion、DeepInteraction</td></tr>
+        <tr><td class="name">各論文自建</td><td>nuScenes</td><td>LiDAR 或相機缺失、FOV、線數減少等</td><td>自家方法對 baseline</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>前三個是<span class="term" data-def="其他團隊拿公開的 checkpoint 或程式重新跑的評測。">【第三方評測】</span>，最後一類是<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>。它們有一個共同限制：腐化全部是在乾淨資料上<strong>合成</strong>的，而且以 nuScenes（32 線 LiDAR 加 6 台相機）為主，沒有任何基準用真實的故障資料。真實的外參漂移、雨霧、LiDAR 髒污的分佈可能不同。</p>
+
+    <h2>外參誤差怎麼變成錯的語意</h2>
+    <p>點級融合替每個 LiDAR 點查影像上的語意，走的是固定的五步：</p>
+    <ol>
+      <li>取一個 LiDAR 點在 LiDAR 座標下的位置。</li>
+      <li>用外參（旋轉加平移）把它轉到相機座標。</li>
+      <li>用內參投影到像素：u = f · x / z + 影像寬度的一半，f 是焦距的像素數。</li>
+      <li>查那個像素在分割結果裡是什麼類別。</li>
+      <li>把類別分數附加到點上，交給 LiDAR 偵測器。</li>
+    </ol>
+    <p>第 2 步用的外參如果有誤差，第 3 步算出的 u 就偏了，第 4 步會查到別處的語意。偏多少取決於誤差的種類：</p>
+    <ul>
+      <li><strong>旋轉誤差</strong> δθ 讓所有點在影像上偏大約 f · δθ 個像素，<strong>跟距離無關</strong>。但物件越遠，在影像上越小（寬度約 f · W / z），所以同樣的 0.5°，在遠處吃掉物件寬度的比例越大。換成公尺：0.5° 在 40 m 外相當於橫向偏 35 cm。</li>
+      <li><strong>平移誤差</strong> δt 讓深度 z 的點偏大約 f · δt / z 個像素，越近偏越多；但物件的像素寬也是 f · W / z，兩者同比例縮放，所以偏移佔物件寬度的比例大致固定是 δt / W。這表示平移誤差對窄的物件（行人）特別傷，跟距離的關係不大。</li>
+    </ul>
+    <p>晚期融合不查逐點的語意，只把 LiDAR 偵測出的 3D 框投影到影像上，和 2D 偵測框比 IoU。外參誤差一樣會讓投影偏移，但只要 IoU 還過門檻，配對就成立，而 3D 框本身的幾何完全不受影響。</p>
+  </section>
+
+  <section class="bench" aria-label="外參誤差模擬">
+    <div class="row presets" id="presets"><span class="lbl">情境</span></div>
+    <div class="row">
+      <div class="modes" id="objs"><span class="lbl">物件</span></div>
+      <div class="sliders">
+        <label>距離 <span class="v" id="v-d"></span><input type="range" id="in-d" min="5" max="80" step="1" aria-label="距離"></label>
+        <label>旋轉誤差 δθ <span class="v" id="v-r"></span><input type="range" id="in-r" min="-2" max="2" step="0.05" aria-label="旋轉誤差"></label>
+        <label>平移誤差 δt <span class="v" id="v-t"></span><input type="range" id="in-t" min="-0.5" max="0.5" step="0.01" aria-label="平移誤差"></label>
+      </div>
+      <p class="hint">玩具場景：相機水平視角 60°、影像寬 1280 px（f ≈ 1109 px），LiDAR 和相機裝在同一點，水平解析度 0.2°，物件後方 12 m 有一道牆當背景，分割和 2D 偵測都假設完美。數字是示意值，只用來看誤差怎麼隨距離和物件大小變化。綠色是正確塗成物件的點，紫色是塗錯語意的點和偏掉的 3D 框投影。點俯視圖上的點，可以看它走過五個步驟。</p>
+    </div>
+    <div class="row work rb">
+      <div class="panel">
+        <div class="panel-head"><span>俯視圖</span><span class="sub" id="bev-sub"></span></div>
+        <div class="panel-body view"><svg id="bev" viewBox="0 0 300 260" role="img" aria-label="物件附近的俯視圖"></svg></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>影像上的那一列</span><span class="sub" id="img-sub"></span></div>
+        <div class="panel-body view"><svg id="img" viewBox="0 0 300 120" role="img" aria-label="物件附近的影像列"></svg></div>
+        <div class="vars" id="vars"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>一個點走過五步</span></div>
+        <ol class="steps" id="steps"></ol>
+      </div>
+    </div>
+    <div class="row"><p class="say" id="say" aria-live="polite"></p></div>
+  </section>
+
+  <section class="prose">
+    <h2>外參誤差的評測數字</h2>
+    <p>實際的評測結果和上面的幾何一致，也有幾處互相矛盾：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>來源</th><th>設定</th><th>結果</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><a href="https://arxiv.org/abs/2203.11496">TransFusion</a> Fig. 5</td><td>camera 到 LiDAR 的平移誤差 0–1 m</td><td>1 m 時 TransFusion −0.49 mAP；PointAugmenting 式和逐點 concat 退化更多（約 −2.3 mAP 以上）<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span></td></tr>
+        <tr><td class="name">Yu et al. Table 8</td><td>各相機獨立 0–5° 旋轉、1–5 cm 平移</td><td>DETR3D 34.9→24.2；PointAugmenting 46.9→43.6；<strong>MVX-Net 61.0→50.8（−10.2）</strong>；TransFusion 66.9→66.5<span class="term" data-def="其他團隊拿公開的 checkpoint 或程式重新跑的評測。">【第三方評測】</span></td></tr>
+        <tr><td class="name">Dong et al. KITTI-C（單一前相機）</td><td>外參加 Gaussian noise（5 級平均）</td><td><strong>EPNet Car moderate 3D AP 82.72→35.14；Focals Conv 85.88→43.01</strong><span class="term" data-def="其他團隊拿公開的 checkpoint 或程式重新跑的評測。">【第三方評測】</span></td></tr>
+        <tr><td class="name">Dong et al. nuScenes-C</td><td>同上</td><td>FUTR3D 64.17→63.77；TransFusion 66.38→66.22；<strong>BEVFusion 68.45→68.39</strong>（幾乎不受影響）<span class="term" data-def="其他團隊拿公開的 checkpoint 或程式重新跑的評測。">【第三方評測】</span></td></tr>
+        <tr><td class="name"><a href="https://arxiv.org/abs/2403.11848">GraphBEV</a> Table 3</td><td>依 Yu et al. 的 noisy misalignment</td><td><strong>BEVFusion 68.5→60.8（−7.7）</strong>；TransFusion 67.3→66.4；GraphBEV 約 69.1<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span></td></tr>
+        <tr><td class="name">MultiCorrupt 空間錯位</td><td>旋轉加平移，依嚴重度</td><td>CMT 0.809 &gt; MEFormer 0.796 &gt; MoME 0.788 &gt; UniBEV 0.75 &gt; IS-Fusion 0.715 ≈ SparseFusion 0.714 &gt; BEVFusion 0.705 &gt; TransFusion 0.685（RA）<span class="term" data-def="其他團隊拿公開的 checkpoint 或程式重新跑的評測。">【第三方評測】</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>三件事值得注意。第一，<strong>點級硬投影加單一前相機（KITTI）崩得最嚴重</strong>，EPNet 和 Focals Conv 都掉了一半以上。這和上面的幾何一致：點級方法每個點的語意完全由投影決定，投影偏了就沒有其他線索可以修正。第二，BEVFusion 的敏感度在不同評測裡互相矛盾：Dong 的 nuScenes-C 幾乎沒影響，依 Yu 協定重跑是 −7.7 mAP，MultiCorrupt 則說它對空間錯位特別敏感。推測原因是雜訊幅度、旋轉單位和注入方式不同<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>，沒有查證。第三，TransFusion 在 Yu 協定下最穩，在 MultiCorrupt 下卻墊底，因為 MultiCorrupt 的錯位也影響了 LiDAR 端的 query 初始化。</p>
+    <p>結論是單一的穩健性數字不可靠，不同協定量到的是不同的東西。這些數字也不能直接套到別的車上，要用那台車實際的校正漂移量重新測。</p>
+
+    <h2>相機壞掉：以 LiDAR 為主的模型幾乎不受影響</h2>
+    <p>TransFusion 論文用同一個 LiDAR 主幹（TransFusion-L）換三種融合方式，測掉幾張影像時的 nuScenes val mAP<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>掉幾張影像</th><th>逐點 concat</th><th>PointAugmenting 式</th><th>TransFusion</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0</td><td class="num">63.3</td><td class="num">64.2</td><td class="num">65.6</td></tr>
+        <tr><td class="num">1</td><td class="num">59.8（−3.5）</td><td class="num">61.6（−2.6）</td><td class="num">65.1（−0.5）</td></tr>
+        <tr><td class="num">3</td><td class="num">50.9（−12.4）</td><td class="num">55.4（−8.8）</td><td class="num">63.9（−1.7）</td></tr>
+        <tr><td class="num">6（全掉）</td><td class="num">39.5（−23.8）</td><td class="num">47.0（−17.2）</td><td class="num">61.7（−3.9）</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <ul>
+      <li>夜間，TransFusion 相對 LiDAR-only 的增益是 +6.0 mAP，逐點 concat 只有 +0.2、PointAugmenting 式 +1.8。硬關聯的方法在暗光下特別吃虧。</li>
+      <li><a href="https://arxiv.org/abs/2205.13790">ADLab BEVFusion</a> 的 Table 5：缺前相機時，TransFusion 66.9→65.3、BEVFusion 67.9→65.9、MVX-Net 61.0→47.8、PointAugmenting 46.9→42.4。<strong>只留前相機</strong>時，MVX-Net 掉到 17.5、PointAugmenting 31.6，TransFusion 64.4、BEVFusion 65.1。用 6 台相機訓練、測試時只剩前相機，硬關聯的方法會崩，所以換了相機配置一定要重新訓練。</li>
+      <li>Yu et al. 的解釋是：TransFusion 對相機雜訊非常穩（相機失效和錯位情境的平均 NDS 只從 70.9 降到 70.1），因為相機對它的影響本來就小，融合只多 1.5 NDS。<strong>穩健性和融合增益之間存在取捨。</strong></li>
+      <li>MultiCorrupt 的缺相機 RA：TransFusion 0.985、BEVFusion 0.974、CMT 0.974，DeepInteraction 只有 0.842，因為雙向的早期互動讓相機雜訊污染了全局。</li>
+    </ul>
+
+    <h2>LiDAR 壞掉：真正的弱點</h2>
+    <ul>
+      <li><strong>LiDAR 全失</strong>：Yu et al. 的 Table 4，CenterPoint、PointAugmenting、MVX-Net、TransFusion 全部 mAP＝0。作者的結論是 LiDAR 是主感測器，相機只是輔助<span class="term" data-def="其他團隊拿公開的 checkpoint 或程式重新跑的評測。">【第三方評測】</span>。</li>
+      <li><strong>LiDAR FOV 受限</strong>到前方 180° 時（ADLab Table 3），TransFusion-L 27.8 mAP、TransFusion LC 31.1、BEVFusion 46.4；但這裡的 BEVFusion 是用 FOV 受限的資料微調過的。</li>
+      <li><strong>物件沒有反射點</strong>（每幀 0.5 機率、每個物件 0.5 機率移除框內的點，ADLab Table 4）：沒做 robust augmentation 時，TransFusion-L 34.6、TransFusion LC 38.1、BEVFusion 40.8；用 robust augmentation 微調後，BEVFusion 到 50.3，TransFusion LC 只有 37.2。BEVFusion 的大幅領先主要來自訓練方式。</li>
+      <li><strong>masked-modal training</strong>（CMT Table 3、4，nuScenes val NDS）：CMT 一般訓練時，兩者都有 0.726、只有 LiDAR 0.691、<strong>只有相機 0.073</strong>（mAP 0.000）；加上 masked-modal 訓練後分別是 0.729、約 0.68、<strong>約 0.45</strong>。BEVFusion 照同樣方式重訓後只相機約 40 NDS；TransFusion 只剩相機時無法運作，因為它的兩階段設計。</li>
+      <li><a href="https://arxiv.org/abs/2304.09801">MetaBEV</a>：LiDAR 全失時 42.6 NDS，比一般的 BEVFusion 高 35.5；相機全失時 69.2 NDS<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>。</li>
+      <li><strong>兩邊同時失效</strong>（ADLab Table 9，物件沒有反射點加上缺前相機）：BEVFusion 47.8、TransFusion 34.2 mAP。作者也承認，一個物件如果相機和 LiDAR 都沒拍到，框架就認不出來。</li>
+      <li><strong>LiDAR 變稀疏</strong>：MIT BEVFusion 在 1 線時比 MVP 好 12%；FUTR3D 用相機加 4 線 LiDAR 到 58.0 mAP；MultiCorrupt 的線數減少 RA，CMT 0.786、BEVFusion 0.676、TransFusion 0.633（最差，因為 query 初始化完全依賴點雲）。</li>
+    </ul>
+    <p>綜合來看，對 LiDAR 失效的穩健性主要來自<strong>訓練時隨機遮掉某個感測器</strong>，架構差異其次；這招很便宜，幾乎沒有理由不做。但即使做了，只剩相機時也只到 camera-only 的水準（約 40–45 NDS），不足以支撐安全行駛。LiDAR 失效在系統層面應該觸發降級或<span class="term" data-def="Minimal risk maneuver，最小風險操作：系統無法繼續正常行駛時，把車帶到風險最低的狀態，例如減速靠邊停車。">MRM</span>，而不是期待偵測器硬撐<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。</p>
+
+    <h2>時間不同步和天候</h2>
+    <ul>
+      <li><strong>時間不同步</strong>：Yu et al. 發現效能退化和畫面卡住的比例近似線性。MultiCorrupt 的時間錯位 RA 從 0.742（BEVFusion）到 0.788（CMT、UniBEV），差距不大，大家都會受影響。Autoware 的融合節點用每台相機的 timestamp offset 補償快門和 LiDAR 掃描的時間差，並設 timeout 和 matching window；這一層在實車上可能比模型架構更重要<span class="term" data-def="撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐。">【工程判斷】</span>。</li>
+      <li><strong>天候和光照</strong>：MIT BEVFusion 在雨天比 LiDAR-only 多 10.7 mAP，夜間分割多 12.8 mIoU<span class="term" data-def="作者在自己的論文裡報告的數字。">【論文自報】</span>。但 Dong et al. 有一個重要的反例：對<strong>同時影響兩個感測器</strong>的腐化（雪、移動物體、剪切），LiDAR-only 反而比融合好；只有在單一感測器受損時融合才佔優。同一篇也發現，腐化下的穩健性和乾淨資料上的精度高度相關，資料增強只帶來少量提升。</li>
+    </ul>
+
+    <h2>結語</h2>
+    <p>現有的融合模型以 LiDAR 為主：相機壞掉時幾乎不受影響，LiDAR 壞掉時直接歸零，對 LiDAR 失效的穩健性主要靠訓練時隨機遮掉感測器，而不是架構。外參誤差在影像上造成的偏移，旋轉部分是固定的像素數，對遠處的小物件傷害最大；點級硬投影完全依賴這個投影，在單一前相機的 KITTI 上也崩得最嚴重。MultiCorrupt 的整體穩健性（mRA）從最差的 DeepInteraction 0.795 到最好的 CMT 0.865，架構間只差約 7%；作者歸納的穩健設計是「兩個感測器各自獨立處理」加「訓練時隨機遮掉感測器」，不穩健的是「只靠單一感測器初始化 query」和「早期就靠投影矩陣對齊」。</p>
+    <p>這兩條都指向鬆耦合，而晚期融合是鬆耦合的極端形式，卻沒有出現在任何一個穩健性 benchmark 裡；它到底多穩，目前沒有同協定的數字。另外，所有腐化都是合成的，真實世界的故障分佈可能不同。</p>
+  </section>
+</main>
+
+<script>
+// ---- Toy scene: top-down (x lateral, z forward), LiDAR and camera at the origin. ----
+const W_IMG = 1280, HFOV = 60, F = (W_IMG / 2) / Math.tan(HFOV / 2 * Math.PI / 180);
+const RES = 0.2, WALL_GAP = 12, IOU_MIN = 0.5;
+const OBJS = { car: { name: '車', w: 1.8, l: 4.5, view: 6 }, ped: { name: '行人', w: 0.6, l: 0.6, view: 2.5 } };
+const PRESETS = [
+  { name: '車、40 m、旋轉 0.5°', obj: 'car', d: 40, r: 0.5, t: 0 },
+  { name: '車、80 m、旋轉 0.5°', obj: 'car', d: 80, r: 0.5, t: 0 },
+  { name: '行人、20 m、旋轉 0.5°', obj: 'ped', d: 20, r: 0.5, t: 0 },
+  { name: '行人、20 m、平移 0.15 m', obj: 'ped', d: 20, r: 0, t: 0.15 },
+  { name: '沒有誤差', obj: 'car', d: 40, r: 0, t: 0 },
+];
+const XC = 0.4;                      // the object sits slightly right of the optical axis
+const state = { obj: 'car', d: 40, r: 0.5, t: 0, sel: null };
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const fx = (v, n = 1) => (Math.round(v * 10 ** n) / 10 ** n).toFixed(n);
+
+// Camera transform as the (mis)calibrated extrinsic believes it: yaw by r degrees, lateral shift t metres.
+function toCam(p, r, t) {
+  const a = r * Math.PI / 180;
+  return { x: p.x * Math.cos(a) - p.z * Math.sin(a) + t, z: p.x * Math.sin(a) + p.z * Math.cos(a) };
+}
+const proj = c => F * c.x / c.z + W_IMG / 2;
+
+function scene() {
+  const o = OBJS[state.obj], d = state.d;
+  const x0 = XC - o.w / 2, x1 = XC + o.w / 2;
+  const corners = [[x0, d], [x1, d], [x0, d + o.l], [x1, d + o.l]].map(([x, z]) => ({ x, z }));
+  // True mask = projection of the object outline with the correct extrinsic; the 2D detector is perfect too.
+  const us = corners.map(c => proj(c));
+  const mask = [Math.min(...us), Math.max(...us)];
+  const usBad = corners.map(c => proj(toCam(c, state.r, state.t)));
+  const box3 = [Math.min(...usBad), Math.max(...usBad)];
+  const pts = [];
+  for (let k = -HFOV / 2 / RES; k <= HFOV / 2 / RES; k++) {
+    const phi = k * RES * Math.PI / 180, tan = Math.tan(phi);
+    const xHit = d * tan;
+    const onObj = xHit >= x0 && xHit <= x1;
+    const p = onObj ? { x: xHit, z: d } : { x: (d + WALL_GAP) * tan, z: d + WALL_GAP };
+    const c = toCam(p, state.r, state.t), u = proj(c);
+    const painted = u >= mask[0] && u <= mask[1];
+    pts.push({ ...p, cam: c, u, truth: onObj, painted, wrong: painted !== onObj });
+  }
+  const ov = Math.max(0, Math.min(mask[1], box3[1]) - Math.max(mask[0], box3[0]));
+  const iou = ov / (Math.max(mask[1], box3[1]) - Math.min(mask[0], box3[0]));
+  return { o, mask, box3, pts, iou };
+}
+
+function drawBev(S) {
+  const svg = $('#bev'); svg.replaceChildren();
+  const o = S.o, half = o.view / 2, z0 = state.d - 3, z1 = state.d + WALL_GAP + 2;
+  const X = x => 20 + (x - (XC - half)) / o.view * 260, Z = z => 245 - (z - z0) / (z1 - z0) * 230;
+  $('#bev-sub').textContent = `${o.name}附近 ${o.view} m × ${z1 - z0} m`;
+  // rays toward the object edges, from the (off-screen) origin
+  for (const xe of [XC - o.w / 2, XC + o.w / 2]) {
+    const tz0 = z0, tz1 = state.d;
+    el('line', { class: 'ray', x1: X(xe * tz0 / state.d), y1: Z(tz0), x2: X(xe), y2: Z(tz1) }, svg);
+  }
+  el('line', { class: 'wall', x1: 20, y1: Z(state.d + WALL_GAP), x2: 280, y2: Z(state.d + WALL_GAP) }, svg);
+  el('text', { x: 24, y: Z(state.d + WALL_GAP) - 6 }, svg).textContent = '背景（牆）';
+  el('rect', { class: 'obj', x: X(XC - o.w / 2), y: Z(state.d + o.l), width: X(XC + o.w / 2) - X(XC - o.w / 2), height: Z(state.d) - Z(state.d + o.l) }, svg);
+  el('text', { x: 24, y: 252 }, svg).textContent = `↓ 感測器在 ${state.d} m 外`;
+  S.pts.forEach((p, i) => {
+    if (p.x < XC - half || p.x > XC + half) return;
+    const cls = 'pt ' + (p.wrong ? 'wrong' : p.truth ? 'car' : 'bg') + (state.sel === i ? ' sel' : '');
+    const c = el('circle', { class: cls, cx: X(p.x), cy: Z(p.z), r: 2.6 }, svg);
+    c.addEventListener('click', () => { state.sel = i; render(); });
+  });
+}
+
+function drawImg(S) {
+  const svg = $('#img'); svg.replaceChildren();
+  const w = S.mask[1] - S.mask[0], c = (S.mask[0] + S.mask[1]) / 2, half = Math.max(w * 1.6, 40);
+  const U = u => 10 + (u - (c - half)) / (2 * half) * 280;
+  $('#img-sub').textContent = `u ≈ ${fx(c - half, 0)}–${fx(c + half, 0)} px`;
+  el('rect', { class: 'mask', x: U(S.mask[0]), y: 30, width: U(S.mask[1]) - U(S.mask[0]), height: 44 }, svg);
+  el('rect', { class: 'box2d', x: U(S.mask[0]), y: 26, width: U(S.mask[1]) - U(S.mask[0]), height: 52 }, svg);
+  el('rect', { class: 'box3d', x: U(S.box3[0]), y: 22, width: Math.max(1, U(S.box3[1]) - U(S.box3[0])), height: 60 }, svg);
+  S.pts.forEach(p => {
+    if (p.u < c - half || p.u > c + half) return;
+    el('line', { class: 'tick ' + (p.wrong ? 'wrong' : p.truth ? 'car' : 'bg'), x1: U(p.u), y1: 36, x2: U(p.u), y2: 68 }, svg);
+  });
+  el('text', { x: 10, y: 98 }, svg).textContent = '實線：2D 框（＝分割 mask）　虛線：3D 框的投影';
+  el('text', { x: 10, y: 113 }, svg).textContent = '短線：LiDAR 點投影到的位置';
+}
+
+function render() {
+  const S = scene(), o = S.o;
+  $('#in-d').value = state.d; $('#in-r').value = state.r; $('#in-t').value = state.t;
+  $('#v-d').textContent = `${state.d} m`;
+  $('#v-r').textContent = `${fx(state.r, 2)}°`;
+  $('#v-t').textContent = `${fx(state.t, 2)} m`;
+  const ob = $('#objs');
+  ob.replaceChildren(ob.firstElementChild, ...Object.entries(OBJS).map(([k, v]) => {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = `${v.name}（寬 ${v.w} m）`;
+    b.classList.toggle('chosen', k === state.obj);
+    b.addEventListener('click', () => { state.obj = k; state.sel = null; render(); });
+    return b;
+  }));
+
+  const objPts = S.pts.filter(p => p.truth);
+  if (state.sel === null || !S.pts[state.sel]) state.sel = S.pts.indexOf(objPts[0]);
+  const lost = objPts.filter(p => !p.painted).length, gained = S.pts.filter(p => !p.truth && p.painted).length;
+  const wPx = S.mask[1] - S.mask[0];
+  const rotPx = F * Math.abs(state.r) * Math.PI / 180, trPx = F * Math.abs(state.t) / state.d;
+  const shift = Math.abs((S.box3[0] + S.box3[1]) / 2 - (S.mask[0] + S.mask[1]) / 2);
+  const ok = S.iou >= IOU_MIN;
+  drawBev(S); drawImg(S);
+
+  const vars = [
+    ['物件像素寬', `${fx(wPx)} px`], ['旋轉造成', `${fx(rotPx)} px`], ['平移造成', `${fx(trPx)} px`],
+    ['偏移／物件寬', `${fx(shift / wPx * 100, 0)}%`], ['換成橫向距離', `${fx(shift * state.d / F, 2)} m`],
+    ['物件上的點', objPts.length], ['物件點被塗成背景', lost], ['背景點被塗成物件', gained],
+    ['晚期融合 IoU', fx(S.iou, 2)],
+  ];
+  $('#vars').replaceChildren(...vars.map(([k, v], i) => {
+    const s = document.createElement('span'); s.className = 'var';
+    s.innerHTML = `<span class="k">${k}</span><span class="v">${v}</span>`;
+    return s;
+  }));
+
+  const p = S.pts[state.sel];
+  const steps = [
+    ['LiDAR 座標（x, z）', `(${fx(p.x, 2)}, ${fx(p.z, 2)}) m，${p.truth ? '在' + o.name + '上' : '在背景牆上'}`, ''],
+    ['用外參轉到相機座標', `(${fx(p.cam.x, 2)}, ${fx(p.cam.z, 2)}) m`, ''],
+    ['用內參投影到像素', `u = ${fx(p.u)} px（${o.name}的 mask 在 ${fx(S.mask[0])}–${fx(S.mask[1])}）`, ''],
+    ['查分割結果', p.painted ? o.name : '背景', ''],
+    ['附加到點上', p.wrong ? `塗成「${p.painted ? o.name : '背景'}」，但它其實是${p.truth ? o.name : '背景'}` : `塗成「${p.painted ? o.name : '背景'}」，正確`, p.wrong ? 'wrong' : 'hit'],
+  ];
+  $('#steps').replaceChildren(...steps.map(([q, a, cls]) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="q">${q}</span><span class="a ${cls}">${a}</span>`;
+    return li;
+  }));
+
+  const noErr = state.r === 0 && state.t === 0;
+  let say = noErr
+    ? `沒有外參誤差：${objPts.length} 個${o.name}上的點全部塗對，3D 框的投影和 2D 框完全重合。`
+    : `${o.name}在 ${state.d} m 外，影像上只有 ${fx(wPx)} px 寬；外參誤差讓投影偏了 ${fx(shift)} px，約是物件寬度的 ${fx(shift / wPx * 100, 0)}%。${objPts.length} 個${o.name}上的點有 ${lost} 個被塗成背景，另有 ${gained} 個背景點被塗成${o.name}。晚期融合的 IoU 是 ${fx(S.iou, 2)}，${ok ? '還過 0.5 的門檻，配對成立，而且 3D 框的幾何不受影響。' : '低於 0.5 的門檻，這個物件拿不到相機的確認，但 3D 框本身仍然是對的。'}`;
+  if (!ok) say += '<span class="warn">配對失敗：晚期融合在這裡退化成 LiDAR-only。</span>';
+  $('#say').innerHTML = say;
+}
+
+const pr = $('#presets');
+PRESETS.forEach(P => {
+  const b = document.createElement('button'); b.type = 'button'; b.textContent = P.name;
+  b.addEventListener('click', () => { Object.assign(state, { obj: P.obj, d: P.d, r: P.r, t: P.t, sel: null }); render(); });
+  pr.appendChild(b);
+});
+$('#in-d').addEventListener('input', e => { state.d = +e.target.value; state.sel = null; render(); });
+$('#in-r').addEventListener('input', e => { state.r = +e.target.value; render(); });
+$('#in-t').addEventListener('input', e => { state.t = +e.target.value; render(); });
+render();
+</script>
+</body>
+</html>

@@ -88,6 +88,12 @@ section { display: flex; flex-direction: column; gap: 0.75rem; }
 .mini-wire i.r { background: var(--right); opacity: 0.75; }
 .mini-wire i.l { background: var(--left); opacity: 0.75; }
 .mini-wire i.p { background: transparent; border: 1px dashed var(--muted); }
+.mini-fuse { width: 100%; height: 3.4rem; }
+.mini-fuse rect { fill: var(--bg); stroke: var(--line); }
+.mini-fuse rect.l { stroke: var(--left); }
+.mini-fuse rect.r { stroke: var(--right); }
+.mini-fuse path { fill: none; stroke: var(--right); stroke-width: 1.5; }
+.mini-fuse path.d { stroke: var(--left); }
 .mini-dds { width: 100%; height: 3.4rem; }
 .mini-dds rect { fill: var(--bg); stroke: var(--line); }
 .mini-dds rect.w { stroke: var(--right); }
@@ -283,6 +289,41 @@ section { display: flex; flex-direction: column; gap: 0.75rem; }
         </a>
       </li>
       <li>
+        <a class="entry" href="idl-protobuf/">
+          <div class="glyph" aria-hidden="true">
+            <div class="mini-wire">
+              <div class="r"><i></i><i></i><i></i><i></i><i class="r"></i><i class="r"></i><i class="p"></i><i class="p"></i><i class="l"></i><i class="l"></i><i class="l"></i><i class="l"></i></div>
+              <div class="r"><i></i><i class="r"></i><i></i><i class="l"></i><i class="l"></i></div>
+            </div>
+          </div>
+          <div class="text">
+            <h3>IDL 與 protobuf：同一筆資料的兩種線上格式</h3>
+            <p>DDS 的 OMG IDL 和 Google 的 protobuf 都是「一份定義檔、產生各語言的程式」。輸入同一筆訊息，左右比較 CDR 和 protobuf 編出來的每個 byte：對齊和 padding、varint、欄位編號，以及預設值不送。</p>
+          </div>
+        </a>
+      </li>
+    </ul>
+  </section>
+  <section>
+    <h2>自駕車與機器人</h2>
+    <ul class="entries">
+      <li>
+        <a class="entry" href="lidar-camera-fusion/">
+          <div class="glyph" aria-hidden="true">
+            <svg class="mini-fuse" viewBox="0 0 120 54">
+              <rect x="4" y="4" width="22" height="12" rx="2"/><rect x="34" y="4" width="22" height="12" rx="2"/><rect x="64" y="4" width="22" height="12" rx="2"/><rect x="94" y="4" width="22" height="12" rx="2"/>
+              <rect class="l" x="4" y="38" width="22" height="12" rx="2"/><rect x="34" y="38" width="22" height="12" rx="2"/><rect x="64" y="38" width="22" height="12" rx="2"/><rect class="r" x="94" y="38" width="22" height="12" rx="2"/>
+              <path class="d" d="M75 16 V27 H15 V38"/>
+              <path d="M105 16 V38"/>
+            </svg>
+          </div>
+          <div class="text">
+            <h3>LiDAR 與相機融合 3D 偵測 <span class="badge outline">系列</span> <span class="badge outline">調研</span></h3>
+            <p>相機資訊可以從 LiDAR 管線的哪一段接進來、外參不準或某個感測器壞掉時會怎樣、換一台車或搬上 Orin 時會遇到什麼。整理公開論文和評測的證據。</p>
+          </div>
+        </a>
+      </li>
+      <li>
         <a class="entry" href="dds/">
           <div class="glyph" aria-hidden="true">
             <svg class="mini-dds" viewBox="0 0 120 54">
@@ -297,20 +338,6 @@ section { display: flex; flex-direction: column; gap: 0.75rem; }
           <div class="text">
             <h3>DDS 與 ROS 2 底層 <span class="badge outline">系列</span></h3>
             <p>DDS 怎麼自動探索和配對、ROS 2 怎麼疊在 DDS 上，以及各家 DDS 實作的差異和互通的極限。</p>
-          </div>
-        </a>
-      </li>
-      <li>
-        <a class="entry" href="idl-protobuf/">
-          <div class="glyph" aria-hidden="true">
-            <div class="mini-wire">
-              <div class="r"><i></i><i></i><i></i><i></i><i class="r"></i><i class="r"></i><i class="p"></i><i class="p"></i><i class="l"></i><i class="l"></i><i class="l"></i><i class="l"></i></div>
-              <div class="r"><i></i><i class="r"></i><i></i><i class="l"></i><i class="l"></i></div>
-            </div>
-          </div>
-          <div class="text">
-            <h3>IDL 與 protobuf：同一筆資料的兩種線上格式</h3>
-            <p>DDS 的 OMG IDL 和 Google 的 protobuf 都是「一份定義檔、產生各語言的程式」。輸入同一筆訊息，左右比較 CDR 和 protobuf 編出來的每個 byte：對齊和 padding、varint、欄位編號，以及預設值不送。</p>
           </div>
         </a>
       </li>

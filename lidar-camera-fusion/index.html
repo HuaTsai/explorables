@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiDAR 與相機融合 3D 偵測</title>
+<meta name="description" content="調研系列：LiDAR 和相機融合做 3D 物件偵測，相機資訊可以從哪裡接進來、哪一邊壞掉時會怎樣、換一台車或搬上 Orin 時會遇到什麼。資料截至 2026 年 11 月。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+<script src="../assets/site.js"></script>
+<style>
+/* 這一頁特有的：證據等級表和系列目錄。 */
+table.cmp { min-width: 28rem; }
+.entries { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); counter-reset: n; }
+.entries li { border-bottom: 1px solid var(--line); counter-increment: n; }
+.entry { display: flex; align-items: baseline; gap: 1rem; padding: 1.1rem 0; color: inherit; text-decoration: none; }
+.entry::before { content: counter(n, decimal-leading-zero); font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); flex: 0 0 2rem; }
+.entry:focus-visible { outline-offset: 4px; }
+.entry h2 { font-size: 1.1rem; line-height: 1.35; margin: 0; }
+.entry h2 .badge { margin-left: 0.3rem; vertical-align: 0.15em; }
+a.entry:hover h2 { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.entry p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.95rem; }
+.entry .text { flex: 1 1 16rem; min-width: 0; }
+</style>
+</head>
+<body>
+<main class="page index">
+  <header>
+    <a class="back" href="../">← Explorables</a>
+    <h1><span class="mono">LiDAR</span> 與相機融合 3D 偵測</h1>
+    <p class="lead">LiDAR 量得準但點很稀疏，相機看得到顏色和紋理但沒有深度。把兩者接在一起做 3D 物件偵測的方法很多，論文上的分數也一路往上衝，但真正要上車時，問題通常不是「哪個分數最高」，而是「哪一邊壞掉時還撐得住、換一台車還能不能用、在嵌入式平台上跑不跑得動」。這個系列照這三個問題整理公開的證據。</p>
+    <aside class="survey" aria-label="調研說明">
+      <p><span class="badge outline">調研</span>資料截至 <strong>2026 年 11 月 5 日</strong>。由 Claude 整理公開論文、官方文件和程式庫後撰寫。</p>
+      <p>融合層級、投影幾何這些機制不會過期；方法排名、benchmark 數字和 repo 的維護狀態會隨新方法出現而改變，引用前請對照原始論文。</p>
+    </aside>
+  </header>
+
+  <section class="prose">
+    <h2>數字從哪裡來</h2>
+    <p>同一個方法，作者自己報告的數字、別人拿公開程式重跑的數字、別的 codebase 重新訓練的數字，可信度不一樣。系列裡每個數字後面都標了來源類型：</p>
+  </section>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th>標記</th><th>意思</th></tr></thead>
+      <tbody>
+        <tr><td class="name">【論文自報】</td><td>作者在自己的論文裡報告的數字</td></tr>
+        <tr><td class="name">【第三方評測】</td><td>其他團隊拿公開的 checkpoint 或程式重新跑的評測，例如 MultiCorrupt、Dong et al.、Yu et al.</td></tr>
+        <tr><td class="name">【第三方重現】</td><td>其他 codebase 重新訓練後得到相近的數字</td></tr>
+        <tr><td class="name">【工程判斷】</td><td>撰寫這份調研的 Claude 根據證據所做的推論，沒有直接的 benchmark 支撐</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <section class="prose">
+    <p>數字取自 arXiv 原文或官方 repo，出處都在行內連結。PDF 表格解析偶爾會錯欄，關鍵數字已經和正文交叉比對過，但引用前仍請以原文為準。</p>
+  </section>
+
+  <ul class="entries">
+    <li>
+      <a class="entry" href="levels/">
+        <div class="text">
+          <h2>融合層級：相機資訊從哪裡接進來 <span class="badge outline">調研</span></h2>
+          <p>點級 decoration、frustum、BEV 融合、query 融合、晚期融合，差別只在相機資訊接進 LiDAR 管線的哪一段。挑一個方法，看它接在哪裡、外參不準或某個感測器壞掉時會怎樣。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="robustness/">
+        <div class="text">
+          <h2>穩健性：哪一邊壞掉、壞多少 <span class="badge outline">調研</span></h2>
+          <p>相機壞掉時融合模型幾乎不受影響，LiDAR 壞掉時直接歸零。拖動外參誤差，看投影偏了幾個像素、多少點被塗錯語意、晚期融合的框還配不配得上。</p>
+        </div>
+      </a>
+    </li>
+    <li>
+      <a class="entry" href="deployment/">
+        <div class="text">
+          <h2>從論文到車上：換資料集、上 Orin <span class="badge outline">調研</span></h2>
+          <p>在 nuScenes 上訓練的模型直接拿去 Waymo 測，Car mAP 只有 25.8，在 Waymo 上完整訓練的是 78.8。一步一步加上四個前處理，看分數回來多少；再看哪些 codebase 還有人維護、在 Orin 上跑多快。</p>
+        </div>
+      </a>
+    </li>
+  </ul>
+</main>
+</body>
+</html>

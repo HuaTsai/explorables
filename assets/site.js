@@ -76,13 +76,18 @@
   }
 
   /* ---- 術語提示：<span class="term" data-def="定義">詞</span> ---- */
-  function terms() {
-    const terms = document.querySelectorAll('.term[data-def]');
+  /* 頁面重畫出新的 .term 之後（例如 workbench 的面板），呼叫 site.terms(容器) 補綁。 */
+  let tip = null, current = null;
+  function terms(root) {
+    const terms = [...(root || document).querySelectorAll('.term[data-def]')].filter(el => !el.dataset.bound);
     if (!terms.length) return;
-    const tip = document.createElement('div');
-    tip.className = 'tip'; tip.id = 'site-tip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true;
-    document.body.appendChild(tip);
-    let current = null;
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.className = 'tip'; tip.id = 'site-tip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true;
+      document.body.appendChild(tip);
+      document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+      window.addEventListener('scroll', hide, { passive: true });
+    }
     const show = el => {
       current = el;
       tip.innerHTML = el.dataset.def;
@@ -93,8 +98,8 @@
       if (y + h > window.innerHeight - 8) y = r.top - h - 6;
       tip.style.left = x + 'px'; tip.style.top = y + 'px';
     };
-    const hide = () => { current = null; tip.hidden = true; };
     terms.forEach(el => {
+      el.dataset.bound = '1';
       el.tabIndex = 0;
       el.setAttribute('aria-describedby', 'site-tip');
       el.addEventListener('mouseenter', () => show(el));
@@ -103,9 +108,9 @@
       el.addEventListener('blur', hide);
       el.addEventListener('click', e => { e.preventDefault(); current === el && !tip.hidden ? hide() : show(el); });
     });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
-    window.addEventListener('scroll', hide, { passive: true });
   }
+  function hide() { current = null; if (tip) tip.hidden = true; }
+  site.terms = terms;
 
   /* ---- 逐步型控制列 ----
      <div class="controls" data-stepper>
@@ -160,6 +165,6 @@
     return st;
   };
 
-  document.addEventListener('DOMContentLoaded', () => { themeToggle(); sidenotes(); terms(); });
+  document.addEventListener('DOMContentLoaded', () => { themeToggle(); sidenotes(); terms(document); });
   window.site = site;
 })();
